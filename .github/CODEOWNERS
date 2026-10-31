@@ -1,5 +1,5 @@
 # Place this file at .github/CODEOWNERS
-# Replace @Yash-1-IN and @kibong2 with your GitHub usernames.
+# Owners: @Yash-1-IN (Dev A) and @kibong2 (Dev B).
 #
 # Both developers own everything, so every PR automatically requests a review
 # from the developer who did NOT open it. (GitHub never counts a PR's author as
