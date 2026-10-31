@@ -92,3 +92,43 @@ describe("MockTransport", () => {
     );
   });
 });
+
+describe("MockTransport commands", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("cancel stops the running script and returns to idle", async () => {
+    const t = new MockTransport();
+    const seen = record(t);
+    t.runScript("wake-listen-think-speak");
+    vi.advanceTimersByTime(800);
+    expect(seen[seen.length - 1]).toMatchObject({
+      phase: "listening",
+      mic: "capturing",
+    });
+
+    await t.cancel("mock-req-1");
+    vi.advanceTimersByTime(60_000);
+    expect(seen[seen.length - 1]).toMatchObject({
+      phase: "idle",
+      mic: "standby",
+      activeRequestId: null,
+    });
+    expect(seen.some((s) => s.phase === "speaking")).toBe(false);
+  });
+
+  it("cancel ignores a request id that is not active", async () => {
+    const t = new MockTransport();
+    const seen = record(t);
+    await t.cancel("other");
+    expect(seen).toHaveLength(0);
+  });
+
+  it("setMute toggles between muted and standby", async () => {
+    const t = new MockTransport();
+    await t.setMute(true);
+    expect((await t.getSnapshot()).mic).toBe("muted");
+    await t.setMute(false);
+    expect((await t.getSnapshot()).mic).toBe("standby");
+  });
+});

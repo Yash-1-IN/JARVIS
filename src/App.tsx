@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Controls } from "./components/Controls";
 import { MockBadge } from "./components/MockBadge";
 import { MockControls } from "./components/MockControls";
 import { StatusPanel } from "./components/StatusPanel";
+import { useShortcuts } from "./hooks/useShortcuts";
 import { PROTOCOL_VERSION } from "./protocol";
 import { useSnapshotStore } from "./state/snapshotStore";
 import type { Transport } from "./transport";
@@ -15,6 +17,22 @@ export default function App({ transport }: { transport: Transport }) {
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const receive = useSnapshotStore((s) => s.receive);
   const [error, setError] = useState<string | null>(null);
+  const [commandError, setCommandError] = useState<string | null>(null);
+
+  // Read the store at call time so the shortcut listener is bound once.
+  const run = useCallback((p: Promise<void>) => {
+    setCommandError(null);
+    p.catch((e: unknown) => setCommandError(String(e)));
+  }, []);
+  const onCancel = useCallback(() => {
+    const id = useSnapshotStore.getState().snapshot?.activeRequestId;
+    if (id) run(transport.cancel(id));
+  }, [transport, run]);
+  const onToggleMute = useCallback(() => {
+    const mic = useSnapshotStore.getState().snapshot?.mic;
+    if (mic && mic !== "unavailable") run(transport.setMute(mic !== "muted"));
+  }, [transport, run]);
+  useShortcuts({ onCancel, onToggleMute });
 
   useEffect(() => {
     let cancelled = false;
@@ -46,7 +64,17 @@ export default function App({ transport }: { transport: Transport }) {
       {transport.isMock && <MockBadge />}
       <h1>JARVIS</h1>
       {error && <p role="alert">{error}</p>}
-      {!error && snapshot && <StatusPanel snapshot={snapshot} />}
+      {!error && snapshot && (
+        <>
+          <StatusPanel snapshot={snapshot} />
+          <Controls
+            snapshot={snapshot}
+            onCancel={onCancel}
+            onToggleMute={onToggleMute}
+          />
+        </>
+      )}
+      {commandError && <p role="alert">{commandError}</p>}
       {isMock(transport) && <MockControls transport={transport} />}
     </main>
   );

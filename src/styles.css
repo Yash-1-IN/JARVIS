@@ -14,3 +14,19 @@
   letter-spacing: 0.08em;
   pointer-events: none;
 }
+
+/* Keyboard users must always see where focus is. */
+:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+kbd {
+  font-size: 0.75em;
+  opacity: 0.75;
+}

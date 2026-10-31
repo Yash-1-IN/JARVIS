@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -32,5 +32,67 @@ describe("App", () => {
   it("has no MOCK badge with TauriTransport", () => {
     render(<App transport={new TauriTransport()} />);
     expect(screen.queryByText("MOCK")).not.toBeInTheDocument();
+  });
+});
+
+describe("App keyboard controls", () => {
+  beforeEach(() => useSnapshotStore.setState({ snapshot: null }));
+
+  it("Ctrl+Shift+M toggles mute and Esc cancels the active request", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    render(<App transport={t} />);
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "M", ctrlKey: true, shiftKey: true });
+    });
+    expect(screen.getByTestId("mic")).toHaveAttribute("data-mic", "muted");
+    expect(screen.getByRole("button", { name: /Unmute/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    act(() => {
+      t.runScript("wake-listen-think-speak");
+      vi.advanceTimersByTime(800);
+    });
+    expect(screen.getByTestId("phase")).toHaveAttribute(
+      "data-phase",
+      "listening",
+    );
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(screen.getByTestId("phase")).toHaveAttribute("data-phase", "idle");
+    expect(screen.getByRole("button", { name: /Cancel/ })).toBeDisabled();
+    vi.useRealTimers();
+  });
+
+  it("shows an alert when a command fails on the real backend", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "ping")
+        return { pong: true, protocolVersion: 1, appVersion: "t" };
+      if (cmd === "get_snapshot")
+        return {
+          seq: 0,
+          mic: "standby",
+          phase: "idle",
+          activeRequestId: null,
+          network: "unknown",
+          cloudInUse: false,
+          pendingApprovals: [],
+          lastError: null,
+        };
+      throw "command set_mute not found";
+    });
+    render(<App transport={new TauriTransport()} />);
+    await screen.findByTestId("mic");
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "m", metaKey: true, shiftKey: true });
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("set_mute not found");
   });
 });

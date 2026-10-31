@@ -63,6 +63,23 @@ export class MockTransport implements Transport {
     }
   }
 
+  async cancel(requestId: string): Promise<void> {
+    if (this.snapshot.activeRequestId !== requestId) return;
+    this.stop();
+    this.apply({
+      phase: "idle",
+      activeRequestId: null,
+      mic: this.snapshot.mic === "capturing" ? "standby" : this.snapshot.mic,
+      cloudInUse: false,
+      pendingApprovals: [],
+    });
+  }
+
+  async setMute(muted: boolean): Promise<void> {
+    if (this.snapshot.mic === "unavailable") return;
+    this.apply({ mic: muted ? "muted" : "standby" });
+  }
+
   stop(): void {
     this.timers.forEach(clearTimeout);
     this.timers = [];

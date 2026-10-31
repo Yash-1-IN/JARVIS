@@ -11,4 +11,8 @@ export interface Transport {
   getSnapshot(): Promise<Snapshot>;
   /** Subscribe to snapshot updates. Returns an unsubscribe function. */
   onSnapshot(listener: SnapshotListener): () => void;
+  /** Cancels the whole request tree for `requestId` (contract: `cancel`). */
+  cancel(requestId: string): Promise<void>;
+  /** Contract: `set_mute`. */
+  setMute(muted: boolean): Promise<void>;
 }

@@ -20,4 +20,14 @@ export class TauriTransport implements Transport {
   onSnapshot(_listener: SnapshotListener): () => void {
     return () => {};
   }
+
+  // `cancel` and `set_mute` are agreed in docs/contracts.md and implemented in
+  // Rust in M2; until then these reject and the UI shows the error.
+  cancel(requestId: string): Promise<void> {
+    return invoke("cancel", { requestId });
+  }
+
+  setMute(muted: boolean): Promise<void> {
+    return invoke("set_mute", { muted });
+  }
 }
