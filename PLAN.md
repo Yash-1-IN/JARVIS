@@ -1,131 +1,99 @@
-# Local device integration: plan
+# Local device integration: plan (v2)
 
-Goal: notifications, clipboard, file transfer and media/call control between
-iPhone, Android, Mac and Windows, directly between devices. No Phone Link, no
+Goal: files, clipboard, notifications and SMS between a Windows PC and an Android
+phone (OnePlus 13R), directly over the local network. No Phone Link, no
 Google/Apple/Microsoft relay, no account.
 
-Status: planning only. Nothing is built, and nothing below was tested. Facts come
-from web search summaries and one README, so verify each at the source before
-committing to it.
+Priority order: files > clipboard > notifications > SMS.
+Constraints: light on resources, runs in the background all the time, no paid
+Apple developer account.
 
-## 1. Strategy
+Status: planning only. Nothing built or tested. Facts come from web search
+summaries, so verify each at the source.
 
-Don't rewrite what exists. Build one thin piece, a **desktop hub**, and reuse the
-rest.
+## 1. What changed since v1
 
-- Android side: stock **KDE Connect** (open protocol, mature, F-Droid).
-- Desktop side: one small cross-platform daemon for Mac and Windows that speaks
-  the KDE Connect protocol. KDE Connect's Mac and Windows clients are the weak
-  link, so this is the main piece to write.
-- iPhone side: iOS can't run a background service, so we use two channels:
-  1. **BLE/ANCS** (no app on the phone) for notifications, calls and media.
-  2. A **small native iOS app** for anything the user triggers: share sheet,
-     clipboard push, file send and receive.
-- Files: **LocalSend** works on all five platforms today. Use it as the baseline
-  and integrate later only if worth it.
+The setup is now Windows + Android only. iPhone and Mac are out of scope, which
+removes the iOS limits and the paid-account problem.
 
-## 2. What iOS allows
+For Windows + Android, an open-source tool already exists that covers all four
+priorities:
+**[Sefirah](https://github.com/shrimqy/Sefirah)** (GPL-3.0; Android app at
+[Sefirah-Android](https://github.com/shrimqy/Sefirah-Android)).
+Per its docs: two-way clipboard, notification mirroring, file transfer by share
+sheet or drag-and-drop (plus phone storage in File Explorer on Android 11+), SMS
+view and reply with dual-SIM, media control, optional scrcpy mirroring. Local
+network only, ports 5149-5169.
 
-These limits decide the plan.
+So the first job is not to build something. It is to find out what's missing.
 
-| Capability | Possible? | How |
-|---|---|---|
-| iPhone notifications on desktop | Yes, read-only | ANCS over BLE. A Windows project does it already. |
-| Reply to iPhone notifications | No | ANCS exposes only preset actions (answer/decline, etc.). |
-| iPhone calls: see, answer, decline | Partly | ANCS action labels. Audio stays on the phone. |
-| iPhone media control | Yes | AMS over BLE. |
-| iPhone SMS read/send/reply | No | Notifications only. Bluetooth MAP is what Phone Link uses, and it's tied to the OS. |
-| Clipboard iPhone → desktop | Only on a user action | Foreground app, share sheet, Shortcut, keyboard extension. No background read. |
-| Clipboard desktop → iPhone | Yes, needs the app open | Push to the app, then set the clipboard. |
-| Files both ways | Yes | App in the foreground. Wi-Fi Aware (iOS 26) may allow faster direct transfer. Unverified. |
-| Remote lock, Find My, camera | No | |
+## 2. Candidates to test
 
-Android↔desktop has none of these limits. KDE Connect already does notification
-mirroring, SMS reply, clipboard, files and media.
+| Tool | Notes |
+|---|---|
+| **Sefirah** | Closest match. Check how stable it is and how much RAM it uses on Windows. |
+| **KDE Connect** | Mature protocol. The Windows Store build has had many reported bugs (outdated store version, broken Windows→Android transfer on Android 15, plugin settings not opening). Treat as a fallback or protocol reference. |
+| **LocalSend** | Files only, but works well. Good fallback for priority 1. |
 
 ## 3. Phases
 
-### Phase 0: baseline, about 1 day, no code
-Install KDE Connect on Android and desktop, plus LocalSend everywhere. Check what
-already works. Try AirSync (MIT, Android↔Mac, same Wi-Fi) as a comparison for the
-Mac side. Write down the actual gaps before building anything.
+### Phase 0: test on the OnePlus 13R now (about 1 day, no code)
+Install Sefirah and test in priority order:
+1. **Files:** phone→PC and PC→phone, large files (1 GB+), many small files,
+   speed, whether it survives Wi-Fi changes.
+2. **Clipboard:** both directions, text and images, latency.
+3. **Notifications:** reliability, delay, reply and dismiss actions, whether
+   sensitive notifications are hidden (Android 15 hides them; needs an ADB
+   workaround).
+4. **SMS:** read, reply, dual-SIM.
+5. **Background behavior:** leave it 24 hours. Does the connection drop? Does
+   the phone kill the service? Check RAM and CPU of the Windows app.
 
-### Phase 1: desktop hub with the KDE Connect protocol (Android ↔ Mac/Windows)
-- Implement the KDE Connect protocol in one codebase that runs on both desktops.
-  That covers UDP/mDNS discovery, TLS with paired certificates, and the packet
-  types.
-- Packets to support first: `ping`, `notification`, `clipboard`, `share.request`.
-- Language choice is open. Rust or Go give a single binary. Python is quickest
-  to prototype.
-- Stay compatible with the official Android app, so we don't write an Android app.
-- Exit test: Android notifications appear on a Mac and a Windows PC, and the
-  clipboard syncs both ways.
+OnePlus (OxygenOS) kills background apps aggressively. Before judging any tool,
+set battery to "Unrestricted", allow auto-start, and lock the app in recents.
+See dontkillmyapp.com for device-specific steps.
 
-### Phase 2: iPhone notifications via BLE/ANCS (iPhone → desktop)
-- Windows: start from [iphone-companion](https://github.com/312arjun/iphone-companion)
-  (MIT, Python/bleak, ANCS + AMS + calls, no phone app). Fork or reuse its
-  `ancs.py`/`ams.py`. Don't copy its UI.
-- Mac: unproven. [ANCS-Mac](https://github.com/KhaosT/ANCS-Mac) is a 2014 demo
-  and reportedly broken. **First task: a 1-2 day spike** to confirm whether
-  CoreBluetooth on a current macOS can bond with an iPhone and subscribe to ANCS.
-  If it can't, the fallback is an ESP32 relay or a Windows-only iPhone path.
-- Feed ANCS events into the hub's notification pipeline, so iPhone and Android
-  notifications look the same on the desktop.
-- Known issues: a BLE bond only works with one client at a time (conflicts with
-  Phone Link and other Bluetooth hosts), and iPhones rotate BLE addresses.
+Record results in a table: works / flaky / missing.
 
-### Phase 3: small native iOS app (Swift)
-- Needs an Apple developer account. A free account works for personal use but the
-  signing expires every 7 days. A paid account ($99/yr) gives a year.
-- Features: a share-sheet extension (send links, text and files to the desktop),
-  a "send clipboard" action (App Intents / Shortcuts), a "receive clipboard and
-  files" screen, and Bonjour discovery.
-- Use the KDE Connect protocol if practical, so the hub has one protocol. The
-  existing [kdeconnect-ios](https://github.com/KDE/kdeconnect-ios) is a starting
-  point, but its status is unclear and it has reported bugs.
-- Optional: a BLE background mode to wake the app when the desktop has something
-  to send. Needs testing, since iOS limits background wakeups.
+### Phase 1: decide based on results
+- **Everything works well:** stop. Use Sefirah. Optionally send fixes upstream.
+- **Gaps are small:** contribute patches to Sefirah (GPL-3.0, so a fork or PR is
+  fine). This is cheaper than writing our own.
+- **Gaps are large or the architecture doesn't fit:** build our own, see Phase 2.
 
-### Phase 4: polish
-Pairing UX, a tray app, notification rules (quiet hours, app filters, one-time
-code copy), per-device trust, and optional encrypted history.
+### Phase 2 (only if needed): own lightweight Windows agent
+- Language: **Rust**. Small static binary, low idle RAM, no runtime, good
+  Windows support (tray, toast notifications, clipboard APIs). Go is a
+  reasonable second choice.
+- Android side: either reuse the KDE Connect app (open protocol, so the Windows
+  agent only has to speak the protocol) or write a small Kotlin app if the
+  gaps need it.
+- Order of work follows your priorities: file transfer, clipboard, notifications,
+  SMS.
+- Security: pairing with mutual TLS, no cloud fallback, no unauthenticated
+  ports.
 
-## 4. Feature matrix after each phase
+### Phase 3: harder experiments on the Redmi Note 14 5G (available 8 November)
+Use it as the test device for the risky things:
+- Anything that needs root, ADB tricks, or different battery behavior.
+- Wi-Fi Direct or hotspot-style transfer with no router.
+- Compare background reliability between a OnePlus and a Redmi (Xiaomi's
+  MIUI/HyperOS also kills background apps).
 
-| | Android↔Mac | Android↔Win | iPhone→Mac | iPhone→Win |
-|---|---|---|---|---|
-| Notifications | Phase 1 | Phase 1 | Phase 2 (if spike works) | Phase 2 |
-| Clipboard | Phase 1 | Phase 1 | Phase 3, manual | Phase 3, manual |
-| Files | Phase 1 / LocalSend | Phase 1 / LocalSend | Phase 3 / LocalSend | Phase 3 / LocalSend |
-| SMS reply | Phase 1 | Phase 1 | No | No |
-| Media / calls | Phase 1 | Phase 1 | Phase 2 | Phase 2 |
+## 4. Risks
 
-Android↔Android and iPhone↔Android directly are out of scope for now.
+1. **Background kills** on OnePlus and Xiaomi are the most likely cause of a
+   "not seamless" feel. This is a phone settings problem more than a software one.
+2. **Android 15 hides sensitive notifications** from notification listeners, so
+   some (for example one-time codes) may not mirror without an ADB workaround.
+3. **SMS needs elevated permissions.** Google Play restricts SMS-permission
+   apps, so some builds are only on F-Droid, IzzyOnDroid or GitHub.
+4. **Wi-Fi isolation.** Guest networks and some routers block device-to-device
+   traffic.
+5. **GPL-3.0.** Code taken from Sefirah must stay GPL-3.0.
 
-## 5. Risks
+## 5. Next steps
 
-1. **Mac ANCS may not work on current macOS.** This is the biggest unknown, so
-   spike it first.
-2. **iOS background limits** mean iPhone clipboard sync will always be manual or
-   foreground only. Set that expectation up front.
-3. **Single BLE bond.** The iPhone's notification bond is exclusive.
-4. **Maintenance of the KDE Connect iOS app.** The project has had crashes and
-   one-directional transfer bugs. May need our own app.
-5. **Apple signing** costs money or time (see Phase 3).
-6. **Security.** Pairing must use mutual TLS or equivalent, with no cloud fallback.
-   Review before any real use.
-
-## 6. Decisions needed
-
-1. Which phones and computers do you actually use? That decides whether to start
-   with Windows or Mac.
-2. Which features matter most: notifications, clipboard, files, or SMS?
-3. Language preference for the hub (Rust, Go, Python, other).
-4. Are you willing to pay for an Apple developer account?
-5. Should this be open source from the start?
-
-## 7. Suggested first steps
-
-1. Phase 0 install and test (no code).
-2. The Mac ANCS spike (decides the iPhone→Mac path).
-3. Phase 1 prototype: `ping` and `notification` packets in the desktop hub.
+1. Run Phase 0 on the OnePlus 13R and report what's missing.
+2. Check dontkillmyapp.com settings for OnePlus before testing.
+3. Revisit this plan with the results, and again on 8 November for the Redmi.
