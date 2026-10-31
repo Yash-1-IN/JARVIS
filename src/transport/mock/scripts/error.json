@@ -1,0 +1,33 @@
+{
+  "name": "error",
+  "description": "Provider rate-limits the request; a retryable error is shown, then the assistant recovers.",
+  "steps": [
+    {
+      "delayMs": 0,
+      "patch": {
+        "mic": "standby",
+        "phase": "thinking",
+        "network": "online",
+        "activeRequestId": "mock-req-4",
+        "cloudInUse": true
+      }
+    },
+    {
+      "delayMs": 1200,
+      "patch": {
+        "phase": "error",
+        "cloudInUse": false,
+        "lastError": {
+          "code": "PROVIDER_RATE_LIMIT",
+          "message": "The AI provider is rate-limiting requests. Try again in a minute.",
+          "retryable": true,
+          "requestId": "mock-req-4"
+        }
+      }
+    },
+    {
+      "delayMs": 3000,
+      "patch": { "phase": "idle", "activeRequestId": null, "lastError": null }
+    }
+  ]
+}

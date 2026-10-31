@@ -1,0 +1,16 @@
+.mock-badge {
+  position: fixed;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 1000;
+  padding: 0.25rem 0.6rem;
+  border: 2px solid currentColor;
+  border-radius: 0.25rem;
+  background: #fde047;
+  color: #1c1917;
+  font:
+    700 0.85rem/1 system-ui,
+    sans-serif;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}

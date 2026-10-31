@@ -1,8 +1,14 @@
 import type { PingResponse } from "../types/generated/PingResponse";
 import type { Snapshot } from "../types/generated/Snapshot";
 
-/** One interface, two implementations (TauriTransport now, MockTransport in M1). */
+export type SnapshotListener = (snapshot: Snapshot) => void;
+
+/** One interface, two implementations: TauriTransport and MockTransport. */
 export interface Transport {
+  /** True only for MockTransport; drives the persistent MOCK badge. */
+  readonly isMock: boolean;
   ping(): Promise<PingResponse>;
   getSnapshot(): Promise<Snapshot>;
+  /** Subscribe to snapshot updates. Returns an unsubscribe function. */
+  onSnapshot(listener: SnapshotListener): () => void;
 }

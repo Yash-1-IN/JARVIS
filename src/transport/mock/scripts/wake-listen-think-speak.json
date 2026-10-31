@@ -1,0 +1,25 @@
+{
+  "name": "wake-listen-think-speak",
+  "description": "Wake word, request captured, cloud reply spoken, back to standby.",
+  "steps": [
+    {
+      "delayMs": 0,
+      "patch": { "mic": "standby", "phase": "idle", "network": "online" }
+    },
+    {
+      "delayMs": 800,
+      "patch": {
+        "mic": "capturing",
+        "phase": "listening",
+        "activeRequestId": "mock-req-1"
+      }
+    },
+    { "delayMs": 1500, "patch": { "phase": "transcribing" } },
+    {
+      "delayMs": 600,
+      "patch": { "mic": "standby", "phase": "thinking", "cloudInUse": true }
+    },
+    { "delayMs": 1200, "patch": { "phase": "speaking", "cloudInUse": false } },
+    { "delayMs": 2000, "patch": { "phase": "idle", "activeRequestId": null } }
+  ]
+}
