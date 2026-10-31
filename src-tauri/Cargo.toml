@@ -26,6 +26,7 @@ tracing-appender = "0.2.5"
 regex = "1.13.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 ts-rs = "12.0.1"
+uuid = { version = "1.29.0", features = ["v7"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

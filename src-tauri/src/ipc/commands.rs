@@ -1,12 +1,32 @@
 use super::{PROTOCOL_VERSION, types::*};
-use std::sync::Mutex;
+use crate::orchestrator::Orchestrator;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Emitter;
 
-/// Authoritative state; later owned by the orchestrator (M2+).
-pub struct AppState(pub Mutex<Snapshot>);
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self(Mutex::new(Snapshot::initial()))
+/// Builds the `state.snapshot` envelope; its seq is the snapshot's seq.
+pub fn snapshot_envelope(s: Snapshot) -> Envelope<Snapshot> {
+    Envelope {
+        v: PROTOCOL_VERSION,
+        seq: s.seq,
+        id: uuid::Uuid::now_v7().to_string(),
+        ts: now_ms(),
+        kind: "state.snapshot".into(),
+        payload: s,
+    }
+}
+
+/// Tauri event names cannot contain '.', so `state.snapshot` is emitted as `state_snapshot`.
+pub fn publish(app: &tauri::AppHandle, s: Snapshot) {
+    let env = snapshot_envelope(s);
+    if let Err(e) = app.emit(&env.kind.replace('.', "_"), &env) {
+        tracing::warn!(error = %e, "failed to emit state.snapshot");
     }
 }
 
@@ -24,8 +44,33 @@ pub fn ping() -> PingResponse {
 }
 
 #[tauri::command]
-pub fn get_snapshot(state: tauri::State<'_, AppState>) -> Snapshot {
-    state.0.lock().expect("state lock poisoned").clone()
+pub fn get_snapshot(state: tauri::State<'_, Orchestrator>) -> Snapshot {
+    state.snapshot()
+}
+
+#[tauri::command]
+pub fn set_mute(app: tauri::AppHandle, state: tauri::State<'_, Orchestrator>, muted: bool) {
+    publish(&app, state.set_mute(muted));
+}
+
+#[tauri::command]
+pub fn cancel(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Orchestrator>,
+    request_id: String,
+) -> Result<(), JarvisError> {
+    match state.cancel(&request_id) {
+        Ok(s) => {
+            publish(&app, s);
+            Ok(())
+        }
+        Err(_) => Err(JarvisError {
+            code: ErrorCode::Internal,
+            message: "no active turn with that request id".into(),
+            retryable: false,
+            request_id: Some(request_id),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -37,6 +82,18 @@ mod tests {
         let p = ping_response();
         assert!(p.pong);
         assert_eq!(p.protocol_version, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn snapshot_envelope_uses_snapshot_seq_and_kind() {
+        let o = Orchestrator::default();
+        let e = snapshot_envelope(o.set_mute(true));
+        assert_eq!(
+            (e.kind.as_str(), e.seq, e.v),
+            ("state.snapshot", 1, PROTOCOL_VERSION)
+        );
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["payload"]["mic"], "muted");
     }
 
     #[test]
