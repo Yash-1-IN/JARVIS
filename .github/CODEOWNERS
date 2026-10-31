@@ -1,0 +1,12 @@
+# Place this file at .github/CODEOWNERS
+# Owners: @Yash-1-IN (Dev A) and @kibong2 (Dev B).
+#
+# Both developers own everything, so every PR automatically requests a review
+# from the developer who did NOT open it. (GitHub never counts a PR's author as
+# its code-owner reviewer, so listing only one owner per folder would block that
+# owner from merging their own work.)
+#
+# Module ownership (who writes what) is defined in CLAUDE.md; this file only
+# makes sure the other person always reviews.
+
+*    @Yash-1-IN @kibong2
