@@ -46,8 +46,11 @@ Install Sefirah and test in priority order:
    sensitive notifications are hidden (Android 15 hides them; needs an ADB
    workaround).
 4. **SMS:** read, reply, dual-SIM.
-5. **Background behavior:** leave it 24 hours. Does the connection drop? Does
-   the phone kill the service? Check RAM and CPU of the Windows app.
+5. **Background behavior (short version, about 1 hour):** lock the phone, switch
+   to other apps, and leave it idle for 30-60 minutes. Then check whether the
+   connection is still up, whether a notification and a clipboard sync still
+   arrive, and the RAM and CPU of the Windows app. The full 24-hour test can wait
+   until you have time, for example overnight.
 
 OnePlus (OxygenOS) kills background apps aggressively. Before judging any tool,
 set battery to "Unrestricted", allow auto-start, and lock the app in recents.
