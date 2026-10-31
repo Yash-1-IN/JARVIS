@@ -1,5 +1,5 @@
 # Place this file at .github/CODEOWNERS
-# Replace @Yash-1-IN and @kibong6 with your GitHub usernames.
+# Replace @Yash-1-IN and @kibong2 with your GitHub usernames.
 #
 # Both developers own everything, so every PR automatically requests a review
 # from the developer who did NOT open it. (GitHub never counts a PR's author as
@@ -9,4 +9,4 @@
 # Module ownership (who writes what) is defined in CLAUDE.md; this file only
 # makes sure the other person always reviews.
 
-*    @Yash-1-IN @kibong6
+*    @Yash-1-IN @kibong2
