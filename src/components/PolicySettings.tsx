@@ -24,6 +24,8 @@ export function PolicySettings({ transport, settings, save, busy }: Props) {
   const [installed, setInstalled] = useState<AllowedApp[] | null>(null);
   const [appsError, setAppsError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [picking, setPicking] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -47,6 +49,31 @@ export function PolicySettings({ transport, settings, save, busy }: Props) {
       { allowedFolders: [...settings.allowedFolders, f] },
       "Folder added.",
     ).then((ok) => ok && setFolder(""));
+  };
+
+  /**
+   * Opens the OS folder picker (Finder, Explorer). The chosen path is added the
+   * same way as a typed one, so the backend still validates it.
+   */
+  const chooseFolder = async () => {
+    setPickError(null);
+    setPicking(true);
+    try {
+      const f = await transport.pickFolder();
+      if (f === null) return; // cancelled
+      if (settings.allowedFolders.includes(f)) {
+        setPickError("That folder is already allowed.");
+        return;
+      }
+      await save(
+        { allowedFolders: [...settings.allowedFolders, f] },
+        "Folder added.",
+      );
+    } catch (e) {
+      setPickError(describeError(e));
+    } finally {
+      setPicking(false);
+    }
   };
 
   const removeFolder = (f: string) =>
@@ -104,13 +131,23 @@ export function PolicySettings({ transport, settings, save, busy }: Props) {
           ))}
         </ul>
       )}
+      <p>
+        <button
+          type="button"
+          disabled={busy || picking}
+          onClick={() => void chooseFolder()}
+        >
+          {picking ? "Choosing…" : "Choose folder…"}
+        </button>
+      </p>
+      {pickError && <p role="alert">{pickError}</p>}
       <form onSubmit={addFolder}>
-        <label htmlFor="add-folder">Add folder (full path)</label>{" "}
+        <label htmlFor="add-folder">Or type a full path</label>{" "}
         <input
           id="add-folder"
           value={folder}
           onChange={(e) => setFolder(e.target.value)}
-          placeholder="e.g. C:\Users\you\Documents"
+          placeholder="/Users/you/Documents or C:\Users\you\Documents"
           spellCheck={false}
           autoComplete="off"
         />{" "}

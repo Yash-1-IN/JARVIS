@@ -149,6 +149,10 @@ export class TauriTransport implements Transport {
     return invoke<HistorySettings>("history_settings_set", { settings });
   }
 
+  pickFolder(): Promise<string | null> {
+    return invoke<string | null>("folder_pick");
+  }
+
   appsInstalled(): Promise<AllowedApp[]> {
     return invoke<AllowedApp[]>("apps_installed");
   }

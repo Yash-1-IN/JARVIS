@@ -210,4 +210,12 @@ describe("TauriTransport", () => {
     await t.exportData();
     expect(invoke).toHaveBeenLastCalledWith("memory_export");
   });
+
+  it("maps the folder picker to folder_pick", async () => {
+    invoke.mockResolvedValue("/Users/k/Documents");
+    expect(await new TauriTransport().pickFolder()).toBe("/Users/k/Documents");
+    expect(invoke).toHaveBeenLastCalledWith("folder_pick");
+    invoke.mockResolvedValue(null);
+    expect(await new TauriTransport().pickFolder()).toBeNull();
+  });
 });

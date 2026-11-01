@@ -15,7 +15,7 @@ describe("Policy settings (allowed folders, apps, auto-allow)", () => {
     const t = await open();
     expect(screen.getByTestId("no-folders")).toBeInTheDocument();
     const input = screen.getByLabelText(
-      "Add folder (full path)",
+      "Or type a full path",
     ) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "relative/path" } });
@@ -100,5 +100,52 @@ describe("Policy settings (allowed folders, apps, auto-allow)", () => {
       fireEvent.click(within(orphans).getByRole("button", { name: "Remove" }));
     });
     expect((await t.getSettings()).allowedApps).toEqual([]);
+  });
+
+  it("Choose folder adds the picked folder through the normal settings check", async () => {
+    const t = await open();
+    const update = vi.spyOn(t, "updateSettings");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
+    });
+    expect(update).toHaveBeenLastCalledWith({
+      allowedFolders: ["/Users/mock/Documents/Mock Folder"],
+    });
+    expect(
+      screen.getByRole("list", { name: "Allowed folders" }),
+    ).toHaveTextContent("/Users/mock/Documents/Mock Folder");
+
+    // The same folder again: says so, sends nothing.
+    update.mockClear();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("already allowed");
+  });
+
+  it("Cancel in the picker changes nothing", async () => {
+    const t = await open();
+    t.nextPickedFolder = null;
+    const update = vi.spyOn(t, "updateSettings");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows why when the picker fails", async () => {
+    const t = await open();
+    vi.spyOn(t, "pickFolder").mockRejectedValue({
+      code: "INTERNAL",
+      message: "That folder's name contains characters JARVIS cannot store.",
+      retryable: false,
+      requestId: null,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("cannot store");
   });
 });
