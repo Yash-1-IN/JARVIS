@@ -379,8 +379,10 @@ async fn key_check_maps_rejection_offline_and_timeout() {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let dead = format!("http://{}", l.local_addr().unwrap());
     drop(l);
+    // Generous timeout: Windows takes about 2 s to report a refused connection, and a
+    // short limit would turn this into "timed out" instead of "offline".
     assert_eq!(
-        check_key(&dead, "k", Duration::from_secs(2)).await,
+        check_key(&dead, "k", Duration::from_secs(15)).await,
         Err(ProviderError::Offline)
     );
     // A server that accepts the connection and never answers.
