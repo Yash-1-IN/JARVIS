@@ -561,5 +561,7 @@ mod tests {
         assert_eq!(p.allowed_folders, Some(vec!["/a".to_string()]));
         assert_eq!(p.allowed_apps, Some(vec![]));
         assert_eq!(p.auto_allow_medium, Some(true));
+        // A misspelt policy field is an error, not a silent no-op.
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"allowedFolder":["/a"]}"#).is_err());
     }
 }

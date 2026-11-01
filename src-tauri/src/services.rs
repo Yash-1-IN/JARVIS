@@ -76,6 +76,9 @@ impl Services {
             available_models: self.prices.model_ids(),
             daily_cap_micro_usd: s.daily_cap_micro_usd,
             monthly_cap_micro_usd: s.monthly_cap_micro_usd,
+            allowed_folders: s.allowed_folders,
+            allowed_apps: s.allowed_apps,
+            auto_allow_medium: s.auto_allow_medium,
         }
     }
 
@@ -83,9 +86,11 @@ impl Services {
         self.settings
             .apply(patch, &self.prices)
             .map_err(|e| match e {
-                SettingsError::UnknownModel(_) | SettingsError::CapTooLarge => {
-                    err(ErrorCode::Internal, &e.to_string(), false)
-                }
+                SettingsError::UnknownModel(_)
+                | SettingsError::CapTooLarge
+                | SettingsError::BadFolder(_)
+                | SettingsError::BadApp
+                | SettingsError::TooMany => err(ErrorCode::Internal, &e.to_string(), false),
                 SettingsError::Save => {
                     err(ErrorCode::Internal, "Settings could not be saved.", true)
                 }
