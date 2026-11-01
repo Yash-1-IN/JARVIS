@@ -228,3 +228,75 @@ describe("MockTransport fault injection", () => {
     expect((await t.getSnapshot()).lastError).toBeNull();
   });
 });
+
+describe("MockTransport settings", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("stores only a hint for a valid key, rejects bad keys and offline checks", async () => {
+    const t = new MockTransport();
+    const s = await t.setApiKey("  sk-ant-mock-0123456789abWXYZ \n");
+    expect(s).toEqual({ isSet: true, storage: "keychain", hint: "…WXYZ" });
+    expect(JSON.stringify(await t.getSettings())).not.toContain("sk-ant");
+    expect((await t.setApiKey("short-key-ok")).hint).toBeNull();
+
+    await expect(t.setApiKey("bad-key-0123456789")).rejects.toMatchObject({
+      code: "PROVIDER_AUTH",
+    });
+    await expect(t.setApiKey("has space")).rejects.toMatchObject({
+      code: "PROVIDER_AUTH",
+    });
+    t.runScript("offline");
+    vi.advanceTimersByTime(1000);
+    await expect(t.setApiKey("sk-ant-mock-0123456789")).rejects.toMatchObject({
+      code: "NETWORK_OFFLINE",
+    });
+    expect((await t.clearApiKey()).isSet).toBe(false);
+  });
+
+  it("applies a patch: omitted fields unchanged, null clears, unknown model rejected", async () => {
+    const t = new MockTransport();
+    let s = await t.updateSettings({
+      dailyCapMicroUsd: 2_000_000,
+      monthlyCapMicroUsd: 9_000_000,
+    });
+    expect([s.dailyCapMicroUsd, s.monthlyCapMicroUsd]).toEqual([
+      2_000_000, 9_000_000,
+    ]);
+    s = await t.updateSettings({ dailyCapMicroUsd: null });
+    expect([s.dailyCapMicroUsd, s.monthlyCapMicroUsd]).toEqual([
+      null,
+      9_000_000,
+    ]);
+    await expect(t.updateSettings({ model: "gpt-nope" })).rejects.toMatchObject(
+      { code: "INTERNAL" },
+    );
+    await expect(
+      t.updateSettings({ dailyCapMicroUsd: -1 }),
+    ).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+
+  it("records usage per reply, emits usage.updated, and blocks at the cap", async () => {
+    const t = new MockTransport();
+    const seen: number[] = [];
+    t.onUsage((u) => seen.push(u.todayMicroUsd));
+    await t.updateSettings({ dailyCapMicroUsd: 1_500 });
+    await t.submitText("one", () => {});
+    vi.advanceTimersByTime(60_000);
+    expect((await t.getUsage()).todayMicroUsd).toBe(1_500);
+    expect(seen[seen.length - 1]).toBe(1_500);
+
+    const events: TurnStreamEvent[] = [];
+    await t.submitText("two", (e) => events.push(e));
+    vi.advanceTimersByTime(60_000);
+    expect(events).toEqual([{ type: "done", stopReason: "spend_cap" }]);
+    expect((await t.getSnapshot()).lastError?.code).toBe("SPEND_CAP_REACHED");
+  });
+
+  it("reports the next UTC day and month boundaries", async () => {
+    vi.setSystemTime(Date.UTC(2026, 10, 15, 13, 0));
+    const u = await new MockTransport().getUsage();
+    expect(u.dayResetsAt).toBe(Date.UTC(2026, 10, 16));
+    expect(u.monthResetsAt).toBe(Date.UTC(2026, 11, 1));
+  });
+});

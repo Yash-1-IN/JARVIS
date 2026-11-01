@@ -1,14 +1,53 @@
 import { PROTOCOL_VERSION } from "../../protocol";
+import type { ApiKeyStatus } from "../../types/generated/ApiKeyStatus";
+import type { ErrorCode } from "../../types/generated/ErrorCode";
+import type { JarvisError } from "../../types/generated/JarvisError";
 import type { PingResponse } from "../../types/generated/PingResponse";
+import type { Settings } from "../../types/generated/Settings";
+import type { SettingsPatch } from "../../types/generated/SettingsPatch";
 import type { Snapshot } from "../../types/generated/Snapshot";
 import type { StopReason } from "../../types/generated/StopReason";
-import type { SnapshotListener, Transport, TurnListener } from "../index";
+import type { UsageSummary } from "../../types/generated/UsageSummary";
+import type {
+  SnapshotListener,
+  Transport,
+  TurnListener,
+  UsageListener,
+} from "../index";
 import { MOCK_FAULTS, type MockFault } from "./faults";
 import { MOCK_SCRIPTS, type MockScript, type SnapshotPatch } from "./scripts";
 
 const APPROVAL_TTL_MS = 60_000;
 const FIRST_TOKEN_MS = 400;
 const TOKEN_MS = 60;
+/** What one mock reply "costs", so the usage panel and caps can be exercised. */
+const MOCK_TURN_COST_MICRO_USD = 1_500;
+const MOCK_TURN_TOKENS = { input: 300, output: 40 };
+const MIN_KEY_LEN_FOR_HINT = 16;
+
+const DAY_MS = 86_400_000;
+
+function nextUtcMidnight(now: number): number {
+  return Math.floor(now / DAY_MS) * DAY_MS + DAY_MS;
+}
+
+function nextUtcMonth(now: number): number {
+  const d = new Date(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+}
+
+/** Rejects like Tauri does: with the serialised JarvisError as the value. */
+function jarvisError(
+  code: ErrorCode,
+  message: string,
+  retryable = false,
+): JarvisError {
+  return { code, message, retryable, requestId: null };
+}
+
+function validCap(v: number | null): boolean {
+  return v === null || (Number.isSafeInteger(v) && v >= 0);
+}
 
 function initialSnapshot(): Snapshot {
   return {
@@ -37,6 +76,23 @@ export class MockTransport implements Transport {
   private turn: { requestId: string; onEvent: TurnListener } | null = null;
   private turnCount = 0;
   private nextFault: MockFault | null = null;
+  private usageListeners = new Set<UsageListener>();
+  private settings: Settings = {
+    schemaVersion: 1,
+    apiKey: { isSet: false, storage: null, hint: null },
+    model: "mock-model-fast",
+    availableModels: ["mock-model-fast", "mock-model-smart"],
+    dailyCapMicroUsd: null,
+    monthlyCapMicroUsd: null,
+  };
+  private spent = {
+    today: 0,
+    month: 0,
+    todayIn: 0,
+    todayOut: 0,
+    monthIn: 0,
+    monthOut: 0,
+  };
 
   constructor(scripts: readonly MockScript[] = MOCK_SCRIPTS) {
     this.scripts = scripts;
@@ -89,9 +145,9 @@ export class MockTransport implements Transport {
       lastError: null,
     });
 
-    const fault = this.nextFault;
+    const fault = this.capReached() ? "spend-cap" : this.nextFault;
     if (fault) {
-      this.nextFault = null;
+      if (fault === this.nextFault) this.nextFault = null;
       const err = MOCK_FAULTS[fault];
       this.timers.push(
         setTimeout(() => {
@@ -127,6 +183,7 @@ export class MockTransport implements Transport {
       setTimeout(
         () => {
           this.endTurn("end");
+          this.recordUsage();
           this.apply({
             phase: "idle",
             activeRequestId: null,
@@ -155,6 +212,122 @@ export class MockTransport implements Transport {
   async setMute(muted: boolean): Promise<void> {
     if (this.snapshot.mic === "unavailable") return;
     this.apply({ mic: muted ? "muted" : "standby" });
+  }
+
+  async getSettings(): Promise<Settings> {
+    return structuredClone(this.settings);
+  }
+
+  async updateSettings(patch: SettingsPatch): Promise<Settings> {
+    if (
+      patch.model !== undefined &&
+      !this.settings.availableModels.includes(patch.model)
+    ) {
+      throw jarvisError("INTERNAL", `Unknown model: ${patch.model}`);
+    }
+    for (const cap of [patch.dailyCapMicroUsd, patch.monthlyCapMicroUsd]) {
+      if (cap !== undefined && !validCap(cap)) {
+        throw jarvisError(
+          "INTERNAL",
+          "A spend cap must be a whole, non-negative amount.",
+        );
+      }
+    }
+    const next = { ...this.settings };
+    if (patch.model !== undefined) next.model = patch.model;
+    if (patch.dailyCapMicroUsd !== undefined)
+      next.dailyCapMicroUsd = patch.dailyCapMicroUsd;
+    if (patch.monthlyCapMicroUsd !== undefined)
+      next.monthlyCapMicroUsd = patch.monthlyCapMicroUsd;
+    this.settings = next;
+    this.emitUsage();
+    return structuredClone(next);
+  }
+
+  /**
+   * Mirrors the contract: trim, check format, "validate" (keys starting with
+   * `bad` are rejected; offline refuses), and keep only the hint, never the key.
+   */
+  async setApiKey(key: string): Promise<ApiKeyStatus> {
+    const k = key.trim();
+    if (!k || k.length > 512 || /\s/.test(k)) {
+      throw jarvisError("PROVIDER_AUTH", "That doesn't look like an API key.");
+    }
+    if (this.snapshot.network === "offline") {
+      throw jarvisError(
+        "NETWORK_OFFLINE",
+        "Can't check the key while offline.",
+        true,
+      );
+    }
+    if (k.startsWith("bad")) {
+      throw jarvisError("PROVIDER_AUTH", "The provider rejected this key.");
+    }
+    this.settings.apiKey = {
+      isSet: true,
+      storage: "keychain",
+      hint: k.length >= MIN_KEY_LEN_FOR_HINT ? `…${k.slice(-4)}` : null,
+    };
+    return { ...this.settings.apiKey };
+  }
+
+  async clearApiKey(): Promise<ApiKeyStatus> {
+    this.settings.apiKey = { isSet: false, storage: null, hint: null };
+    return { ...this.settings.apiKey };
+  }
+
+  async getUsage(): Promise<UsageSummary> {
+    return this.usageSummary();
+  }
+
+  onUsage(listener: UsageListener): () => void {
+    this.usageListeners.add(listener);
+    return () => this.usageListeners.delete(listener);
+  }
+
+  /** Dev helper: pretend the key is stored only for this session (D-09 warning path). */
+  simulateSessionOnlyKey(): void {
+    if (this.settings.apiKey.isSet)
+      this.settings.apiKey.storage = "session_only";
+  }
+
+  private capReached(): boolean {
+    const { dailyCapMicroUsd: d, monthlyCapMicroUsd: m } = this.settings;
+    return (
+      (d !== null && this.spent.today >= d) ||
+      (m !== null && this.spent.month >= m)
+    );
+  }
+
+  private recordUsage(): void {
+    this.spent.today += MOCK_TURN_COST_MICRO_USD;
+    this.spent.month += MOCK_TURN_COST_MICRO_USD;
+    this.spent.todayIn += MOCK_TURN_TOKENS.input;
+    this.spent.todayOut += MOCK_TURN_TOKENS.output;
+    this.spent.monthIn += MOCK_TURN_TOKENS.input;
+    this.spent.monthOut += MOCK_TURN_TOKENS.output;
+    this.emitUsage();
+  }
+
+  private usageSummary(): UsageSummary {
+    const now = Date.now();
+    return {
+      todayMicroUsd: this.spent.today,
+      monthMicroUsd: this.spent.month,
+      todayInputTokens: this.spent.todayIn,
+      todayOutputTokens: this.spent.todayOut,
+      monthInputTokens: this.spent.monthIn,
+      monthOutputTokens: this.spent.monthOut,
+      dailyCapMicroUsd: this.settings.dailyCapMicroUsd,
+      monthlyCapMicroUsd: this.settings.monthlyCapMicroUsd,
+      dayResetsAt: nextUtcMidnight(now),
+      monthResetsAt: nextUtcMonth(now),
+    };
+  }
+
+  private emitUsage(): void {
+    const u = this.usageSummary();
+    for (const l of this.usageListeners) l(u);
   }
 
   private endTurn(stopReason: StopReason): void {

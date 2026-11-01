@@ -2,12 +2,23 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { PROTOCOL_VERSION } from "../protocol";
 import type { Envelope } from "../types/generated/Envelope";
+import type { EventKind } from "../types/generated/EventKind";
+import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { PingResponse } from "../types/generated/PingResponse";
+import type { Settings } from "../types/generated/Settings";
+import type { SettingsPatch } from "../types/generated/SettingsPatch";
 import type { Snapshot } from "../types/generated/Snapshot";
 import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
-import type { SnapshotListener, Transport, TurnListener } from "./index";
+import type { UsageSummary } from "../types/generated/UsageSummary";
+import type {
+  SnapshotListener,
+  Transport,
+  TurnListener,
+  UsageListener,
+} from "./index";
 
 export const SNAPSHOT_EVENT = "state_snapshot";
+export const USAGE_EVENT = "usage_updated";
 
 export class TauriTransport implements Transport {
   readonly isMock = false;
@@ -27,21 +38,35 @@ export class TauriTransport implements Transport {
    * check already blocks the UI on a mismatch.
    */
   onSnapshot(listener: SnapshotListener): () => void {
-    let stopped = false;
-    const unlisten = listen<Envelope<Snapshot>>(SNAPSHOT_EVENT, (e) => {
-      const env = e.payload;
-      if (env.v !== PROTOCOL_VERSION || env.kind !== "state.snapshot") return;
-      listener(env.payload);
-    });
-    return () => {
-      if (stopped) return;
-      stopped = true;
-      void unlisten.then((fn) => fn());
-    };
+    return subscribe<Snapshot>(SNAPSHOT_EVENT, "state.snapshot", listener);
   }
 
-  // `submit_text` is implemented in Rust later in M2; until then it rejects
-  // and the UI shows the error.
+  onUsage(listener: UsageListener): () => void {
+    return subscribe<UsageSummary>(USAGE_EVENT, "usage.updated", listener);
+  }
+
+  // Settings commands are agreed in #11; until their Rust handlers land these
+  // reject and the settings panel shows the error.
+  getSettings(): Promise<Settings> {
+    return invoke<Settings>("settings_get");
+  }
+
+  updateSettings(patch: SettingsPatch): Promise<Settings> {
+    return invoke<Settings>("settings_set", { patch });
+  }
+
+  setApiKey(key: string): Promise<ApiKeyStatus> {
+    return invoke<ApiKeyStatus>("api_key_set", { key });
+  }
+
+  clearApiKey(): Promise<ApiKeyStatus> {
+    return invoke<ApiKeyStatus>("api_key_clear");
+  }
+
+  getUsage(): Promise<UsageSummary> {
+    return invoke<UsageSummary>("usage_get");
+  }
+
   cancel(requestId: string): Promise<void> {
     return invoke("cancel", { requestId });
   }
@@ -55,4 +80,26 @@ export class TauriTransport implements Transport {
   setMute(muted: boolean): Promise<void> {
     return invoke("set_mute", { muted });
   }
+}
+
+/**
+ * Listens for one broadcast kind. Envelopes from another protocol version or
+ * kind are dropped. Unsubscribe is idempotent and safe before listen() resolves.
+ */
+function subscribe<P>(
+  event: string,
+  kind: EventKind,
+  listener: (p: P) => void,
+): () => void {
+  let stopped = false;
+  const unlisten = listen<Envelope<P>>(event, (e) => {
+    const env = e.payload;
+    if (env.v !== PROTOCOL_VERSION || env.kind !== kind) return;
+    listener(env.payload);
+  });
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    void unlisten.then((fn) => fn());
+  };
 }

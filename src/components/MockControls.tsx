@@ -16,6 +16,13 @@ export function MockControls({ transport }: { transport: MockTransport }) {
           {s.name}
         </button>
       ))}
+      <button
+        type="button"
+        title="Pretend the OS keychain is unavailable (D-09 warning path); reopen Settings to see it"
+        onClick={() => transport.simulateSessionOnlyKey()}
+      >
+        key: session-only
+      </button>
       <label>
         Next message fails (once) with{" "}
         <select

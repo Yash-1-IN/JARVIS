@@ -57,3 +57,17 @@ kbd {
 .chat-form input {
   flex: 1;
 }
+
+.warning {
+  border-left: 4px solid #b45309;
+  padding-left: 0.5rem;
+}
+
+.hint {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.usage dt {
+  font-weight: 600;
+}
