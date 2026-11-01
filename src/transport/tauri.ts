@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { PROTOCOL_VERSION } from "../protocol";
 import type { Envelope } from "../types/generated/Envelope";
 import type { EventKind } from "../types/generated/EventKind";
+import type { AllowedApp } from "../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
 import type { PingResponse } from "../types/generated/PingResponse";
@@ -73,6 +74,10 @@ export class TauriTransport implements Transport {
 
   clearApiKey(): Promise<ApiKeyStatus> {
     return invoke<ApiKeyStatus>("api_key_clear");
+  }
+
+  appsInstalled(): Promise<AllowedApp[]> {
+    return invoke<AllowedApp[]>("apps_installed");
   }
 
   getUsage(): Promise<UsageSummary> {
