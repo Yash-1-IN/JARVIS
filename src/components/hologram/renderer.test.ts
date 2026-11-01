@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { chooseRenderer, frameloopFor, useHologramPref } from "./renderer";
+import { describe, expect, it, vi } from "vitest";
+import {
+  chooseRenderer,
+  contextLostHandler,
+  frameloopFor,
+  useHologramPref,
+} from "./renderer";
 
 describe("chooseRenderer (ADR-015)", () => {
   it("is 2D without WebGL, whatever the choice", () => {
@@ -39,5 +44,24 @@ describe("useHologramPref", () => {
     expect(localStorage.getItem("jarvis.hologram")).toBe("2d");
     expect(useHologramPref.getState().pref).toBe("2d");
     useHologramPref.getState().setPref("auto");
+  });
+});
+
+describe("contextLostHandler", () => {
+  it("ignores the loss R3F forces after the canvas is removed (switching to 2D)", () => {
+    const canvas = document.createElement("canvas");
+    const onLost = vi.fn();
+    contextLostHandler(canvas, onLost)(new Event("webglcontextlost"));
+    expect(onLost).not.toHaveBeenCalled();
+  });
+  it("reports a real loss while the canvas is on screen", () => {
+    const canvas = document.createElement("canvas");
+    document.body.appendChild(canvas);
+    const onLost = vi.fn();
+    const e = new Event("webglcontextlost", { cancelable: true });
+    contextLostHandler(canvas, onLost)(e);
+    expect(onLost).toHaveBeenCalledTimes(1);
+    expect(e.defaultPrevented).toBe(true);
+    canvas.remove();
   });
 });

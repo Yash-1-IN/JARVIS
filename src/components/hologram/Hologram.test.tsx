@@ -54,7 +54,7 @@ describe("Hologram", () => {
   beforeEach(() => {
     Object.assign(env, { webgl: true, linux: false, throw3d: false });
     resetWebglCacheForTests();
-    useHologramPref.setState({ pref: "auto" });
+    useHologramPref.setState({ pref: "auto", choice: 0 });
     setHidden(false);
     setReducedMotion(false);
   });
@@ -135,5 +135,24 @@ describe("Hologram", () => {
     );
     expect(screen.queryByTestId("hologram-3d")).toBeNull();
     expect(screen.getByTestId("orb")).toBeInTheDocument();
+  });
+
+  it("switches back to 3D after 2D was chosen (regression)", async () => {
+    render(<Hologram phase="idle" mic="off" />);
+    expect(await screen.findByTestId("hologram-3d")).toBeInTheDocument();
+    act(() => useHologramPref.getState().setPref("2d"));
+    expect(screen.queryByTestId("hologram-3d")).toBeNull();
+    act(() => useHologramPref.getState().setPref("3d"));
+    expect(await screen.findByTestId("hologram-3d")).toBeInTheDocument();
+  });
+
+  it("after a real 3D failure, choosing again gives 3D a fresh try", async () => {
+    render(<Hologram phase="idle" mic="off" />);
+    await act(async () =>
+      fireEvent.click(await screen.findByText("lose context")),
+    );
+    expect(screen.queryByTestId("hologram-3d")).toBeNull();
+    act(() => useHologramPref.getState().setPref("3d"));
+    expect(await screen.findByTestId("hologram-3d")).toBeInTheDocument();
   });
 });

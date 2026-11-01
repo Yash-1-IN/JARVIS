@@ -66,15 +66,34 @@ function readPref(): HologramPref {
  */
 export const useHologramPref = create<{
   pref: HologramPref;
+  /** Goes up on every choice, so a 3D failure is only remembered until the next one. */
+  choice: number;
   setPref: (p: HologramPref) => void;
 }>((set) => ({
   pref: readPref(),
+  choice: 0,
   setPref: (pref) => {
     try {
       localStorage.setItem(KEY, pref);
     } catch {
       // Storage can be unavailable; the choice still applies until restart.
     }
-    set({ pref });
+    set((s) => ({ pref, choice: s.choice + 1 }));
   },
 }));
+
+/**
+ * The `webglcontextlost` handler: a real loss while the canvas is on screen
+ * means 3D failed. R3F also forces a context loss when the 3D view unmounts
+ * (switching to 2D); by then the canvas is detached, so that one is ignored.
+ */
+export function contextLostHandler(
+  canvas: HTMLCanvasElement,
+  onLost: () => void,
+): (e: Event) => void {
+  return (e) => {
+    if (!canvas.isConnected) return;
+    e.preventDefault();
+    onLost();
+  };
+}
