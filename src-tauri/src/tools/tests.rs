@@ -101,12 +101,9 @@ async fn search_respects_scope_and_validates_input() {
     std::fs::write(other.join("secret.txt"), "x").unwrap();
     let ctx = ctx_for(&[&root]);
     for bad in [
-        json!({"query": ""}),
-        json!({"query": "   "}),
         json!({"query": "a\u{7}b"}),
         json!({"query": "x".repeat(101)}),
         json!({"query": "x", "extra": 1}),
-        json!({"folder": s(&root)}),
         json!({"query": "x", "max_results": "many"}),
     ] {
         assert!(
@@ -987,4 +984,49 @@ async fn memory_propose_rejects_empty_long_unknown_fields_and_a_full_inbox() {
     ));
     assert_eq!(inbox.list().len(), 1);
     let _: &dyn MemoryInbox = inbox.as_ref();
+}
+
+#[tokio::test]
+async fn an_empty_query_lists_the_top_level_of_the_folder() {
+    let root = dir("list");
+    std::fs::create_dir_all(root.join("docs/deep")).unwrap();
+    std::fs::write(root.join("a.txt"), "x").unwrap();
+    std::fs::write(root.join("b.txt"), "x").unwrap();
+    std::fs::write(root.join("docs/inner.txt"), "x").unwrap();
+    let ctx = ctx_for(&[&root]);
+    for args in [json!({}), json!({"query": ""}), json!({"query": "   "})] {
+        let p = FilesSearch.prepare(&args, &ctx).unwrap();
+        assert!(p.summary.starts_with("List"), "{}", p.summary);
+        assert_eq!(p.arg_risk, None);
+        let out = run(&FilesSearch, args, &ctx).await.unwrap();
+        for name in ["a.txt", "b.txt", "docs"] {
+            assert!(out.text.contains(name), "{name} in {}", out.text);
+        }
+        // Only the top level: nothing from inside the sub-folder.
+        assert!(!out.text.contains("inner.txt") && !out.text.contains("deep"));
+        assert!(out.external_content, "file names are outside content");
+    }
+    // A folder argument works the same, and still has to be inside the allowed roots.
+    let sub = run(&FilesSearch, json!({"folder": s(&root.join("docs"))}), &ctx)
+        .await
+        .unwrap();
+    assert!(sub.text.contains("inner.txt") && sub.text.contains("deep"));
+    let other = dir("list-other");
+    assert!(matches!(
+        FilesSearch.prepare(&json!({"folder": s(&other)}), &ctx),
+        Err(ToolError::NotAllowed(_))
+    ));
+    // The result list is capped.
+    for i in 0..60 {
+        std::fs::write(root.join(format!("f{i}.log")), "x").unwrap();
+    }
+    let big = run(&FilesSearch, json!({"max_results": 5}), &ctx)
+        .await
+        .unwrap();
+    assert_eq!(
+        big.text.lines().filter(|l| l.starts_with("file")).count()
+            + big.text.lines().filter(|l| l.starts_with("folder")).count(),
+        5
+    );
+    assert!(big.text.contains("more results exist"));
 }
