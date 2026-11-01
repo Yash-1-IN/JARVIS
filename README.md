@@ -21,8 +21,9 @@ Tauri 2 and Rust on the backend, React and TypeScript on the front.
 ## What does not work yet
 
 - Voice: wake word, speech-to-text and text-to-speech are not built.
-- Launching apps, system status and memory.
-- Packaged installers. Run it from source for now.
+- Compact orb mode, tray icon and start at login.
+- Signed installers. CI builds unsigned (Windows) and ad-hoc signed (macOS) installers as
+  artifacts of the `installers` workflow; macOS needs right-click → Open the first time.
 
 ## Run it from source
 

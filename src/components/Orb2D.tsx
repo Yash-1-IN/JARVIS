@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useDocumentHidden } from "../hooks/useDocumentHidden";
 import type { AssistantPhase } from "../types/generated/AssistantPhase";
 import type { MicState } from "../types/generated/MicState";
 
@@ -25,19 +25,6 @@ export function orbMotion(phase: AssistantPhase, mic: MicState): OrbMotion {
       // A live mic outside a turn is worth a slow cue; otherwise stay still.
       return mic === "capturing" ? "pulse" : "none";
   }
-}
-
-/** True while the window is hidden, so animations can pause (0 frames when hidden). */
-function useDocumentHidden(): boolean {
-  const [hidden, setHidden] = useState(
-    () => document.visibilityState === "hidden",
-  );
-  useEffect(() => {
-    const on = () => setHidden(document.visibilityState === "hidden");
-    document.addEventListener("visibilitychange", on);
-    return () => document.removeEventListener("visibilitychange", on);
-  }, []);
-  return hidden;
 }
 
 /**

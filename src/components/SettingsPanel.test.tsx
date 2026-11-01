@@ -132,6 +132,7 @@ describe("SettingsPanel", () => {
       "Key and model",
       "Spending",
       "Permissions",
+      "Display",
     ]);
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
     // Only the selected tab is reachable with Tab; the others are hidden.
@@ -149,8 +150,8 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("button", { name: "Save caps" })).toBeVisible();
 
     fireEvent.keyDown(tabs[1], { key: "End" });
-    expect(tabs[2]).toHaveFocus();
-    fireEvent.keyDown(tabs[2], { key: "ArrowRight" });
+    expect(tabs[3]).toHaveFocus();
+    fireEvent.keyDown(tabs[3], { key: "ArrowRight" });
     expect(tabs[0]).toHaveFocus();
   });
 
