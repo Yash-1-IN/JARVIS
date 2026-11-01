@@ -5,8 +5,18 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...a: unknown[]) => invoke(...a),
 }));
 
+type Handler = (e: { payload: unknown }) => void;
+const handlers = new Map<string, Handler>();
+const unlisten = vi.fn();
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: async (name: string, h: Handler) => {
+    handlers.set(name, h);
+    return unlisten;
+  },
+}));
+
 import { PROTOCOL_VERSION } from "../protocol";
-import { TauriTransport } from "./tauri";
+import { SNAPSHOT_EVENT, TauriTransport } from "./tauri";
 
 describe("TauriTransport", () => {
   beforeEach(() => invoke.mockReset());
@@ -28,5 +38,24 @@ describe("TauriTransport", () => {
     const snap = await new TauriTransport().getSnapshot();
     expect(invoke).toHaveBeenCalledWith("get_snapshot");
     expect(snap.phase).toBe("idle");
+  });
+
+  it("delivers state_snapshot envelopes of our protocol version", async () => {
+    const got: unknown[] = [];
+    const stop = new TauriTransport().onSnapshot((s) => got.push(s));
+    await Promise.resolve();
+    const emit = handlers.get(SNAPSHOT_EVENT)!;
+    const env = (v: number, kind: string, seq: number) => ({
+      payload: { v, seq, id: "x", ts: 0, kind, payload: { seq, mic: "muted" } },
+    });
+    emit(env(PROTOCOL_VERSION, "state.snapshot", 1));
+    emit(env(PROTOCOL_VERSION + 1, "state.snapshot", 2));
+    emit(env(PROTOCOL_VERSION, "error.raised", 3));
+    expect(got).toEqual([{ seq: 1, mic: "muted" }]);
+
+    stop();
+    stop();
+    await Promise.resolve();
+    expect(unlisten).toHaveBeenCalledOnce();
   });
 });

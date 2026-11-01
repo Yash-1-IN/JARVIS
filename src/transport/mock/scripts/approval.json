@@ -1,0 +1,42 @@
+{
+  "name": "approval",
+  "description": "A medium-risk tool call waits for approval, then runs.",
+  "steps": [
+    {
+      "delayMs": 0,
+      "patch": {
+        "mic": "standby",
+        "phase": "thinking",
+        "network": "online",
+        "activeRequestId": "mock-req-5"
+      }
+    },
+    {
+      "delayMs": 1000,
+      "patch": {
+        "phase": "awaiting_approval",
+        "pendingApprovals": [
+          {
+            "approvalId": "mock-appr-1",
+            "requestId": "mock-req-5",
+            "tool": "files.move",
+            "risk": "medium",
+            "summary": "Move 3 files from Downloads to Documents/Invoices.",
+            "targets": [
+              "~/Downloads/inv-01.pdf",
+              "~/Downloads/inv-02.pdf",
+              "~/Downloads/inv-03.pdf"
+            ],
+            "argsDigest": "mock-digest-0000",
+            "expiresAt": 0,
+            "allowVoice": true,
+            "tainted": false
+          }
+        ]
+      }
+    },
+    { "delayMs": 4000, "patch": { "phase": "acting", "pendingApprovals": [] } },
+    { "delayMs": 1500, "patch": { "phase": "thinking" } },
+    { "delayMs": 1000, "patch": { "phase": "idle", "activeRequestId": null } }
+  ]
+}

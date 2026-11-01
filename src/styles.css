@@ -1,0 +1,59 @@
+.mock-badge {
+  position: fixed;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 1000;
+  padding: 0.25rem 0.6rem;
+  border: 2px solid currentColor;
+  border-radius: 0.25rem;
+  background: #fde047;
+  color: #1c1917;
+  font:
+    700 0.85rem/1 system-ui,
+    sans-serif;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+
+/* Keyboard users must always see where focus is. */
+:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+kbd {
+  font-size: 0.75em;
+  opacity: 0.75;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.chat-log {
+  list-style: none;
+  padding: 0;
+}
+
+.chat-user {
+  font-weight: 600;
+}
+
+.chat-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.chat-form input {
+  flex: 1;
+}

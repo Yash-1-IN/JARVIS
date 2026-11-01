@@ -1,0 +1,25 @@
+{
+  "name": "interrupt",
+  "description": "Wake word spoken while the assistant is speaking; it stops and listens again.",
+  "steps": [
+    {
+      "delayMs": 0,
+      "patch": {
+        "mic": "standby",
+        "phase": "speaking",
+        "network": "online",
+        "activeRequestId": "mock-req-2"
+      }
+    },
+    {
+      "delayMs": 1500,
+      "patch": {
+        "mic": "capturing",
+        "phase": "listening",
+        "activeRequestId": "mock-req-3"
+      }
+    },
+    { "delayMs": 1500, "patch": { "mic": "standby", "phase": "thinking" } },
+    { "delayMs": 1000, "patch": { "phase": "idle", "activeRequestId": null } }
+  ]
+}

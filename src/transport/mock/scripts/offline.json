@@ -1,0 +1,12 @@
+{
+  "name": "offline",
+  "description": "Network drops; local-only mode until it returns.",
+  "steps": [
+    {
+      "delayMs": 0,
+      "patch": { "mic": "standby", "phase": "idle", "network": "online" }
+    },
+    { "delayMs": 1000, "patch": { "network": "offline" } },
+    { "delayMs": 3000, "patch": { "network": "online" } }
+  ]
+}

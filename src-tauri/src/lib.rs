@@ -2,6 +2,7 @@ mod intelligence;
 mod ipc;
 mod logging;
 mod orchestrator;
+mod platform;
 
 use intelligence::spend::{Caps, Day, Price, SpendMeter};
 use orchestrator::turn::{TurnConfig, TurnRunner};
