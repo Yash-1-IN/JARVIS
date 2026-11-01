@@ -6,6 +6,7 @@ mod orchestrator;
 mod permissions;
 mod platform;
 mod services;
+mod tools;
 
 use config::SettingsStore;
 use intelligence::pricing::PriceTable;
