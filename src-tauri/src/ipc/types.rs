@@ -1,3 +1,6 @@
+// Contract types are defined ahead of the milestones that use them (M2+).
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -129,4 +132,112 @@ pub struct PingResponse {
     pub pong: bool,
     pub protocol_version: u32,
     pub app_version: String,
+}
+
+/// Wraps every broadcast event (spec §5.3). `kind` is e.g. "state.snapshot".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Envelope<P> {
+    pub v: u32,
+    #[ts(type = "number")]
+    pub seq: u64,
+    /// UUIDv7 string.
+    pub id: String,
+    /// Unix milliseconds.
+    #[ts(type = "number")]
+    pub ts: u64,
+    pub kind: String,
+    pub payload: P,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum StopReason {
+    End,
+    Cancelled,
+    Error,
+    SpendCap,
+}
+
+/// Items sent over the per-turn Channel returned by `submit_text` (spec §5.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
+pub enum TurnStreamEvent {
+    Transcript {
+        text: String,
+        #[serde(rename = "final")]
+        #[ts(rename = "final")]
+        is_final: bool,
+    },
+    TextDelta {
+        text: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    ToolProposed {
+        #[ts(rename = "toolCallId")]
+        tool_call_id: String,
+        tool: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    Done {
+        #[ts(rename = "stopReason")]
+        stop_reason: StopReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum Decision {
+    Approve,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ApprovalDecision {
+    pub approval_id: String,
+    /// Must echo the request's `argsDigest`; a mismatch is rejected.
+    pub args_digest: String,
+    pub decision: Decision,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_stream_event_wire_shape() {
+        let v = serde_json::to_value(TurnStreamEvent::Transcript {
+            text: "hi".into(),
+            is_final: true,
+        })
+        .unwrap();
+        assert_eq!(v["type"], "transcript");
+        assert_eq!(v["final"], true);
+        let d = serde_json::to_value(TurnStreamEvent::Done {
+            stop_reason: StopReason::SpendCap,
+        })
+        .unwrap();
+        assert_eq!(d["type"], "done");
+        assert_eq!(d["stopReason"], "spend_cap");
+        let t = serde_json::to_value(TurnStreamEvent::ToolProposed {
+            tool_call_id: "c1".into(),
+            tool: "files.search".into(),
+        })
+        .unwrap();
+        assert_eq!(t["toolCallId"], "c1");
+    }
+
+    #[test]
+    fn approval_decision_wire_shape() {
+        let d: ApprovalDecision =
+            serde_json::from_str(r#"{"approvalId":"a","argsDigest":"d","decision":"approve"}"#)
+                .unwrap();
+        assert_eq!(d.decision, Decision::Approve);
+    }
 }
