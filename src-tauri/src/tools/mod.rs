@@ -138,6 +138,13 @@ impl Registry {
 
     /// Only tools the gateway knows can be registered, so the two lists cannot drift.
     pub fn register(&mut self, t: Arc<dyn Tool>) {
+        // The Anthropic wire format turns `.` into `__` and back; a name that already holds
+        // `__` would not round-trip.
+        assert!(
+            !t.name().contains("__"),
+            "tool names must not contain '__': {}",
+            t.name()
+        );
         assert!(
             ALPHA_TOOLS.contains(&t.name()),
             "{} is not in the gateway's alpha registry",
