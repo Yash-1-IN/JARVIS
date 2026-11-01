@@ -6,7 +6,7 @@ Checked 2026-11-01 against the allow-list in `docs/decisions.md` (D-01). The pro
 ## Rust dependencies (shipped in the app)
 Source: `cargo metadata --all-features` for `src-tauri` (all target platforms).
 
-- **564** third-party crates.
+- **568** third-party crates (on 2026-11-01, after the folder picker added `tauri-plugin-dialog`, `tauri-plugin`, `tauri-plugin-fs` and `rfd`; `tauri-plugin-fs` is a Rust-only dependency and is not registered).
 - **0** outside the allow-list. Every crate offers at least one allowed licence (an `OR` expression passes
   if any option is allowed; an `AND` needs all of them).
 - Most common: `MIT OR Apache-2.0` (about 330 with its spelling variants), `MIT` (133), `Unicode-3.0` (18),
