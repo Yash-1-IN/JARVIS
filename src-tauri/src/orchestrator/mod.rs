@@ -1,9 +1,8 @@
-// Turn methods are used by the turn runner added next in M2.
-#![allow(dead_code)]
-
 //! The single authoritative assistant state machine (spec §5, ADR-010).
 //! Pure and synchronous: it owns the `Snapshot`, enforces legal transitions and
 //! bumps `seq` on every change. Publishing to the webview happens in `ipc`.
+
+pub mod turn;
 
 use crate::ipc::types::{AssistantPhase, JarvisError, MicState, Snapshot};
 use std::sync::{Mutex, MutexGuard};

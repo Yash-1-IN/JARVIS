@@ -1,4 +1,4 @@
-// Pieces are wired into the turn runner in later M2 tasks.
+// The Anthropic client is constructed once the API key is wired (settings contract, #8).
 #![allow(dead_code)]
 
 pub mod anthropic;
