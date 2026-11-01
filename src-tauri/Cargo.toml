@@ -36,6 +36,10 @@ reqwest = { version = "0.13.5", default-features = false, features = ["stream", 
 keyring = "4.2.0"
 sha2 = "0.11.1"
 zeroize = "1.9.1"
+# CPU, memory and network for the system.status tool, platform/status.rs.
+sysinfo = { version = "0.40.1", default-features = false, features = ["system", "network"] }
+# Battery level and state for system.status, platform/status.rs (maintained fork of `battery`).
+starship-battery = "0.12.0"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
