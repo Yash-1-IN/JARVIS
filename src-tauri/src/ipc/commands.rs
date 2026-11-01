@@ -1,7 +1,10 @@
 use super::{PROTOCOL_VERSION, types::*};
 use crate::orchestrator::Orchestrator;
+use crate::orchestrator::turn::{TurnRunner, TurnSink};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
+use tauri::ipc::Channel;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -44,22 +47,61 @@ pub fn ping() -> PingResponse {
 }
 
 #[tauri::command]
-pub fn get_snapshot(state: tauri::State<'_, Orchestrator>) -> Snapshot {
+pub fn get_snapshot(state: tauri::State<'_, Arc<Orchestrator>>) -> Snapshot {
     state.snapshot()
 }
 
 #[tauri::command]
-pub fn set_mute(app: tauri::AppHandle, state: tauri::State<'_, Orchestrator>, muted: bool) {
+pub fn set_mute(app: tauri::AppHandle, state: tauri::State<'_, Arc<Orchestrator>>, muted: bool) {
     publish(&app, state.set_mute(muted));
 }
 
-#[tauri::command]
-pub fn cancel(app: tauri::AppHandle, state: tauri::State<'_, Orchestrator>, request_id: String) {
-    // Idempotent: Esc pressed just as a turn finishes is a no-op, not an error.
-    match state.cancel(&request_id) {
-        Ok(s) => publish(&app, s),
-        Err(_) => tracing::debug!(request_id, "cancel for a turn that is not active"),
+/// Publishes snapshots to the webview and, if given, streams turn events on a Channel.
+struct AppSink {
+    app: tauri::AppHandle,
+    channel: Option<Channel<TurnStreamEvent>>,
+}
+
+impl TurnSink for AppSink {
+    fn event(&self, e: TurnStreamEvent) {
+        if let Some(c) = &self.channel
+            && let Err(err) = c.send(e)
+        {
+            tracing::debug!(error = %err, "turn channel closed");
+        }
     }
+    fn snapshot(&self, s: Snapshot) {
+        publish(&self.app, s);
+    }
+}
+
+#[tauri::command]
+pub fn cancel(
+    app: tauri::AppHandle,
+    runner: tauri::State<'_, Arc<TurnRunner>>,
+    request_id: String,
+) {
+    // Idempotent: Esc pressed just as a turn finishes is a no-op, not an error.
+    let sink = AppSink { app, channel: None };
+    if !runner.cancel(&request_id, &sink) {
+        tracing::debug!(request_id, "cancel for a turn that is not active");
+    }
+}
+
+/// Starts a text turn and returns its request id at once; events stream on `on_event`
+/// and always end with exactly one `done`.
+#[tauri::command]
+pub fn submit_text(
+    app: tauri::AppHandle,
+    runner: tauri::State<'_, Arc<TurnRunner>>,
+    text: String,
+    on_event: Channel<TurnStreamEvent>,
+) -> Result<String, JarvisError> {
+    let sink = Arc::new(AppSink {
+        app,
+        channel: Some(on_event),
+    });
+    runner.start(text, sink)
 }
 
 #[cfg(test)]
