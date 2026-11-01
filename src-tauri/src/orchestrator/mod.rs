@@ -27,6 +27,8 @@ pub fn is_legal(from: AssistantPhase, to: AssistantPhase) -> bool {
     match (from, to) {
         // Any phase may fail, and a cancel/interrupt returns to idle (or listening).
         (_, Error) | (_, Idle) => true,
+        // A failed turn is over; the user can start the next one (retry) directly.
+        (Error, Listening) | (Error, Thinking) | (Error, Transcribing) => true,
         (Idle, Listening) | (Idle, Thinking) | (Idle, Transcribing) => true,
         (Listening, Transcribing) | (Listening, Thinking) => true,
         (Transcribing, Thinking) => true,
@@ -132,7 +134,12 @@ impl Orchestrator {
         if g.snap.active_request_id.as_deref() != Some(request_id) {
             return Err(TransitionError::WrongRequest);
         }
+        // The turn is over: stop the cloud indicator and free the slot, but keep
+        // `last_error.request_id` so the UI can offer a retry.
         g.snap.phase = AssistantPhase::Error;
+        g.snap.active_request_id = None;
+        g.snap.cloud_in_use = false;
+        g.snap.pending_approvals.clear();
         g.snap.last_error = Some(err);
         Ok(Self::bump(&mut g))
     }
@@ -243,9 +250,10 @@ mod tests {
     }
 
     #[test]
-    fn failure_sets_error_phase_and_error_then_idle_is_legal() {
+    fn failure_ends_the_turn_and_a_new_turn_can_start() {
         let o = Orchestrator::default();
         let (id, _) = o.begin_turn().unwrap();
+        o.set_cloud_in_use(true);
         let s = o
             .fail(
                 &id,
@@ -258,8 +266,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(s.phase, Error);
-        assert!(s.last_error.is_some());
-        assert_eq!(o.transition(&id, Idle).unwrap().phase, Idle);
+        assert!(!s.cloud_in_use, "cloud indicator must go dark");
+        assert_eq!(s.active_request_id, None);
+        assert_eq!(
+            s.last_error.unwrap().request_id.as_deref(),
+            Some(id.as_str())
+        );
+        let (id2, s2) = o.begin_turn().expect("retry after error");
+        assert_ne!(id, id2);
+        assert_eq!((s2.phase, s2.last_error), (Thinking, None));
     }
 
     #[test]

@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt};
+use reqwest::header::HeaderValue;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -78,10 +79,13 @@ impl AnthropicProvider {
     }
 
     async fn send_once(&self, body: &Value) -> Result<reqwest::Response, ProviderError> {
+        // Marked sensitive so it is redacted if headers are ever debug-printed.
+        let mut key = HeaderValue::from_str(&self.cfg.api_key).map_err(|_| ProviderError::Auth)?;
+        key.set_sensitive(true);
         let resp = self
             .http
             .post(format!("{}/v1/messages", self.cfg.base_url))
-            .header("x-api-key", &self.cfg.api_key)
+            .header("x-api-key", key)
             .header("anthropic-version", API_VERSION)
             .json(body)
             .send()
@@ -159,14 +163,18 @@ impl ModelProvider for AnthropicProvider {
             let mut bytes = resp.bytes_stream();
             let mut parser = SseParser::default();
             let mut acc = Accumulator::default();
-            let deadline = tokio::time::Instant::now() + total;
-            let mut got_data = false;
+            let started = tokio::time::Instant::now();
+            let deadline = started + total;
+            let first_token_deadline = started + first_token;
+            // Flips on the first text or tool call, not on message_start/ping bytes.
+            let mut got_token = false;
             loop {
-                let wait = if got_data {
-                    deadline.saturating_duration_since(tokio::time::Instant::now())
+                let limit = if got_token {
+                    deadline
                 } else {
-                    first_token
+                    first_token_deadline
                 };
+                let wait = limit.saturating_duration_since(tokio::time::Instant::now());
                 let next = tokio::select! {
                     _ = cancel.cancelled() => {
                         let _ = tx.send(Err(ProviderError::Cancelled)).await;
@@ -176,7 +184,7 @@ impl ModelProvider for AnthropicProvider {
                 };
                 let chunk = match next {
                     Err(_) => {
-                        let msg = if got_data {
+                        let msg = if got_token {
                             "turn timed out"
                         } else {
                             "no first token"
@@ -198,12 +206,17 @@ impl ModelProvider for AnthropicProvider {
                     }
                     Ok(Some(Ok(c))) => c,
                 };
-                got_data = true;
                 for ev in parser.push(&chunk) {
                     match acc.handle(ev) {
                         Ok(items) => {
                             for item in items {
                                 let done = matches!(item, TurnEvent::Done { .. });
+                                if matches!(
+                                    item,
+                                    TurnEvent::TextDelta(_) | TurnEvent::ToolCall { .. }
+                                ) {
+                                    got_token = true;
+                                }
                                 if tx.send(Ok(item)).await.is_err() {
                                     return; // receiver dropped
                                 }

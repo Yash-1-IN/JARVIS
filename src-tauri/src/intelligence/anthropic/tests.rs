@@ -280,6 +280,23 @@ async fn no_first_token_times_out() {
 }
 
 #[tokio::test]
+async fn stall_after_message_start_still_hits_first_token_timeout() {
+    // message_start and ping arrive at once, then nothing: must not wait for the 60 s turn limit.
+    let partial = sse(&[
+        (
+            "message_start",
+            r#"{"message":{"usage":{"input_tokens":3}}}"#,
+        ),
+        ("ping", "{}"),
+    ]);
+    let (url, _) = serve(vec![Reply::Hang { partial }]).await;
+    let start = std::time::Instant::now();
+    let err = collect(&provider(url)).await.unwrap_err();
+    assert!(matches!(err, ProviderError::Unavailable(m) if m.contains("first token")));
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test]
 async fn cancel_stops_stream_within_300ms() {
     let partial = sse(&[(
         "content_block_delta",

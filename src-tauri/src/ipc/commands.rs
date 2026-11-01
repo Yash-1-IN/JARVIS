@@ -54,22 +54,11 @@ pub fn set_mute(app: tauri::AppHandle, state: tauri::State<'_, Orchestrator>, mu
 }
 
 #[tauri::command]
-pub fn cancel(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Orchestrator>,
-    request_id: String,
-) -> Result<(), JarvisError> {
+pub fn cancel(app: tauri::AppHandle, state: tauri::State<'_, Orchestrator>, request_id: String) {
+    // Idempotent: Esc pressed just as a turn finishes is a no-op, not an error.
     match state.cancel(&request_id) {
-        Ok(s) => {
-            publish(&app, s);
-            Ok(())
-        }
-        Err(_) => Err(JarvisError {
-            code: ErrorCode::Internal,
-            message: "no active turn with that request id".into(),
-            retryable: false,
-            request_id: Some(request_id),
-        }),
+        Ok(s) => publish(&app, s),
+        Err(_) => tracing::debug!(request_id, "cancel for a turn that is not active"),
     }
 }
 
