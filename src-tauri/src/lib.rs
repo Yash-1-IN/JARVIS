@@ -114,6 +114,16 @@ pub fn run() {
                 .with_tools(tools)
                 .with_memory(store.clone()),
             );
+            // Apply the retention period at start-up and then once a day.
+            let purger = store.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    if let Err(e) = purger.purge_history(now_secs() * 1000) {
+                        tracing::warn!(error = %e, "history purge failed");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
+                }
+            });
             app.manage(store);
             app.manage(activity);
             app.manage(orch);
@@ -138,7 +148,13 @@ pub fn run() {
             ipc::commands::memory_list,
             ipc::commands::memory_accept,
             ipc::commands::memory_edit,
-            ipc::commands::memory_delete
+            ipc::commands::memory_delete,
+            ipc::commands::memory_export,
+            ipc::commands::history_list,
+            ipc::commands::history_get,
+            ipc::commands::history_delete_all,
+            ipc::commands::history_settings_get,
+            ipc::commands::history_settings_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

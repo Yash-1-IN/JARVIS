@@ -100,13 +100,13 @@ impl MemoryStore {
         }
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(super) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Folds the write-ahead log into the main file and empties it, so text that was just
     /// changed or deleted does not linger in the `-wal` file of a long-running app.
-    fn scrub(conn: &Connection) {
+    pub(super) fn scrub(conn: &Connection) {
         let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
     }
 

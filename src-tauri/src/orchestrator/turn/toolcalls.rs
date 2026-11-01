@@ -231,6 +231,8 @@ impl TurnRunner {
 
     fn emit_latest_activity(&self, w: &ToolWiring, sink: &dyn TurnSink) {
         if let Some(e) = w.activity.list(1, None).into_iter().next() {
+            // History keeps the one-line summary the backend wrote, never file contents.
+            self.log_history(crate::ipc::types::HistoryRole::Tool, &e.summary);
             sink.activity(e);
         }
     }

@@ -11,7 +11,10 @@ use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
 
 /// Each entry takes the schema from version `i` to `i + 1`. Never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[include_str!("migrations/001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("migrations/001_initial.sql"),
+    include_str!("migrations/002_settings.sql"),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -143,6 +146,7 @@ pub fn open(path: &Path, now_ms: u64) -> Result<Opened, DbError> {
 }
 
 /// A private in-memory database with the full schema (tests).
+#[cfg(test)]
 pub fn open_in_memory() -> Result<Connection, DbError> {
     let mut conn = Connection::open_in_memory().map_err(|e| DbError::Open(e.to_string()))?;
     configure(&conn).map_err(|e| DbError::Open(e.to_string()))?;

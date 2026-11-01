@@ -1252,3 +1252,203 @@ async fn only_confirmed_memories_reach_the_prompt_and_as_quoted_data() {
     s2.wait_done().await;
     assert!(!lock(&fake2.seen)[0].system.contains("green tea"));
 }
+
+// ------------------------------------------------------------------------ history
+
+fn conversation_texts(
+    store: &crate::memory::store::MemoryStore,
+) -> Vec<(crate::ipc::types::HistoryRole, String)> {
+    let list = store.list_conversations(10, None).unwrap();
+    assert_eq!(list.len(), 1, "one conversation: {list:?}");
+    store
+        .get_conversation(&list[0].id)
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.role, m.content))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_cloud_turn_and_a_local_answer_are_written_to_history() {
+    use crate::ipc::types::HistoryRole::{Assistant, User};
+    let fake = Fake::new(Script::Ok(vec!["Hello ", "there."], Usage::default()));
+    let (r, store) = with_memory_store(fake, &[]);
+    let s1 = Arc::new(Rec::default());
+    r.start("hello".into(), s1.clone()).unwrap();
+    s1.wait_done().await;
+    let s2 = Arc::new(Rec::default());
+    r.start("what can you do".into(), s2.clone()).unwrap();
+    s2.wait_done().await;
+    let got = conversation_texts(&store);
+    assert_eq!(got[0], (User, "hello".to_string()));
+    assert_eq!(got[1], (Assistant, "Hello there.".to_string()));
+    assert_eq!(got[2], (User, "what can you do".to_string()));
+    assert_eq!(got[3].0, Assistant);
+    assert_eq!(got.len(), 4);
+}
+
+#[tokio::test]
+async fn history_off_stores_nothing_and_a_failed_turn_leaves_only_what_was_said() {
+    use crate::ipc::types::HistoryRetention;
+    let fake = Fake::new(Script::Ok(vec!["x"], Usage::default()));
+    let (r, store) = with_memory_store(fake, &[]);
+    store
+        .set_history_retention(HistoryRetention::Off, 1)
+        .unwrap();
+    let s = Arc::new(Rec::default());
+    r.start("secret question".into(), s.clone()).unwrap();
+    s.wait_done().await;
+    assert!(store.list_conversations(10, None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn tool_calls_are_recorded_as_one_line_summaries_never_file_contents() {
+    use crate::ipc::types::HistoryRole::Tool;
+    let (t, _) = tooled(
+        |root| {
+            let args = json!({"path": crate::config::display_path(&root.join("n.txt"))});
+            rounds(vec![
+                vec![
+                    call("t1", "files.read_text", args),
+                    done(ProviderStop::ToolUse),
+                ],
+                vec![say("It says hello."), done(ProviderStop::EndTurn)],
+            ])
+        },
+        true,
+    );
+    // The same runner also gets a store, as in the app.
+    let store = Arc::new(crate::memory::store::MemoryStore::new(
+        crate::memory::db::open_in_memory().unwrap(),
+    ));
+    let r = Arc::new(Arc::into_inner(t.r).unwrap().with_memory(store.clone()));
+    std::fs::write(t.root.join("n.txt"), "CONTENTS-THAT-MUST-NOT-BE-STORED").unwrap();
+    let sink = Arc::new(Rec::default());
+    r.start("read n.txt".into(), sink.clone()).unwrap();
+    sink.wait_done().await;
+    let got = conversation_texts(&store);
+    let tool_lines: Vec<_> = got.iter().filter(|(role, _)| *role == Tool).collect();
+    assert_eq!(tool_lines.len(), 1);
+    assert!(tool_lines[0].1.contains("n.txt"));
+    assert!(
+        got.iter()
+            .all(|(_, text)| !text.contains("CONTENTS-THAT-MUST")),
+        "file contents never reach history"
+    );
+}
+
+// ------------------------------------------------ remember text must not outlive its memory
+
+/// A runner wired like the app: tools, a real file database, and the store as memory inbox.
+fn app_like(dir: &std::path::Path) -> (Arc<TurnRunner>, Arc<crate::memory::store::MemoryStore>) {
+    let store = Arc::new(crate::memory::store::MemoryStore::new(
+        crate::memory::db::open(&dir.join("jarvis.db"), 1)
+            .unwrap()
+            .conn,
+    ));
+    let inbox = crate::memory::inbox::StoreInbox::new(
+        store.clone(),
+        Box::new(|| NOW * 1000),
+        Box::new(|_| {}),
+    );
+    let log = Arc::new(ActivityLog::new(10));
+    let gateway = Arc::new(Gateway::new(Box::new(|| NOW * 1000), log.clone()));
+    let ports = Arc::new(crate::tools::ports::Ports {
+        memory: Arc::new(inbox),
+        ..crate::tools::ports::Ports::placeholders()
+    });
+    let (r, _, _) = runner(
+        Some(Fake::new(Script::Ok(vec!["Fine."], Usage::default()))),
+        Caps::default(),
+    );
+    let r = Arc::new(
+        Arc::into_inner(r)
+            .unwrap()
+            .with_tools(ToolWiring {
+                gateway,
+                registry: Arc::new(Registry::alpha()),
+                activity: log,
+                context: Box::new(move || ToolContext {
+                    scope: PathScope::new(&[]),
+                    now_secs: Arc::new(|| NOW),
+                    apps: vec![],
+                    ports: ports.clone(),
+                }),
+            })
+            .with_memory(store.clone()),
+    );
+    (r, store)
+}
+
+fn text_on_disk(dir: &std::path::Path, needle: &str) -> bool {
+    std::fs::read_dir(dir).unwrap().flatten().any(|e| {
+        let b = std::fs::read(e.path())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        b.windows(needle.len()).any(|w| w == needle.as_bytes())
+    })
+}
+
+#[tokio::test]
+async fn a_denied_remember_request_leaves_its_text_nowhere_not_even_in_history() {
+    let dir = std::env::temp_dir().join(format!("jarvis-rem-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (r, store) = app_like(&dir);
+    for i in 0..20 {
+        store
+            .record_message(
+                crate::ipc::types::HistoryRole::User,
+                &format!("filler number {i} about gardens"),
+                None,
+                NOW * 1000 + i,
+            )
+            .unwrap();
+    }
+    let sink = Arc::new(Rec::default());
+    r.start(
+        "Remember that zebrapassphrase opens the shed".into(),
+        sink.clone(),
+    )
+    .unwrap();
+    sink.wait_done().await;
+    let proposed = store
+        .list(Some(crate::ipc::types::MemoryStatus::Proposed))
+        .unwrap();
+    assert_eq!(proposed.len(), 1);
+    assert!(
+        text_on_disk(&dir, "zebrapassphrase"),
+        "the proposal itself is stored"
+    );
+    // The user says no.
+    store.delete(&proposed[0].id).unwrap();
+    assert!(
+        !text_on_disk(&dir, "zebrapassphrase"),
+        "text still on disk after Deny"
+    );
+    // History kept only a neutral line, as the message and as the conversation title.
+    let list = store.list_conversations(10, None).unwrap();
+    assert!(
+        list.iter()
+            .all(|c| !c.title.clone().unwrap_or_default().contains("zebra"))
+    );
+    let export = store.export_json(1).unwrap();
+    assert!(!export.contains("zebrapassphrase"));
+    assert!(export.contains("Asked JARVIS to remember something"));
+}
+
+#[tokio::test]
+async fn delete_all_history_also_clears_what_the_next_cloud_turn_would_send() {
+    let fake = Fake::new(Script::Ok(vec!["Noted."], Usage::default()));
+    let (r, store) = with_memory_store(fake.clone(), &[]);
+    let s1 = Arc::new(Rec::default());
+    r.start("first question".into(), s1.clone()).unwrap();
+    s1.wait_done().await;
+    store.delete_all_history().unwrap();
+    r.forget_conversation();
+    let s2 = Arc::new(Rec::default());
+    r.start("second question".into(), s2.clone()).unwrap();
+    s2.wait_done().await;
+    let seen = lock(&fake.seen);
+    assert_eq!(seen[1].messages.len(), 1, "only the new question is sent");
+    assert_eq!(seen[1].messages[0].content, "second question");
+}

@@ -25,12 +25,12 @@ Spec: `docs/spec.md` §5.
 | `memory_accept` | `id: string` | `Memory` (now `active`) | implemented |
 | `memory_edit` | `id: string`, `content: string` (1 to 500 characters) | `Memory` | implemented |
 | `memory_delete` | `id: string` | `void` | implemented |
-| `memory_export` | none | `string` (JSON of all memories and history) | M5 |
-| `history_list` | `limit: number` (1 to 200), `before?: string` (a `ConversationSummary.id`) | `ConversationSummary[]` newest first | M5 |
-| `history_get` | `conversationId: string` | `HistoryMessage[]` oldest first | M5 |
-| `history_delete_all` | none | `void` | M5 |
-| `history_settings_get` | none | `HistorySettings` | M5 |
-| `history_settings_set` | `settings: HistorySettings` | `HistorySettings` | M5 |
+| `memory_export` | none | `string` (JSON of all memories and history) | implemented |
+| `history_list` | `limit: number` (1 to 200), `before?: string` (a `ConversationSummary.id`) | `ConversationSummary[]` newest first | implemented |
+| `history_get` | `conversationId: string` | `HistoryMessage[]` oldest first | implemented |
+| `history_delete_all` | none | `void` | implemented |
+| `history_settings_get` | none | `HistorySettings` | implemented |
+| `history_settings_set` | `settings: HistorySettings` | `HistorySettings` | implemented |
 
 Errors are `JarvisError` (`code` from the closed `ErrorCode` enum).
 The command signatures marked M2/M4 are agreed here and implemented in their milestone.
@@ -86,7 +86,7 @@ Every event is an `Envelope<P>`: `{ v, seq, id, ts, kind, payload }`, where `kin
 - Additive changes keep `PROTOCOL_VERSION`; breaking changes bump it.
 
 ### Memory and history (M5)
-Agreed here before any code (spec §8). The `memory_*` commands and the `memory.proposed` event are implemented; `memory_export` and the `history_*` commands follow.
+Agreed here before any code (spec §8). All the `memory_*` and `history_*` commands and the `memory.proposed` event are implemented.
 - **Nothing becomes a memory without the user.** "Remember that X" and a model's `memory.propose` both create a `proposed` row and emit `memory.proposed`; the UI shows a card with the exact `content`. **Accept** is `memory_accept` (the row becomes `active`). **Deny** is `memory_delete`: a denied proposal is gone, nothing is stored. Only `active` memories are ever put into a prompt, as quoted data, never as instructions.
 - `memory_edit` changes the text of any memory. Editing an `active` memory keeps it `active`; the new text is what the user sees and confirms in the form. Maximum 500 characters, counted as Unicode code points (Rust `chars().count()`, not UTF-16 units or bytes); control characters are removed and an empty text is rejected.
 - **Delete is a hard delete.** The text is removed from the database, the search index, retrieval and the next prompt (a backend test asserts this).
@@ -95,3 +95,4 @@ Agreed here before any code (spec §8). The `memory_*` commands and the `memory.
 - Money, time and ids follow the existing rules (Unix ms, UUIDv7 strings). Errors are `JarvisError`; an invalid text is `INTERNAL` with a message the UI can show. `NOT_FOUND` is now a code: an unknown memory id returns it (message "That memory no longer exists."). `HistoryMessage.role` is the closed enum `user | assistant | tool`.
 - Additive only: no existing type changed, so `PROTOCOL_VERSION` stays 1.
 - "Remember that X" (said or typed) and the model's `memory.propose` both end in the same place: a `proposed` row and a `memory.proposed` event. The reply to the user does not repeat the text; the card does. For a cloud turn the backend adds up to five **active** memories that match the question to the system prompt as quoted data (JSON strings, labelled as notes and not instructions); proposed and archived memories are never added.
+- What is recorded: every user message, the reply (cloud or local), and one-line summaries of tool calls (the same sentence the approval card and the activity log show; never file contents). With retention `off` nothing is recorded. `memory_export` returns `{ format: "jarvis-export", version: 1, exportedAt, historyRetention, memories, history }`; the backend never writes it to disk, the window saves it. Retention is applied when the app starts, once a day, and at once when it is shortened.
