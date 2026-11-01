@@ -13,12 +13,14 @@ Spec: `docs/spec.md` §5.
 | `submit_text` | `text: string`, `onEvent: Channel<TurnStreamEvent>` | `requestId: string` | M2 |
 | `cancel` | `requestId: string` | `void` | M2 |
 | `set_mute` | `muted: boolean` | `void` | M2 |
-| `resolve_approval` | `ApprovalDecision` | `void` | M4 |
+| `resolve_approval` | `decision: ApprovalDecision` (call `invoke("resolve_approval", { decision })`) | `void` | M4 |
 | `api_key_set` | `key: string` | `ApiKeyStatus` | M2 |
 | `api_key_clear` | none | `ApiKeyStatus` | M2 |
 | `settings_get` | none | `Settings` | M2 |
 | `settings_set` | `patch: SettingsPatch` | `Settings` | M2 |
 | `usage_get` | none | `UsageSummary` | M2 |
+| `apps_installed` | none | `AllowedApp[]` | M4 (backend now, platform list by Dev B) |
+| `activity_list` | `limit: number` (1 to 200), `before?: string` (an `ActivityEntry.id`) | `ActivityEntry[]` newest first | M4 |
 
 Errors are `JarvisError` (`code` from the closed `ErrorCode` enum).
 The command signatures marked M2/M4 are agreed here and implemented in their milestone.
@@ -32,6 +34,16 @@ The command signatures marked M2/M4 are agreed here and implemented in their mil
 - `SettingsPatch`: omit a field to leave it unchanged. For the caps, send `null` to clear the cap and a number (micro-dollars) to set it.
 - Money is integer micro-dollars (1e-6 USD). A cap stops new requests once reached; one long turn can overshoot by its own cost.
 - Usage counts reset on UTC day and month boundaries (D-15). `dayResetsAt` and `monthResetsAt` are Unix ms; the UI shows them in local time.
+
+### Tools, approvals and the activity log (M4)
+- **The model only proposes.** Every tool call goes through the permission gateway in Rust (spec §9.3). The webview never calls a tool; it can only answer an approval.
+- `approval.requested` carries an `ApprovalRequest` and the same request also appears in `Snapshot.pendingApprovals`. The card shows `summary` and `targets` exactly as the backend wrote them (the model never writes them), and says when `tainted` (untrusted content is in the context) or when the content will be sent to the cloud provider.
+- `resolve_approval(ApprovalDecision)` must echo `argsDigest`. It fails with `TOOL_DENIED` when the approval is unknown, already answered, expired (60 s) or the digest does not match; the tool then does not run. Approvals are single-use.
+- **Voice never approves a `high` risk action** (`allowVoice` is false), and `resolve_approval` is only reachable from the window, so a spoken "yes" cannot call it.
+- `activity.appended` carries one `ActivityEntry` for every tool call, including denied, expired and prohibited ones (`outcome: "not_run"`). `activity_list` pages the same rows newest first. Entries contain what ran, on what and how it ended, **never file contents or arguments**.
+- `ToolDecision`: `auto_allowed`, `approved`, `denied`, `expired`, `prohibited`. `ToolOutcome`: `ok`, `failed`, `timed_out`, `cancelled`, `not_run`. `ToolRisk`: `low`, `medium`, `high`.
+- **Policy settings:** `Settings.allowedFolders` replaces the whole list when patched; folders are canonicalised and must exist. `Settings.allowedApps` is a list of `AllowedApp { id, name }`: the **id** is a stable platform id (macOS bundle id, Windows AppUserModelID or canonical .exe path, Linux .desktop id) and is the only thing the gateway checks and `apps.launch` starts; the **name** is display only and never used for matching. `settings_set` accepts only ids that `apps_installed` returns, and takes the display name from that list, so a patch cannot rename an app. Until the platform adapter exists, `apps_installed` is empty and an allow-list cannot be set (clearing it always works). `autoAllowMedium` is off by default, never applies to `high`, and never applies while the context is tainted.
+- `Settings` gained three fields (`allowedFolders`, `allowedApps`, `autoAllowMedium`); the wire change is additive, but code that builds a `Settings` value (mocks, tests) must add them.
 
 ## Channel: per-turn stream
 

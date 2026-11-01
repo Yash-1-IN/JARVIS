@@ -11,7 +11,7 @@ use intelligence::pricing::PriceTable;
 use intelligence::spend::{Caps, Day, SpendMeter};
 use orchestrator::turn::TurnRunner;
 use platform::keychain::ApiKeyVault;
-use services::Services;
+use services::{NoApps, Services};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
@@ -49,6 +49,8 @@ pub fn run() {
                     Day::from_unix_secs(now_secs()),
                 )),
                 api_base_url: ANTHROPIC_API.into(),
+                // TODO(Dev B, platform/): the per-OS installed-apps list; until then no app can be allowed.
+                installed: Arc::new(NoApps),
             });
             svc.apply_saved_caps();
 
@@ -78,7 +80,8 @@ pub fn run() {
             ipc::commands::settings_set,
             ipc::commands::usage_get,
             ipc::commands::api_key_set,
-            ipc::commands::api_key_clear
+            ipc::commands::api_key_clear,
+            ipc::commands::apps_installed
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
