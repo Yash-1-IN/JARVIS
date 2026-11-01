@@ -21,7 +21,7 @@ const MAX_DEPTH: usize = 3;
 /// Display names are shown in the settings UI and on approval cards.
 const MAX_NAME_CHARS: usize = 100;
 /// `.desktop` files are tiny; anything larger is not one we trust.
-const MAX_DESKTOP_BYTES: u64 = 64 * 1024;
+pub(super) const MAX_DESKTOP_BYTES: u64 = 64 * 1024;
 /// Real shortcuts are a few KB; larger `.lnk` files are not parsed at all.
 #[cfg_attr(not(windows), allow(dead_code))]
 const MAX_LNK_BYTES: u64 = 64 * 1024;
@@ -102,7 +102,7 @@ fn clean_name(raw: &str) -> Option<String> {
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 /// Files under `root` (up to `MAX_DEPTH` folders deep) whose name ends with `ext`.
 /// Symlinked folders are not followed, so a link loop cannot trap the scan.
-fn walk(root: &Path, ext: &str, depth: usize, out: &mut Vec<PathBuf>) {
+pub(super) fn walk(root: &Path, ext: &str, depth: usize, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -124,7 +124,7 @@ fn walk(root: &Path, ext: &str, depth: usize, out: &mut Vec<PathBuf>) {
 #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 /// The `Name` of an application entry that should appear in menus, or `None`.
 /// Only the `[Desktop Entry]` group counts (actions have their own groups).
-fn desktop_entry_name(text: &str) -> Option<String> {
+pub(super) fn desktop_entry_name(text: &str) -> Option<String> {
     let (mut in_entry, mut name, mut is_app) = (false, None, false);
     for line in text.lines() {
         let line = line.trim();
@@ -150,7 +150,7 @@ fn desktop_entry_name(text: &str) -> Option<String> {
 
 #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 /// The desktop file id: the path below `applications/` with `/` turned into `-`.
-fn desktop_id(apps_dir: &Path, file: &Path) -> Option<String> {
+pub(super) fn desktop_id(apps_dir: &Path, file: &Path) -> Option<String> {
     let rel = file.strip_prefix(apps_dir).ok()?;
     let parts: Vec<String> = rel
         .components()
@@ -161,7 +161,7 @@ fn desktop_id(apps_dir: &Path, file: &Path) -> Option<String> {
 
 #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 /// `$XDG_DATA_HOME` first (user overrides), then `$XDG_DATA_DIRS`, each `/applications`.
-fn xdg_application_dirs() -> Vec<PathBuf> {
+pub(super) fn xdg_application_dirs() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
@@ -325,7 +325,7 @@ fn looks_like_shell_link(head: &[u8]) -> bool {
 /// `canonicalize` gives `\\?\C:\...`; ids use the plain drive form. Other `\\?\` forms
 /// (UNC) never get here: network targets are skipped above.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn plain_windows_path(p: &Path) -> String {
+pub(super) fn plain_windows_path(p: &Path) -> String {
     let s = p.to_string_lossy().into_owned();
     match s.strip_prefix(r"\\?\") {
         Some(rest) if rest.len() > 2 && rest.as_bytes()[1] == b':' => rest.to_owned(),

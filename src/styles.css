@@ -201,3 +201,24 @@ kbd {
   opacity: 0.8;
   word-break: break-all;
 }
+
+.activity-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.activity-list > li {
+  border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+  padding: 0.4rem 0;
+}
+
+.activity-when,
+.activity-risk,
+.activity-tool {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.activity-targets code {
+  word-break: break-all;
+}

@@ -1,3 +1,4 @@
+import type { ActivityEntry } from "../types/generated/ActivityEntry";
 import type { AllowedApp } from "../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
@@ -13,6 +14,7 @@ export type SnapshotListener = (snapshot: Snapshot) => void;
 export type TurnListener = (event: TurnStreamEvent) => void;
 export type UsageListener = (usage: UsageSummary) => void;
 export type InterruptListener = (e: TurnInterrupted) => void;
+export type ActivityListener = (e: ActivityEntry) => void;
 
 /** One interface, two implementations: TauriTransport and MockTransport. */
 export interface Transport {
@@ -59,6 +61,13 @@ export interface Transport {
    * accepted by `settings_set`, and the name always comes from this list.
    */
   appsInstalled(): Promise<AllowedApp[]>;
+  /**
+   * Contract `activity_list`: newest first, at most `limit` (1 to 200); with `before`
+   * (an entry id) only older entries. An unknown id gives nothing.
+   */
+  listActivity(limit: number, before?: string): Promise<ActivityEntry[]>;
+  /** `activity.appended`: one entry per tool call, including refused ones. */
+  onActivity(listener: ActivityListener): () => void;
   /** `usage.updated` broadcasts. Returns an unsubscribe function. */
   onUsage(listener: UsageListener): () => void;
 }

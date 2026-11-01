@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityLog } from "./components/ActivityLog";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
 import { Controls } from "./components/Controls";
@@ -25,6 +26,7 @@ export default function App({ transport }: { transport: Transport }) {
   const [error, setError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
 
   // Read the store at call time so the shortcut listener is bound once.
   const run = useCallback((p: Promise<void>) => {
@@ -115,6 +117,19 @@ export default function App({ transport }: { transport: Transport }) {
       {showSettings && (
         <div id="settings-panel">
           <SettingsPanel transport={transport} />
+        </div>
+      )}
+      <button
+        type="button"
+        aria-expanded={showActivity}
+        aria-controls="activity-panel"
+        onClick={() => setShowActivity((v) => !v)}
+      >
+        Activity
+      </button>
+      {showActivity && (
+        <div id="activity-panel">
+          <ActivityLog transport={transport} />
         </div>
       )}
       {error && <p role="alert">{error}</p>}
