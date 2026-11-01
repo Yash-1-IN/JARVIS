@@ -1,0 +1,46 @@
+name: spike-voice
+# Builds the throwaway voice spike (spikes/voice-cli, task A-08) so a developer can download
+# the program and run it on their own laptop without installing Rust. Not part of the app.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - spikes/voice-cli/**
+      - .github/workflows/spike-voice.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: spikes/voice-cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/voice-cli
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-cli-${{ runner.os }}
+          path: |
+            spikes/voice-cli/target/release/voice-cli
+            spikes/voice-cli/target/release/voice-cli.exe
+          if-no-files-found: error

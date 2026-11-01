@@ -1,0 +1,13 @@
+[package]
+name = "voice-cli"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Throwaway spike A-08: cpal capture -> sherpa-onnx KWS/VAD/STT/TTS with per-stage timings"
+
+[dependencies]
+sherpa-onnx = "2.0.1"
+cpal = "0.15"
+
+[workspace]
