@@ -1,6 +1,11 @@
 //! Path scope (spec §9.2 "scope escape"). A path is accepted only if, after resolving
 //! symlinks and `..`, it lies inside an allowed root. Call `check_*` again immediately
 //! before execution: a path can change between approval and use (symlink swap).
+//!
+//! Known limits (see docs/threat-model.md): there is still a short window between the last
+//! check and the actual open or rename, which only `openat`/`O_NOFOLLOW` (Unix) or handle
+//! based moves (Windows) can close; and a hard link inside a root to a file outside it
+//! passes canonicalisation, because hard links cannot be detected portably.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -19,29 +24,26 @@ pub enum PathError {
 }
 
 pub struct PathScope {
-    /// Canonical roots (symlinks resolved).
-    roots: Vec<PathBuf>,
-    /// Windows and macOS file systems ignore case.
-    case_insensitive: bool,
+    /// Canonical roots (symlinks resolved), each with whether its file system ignores case.
+    roots: Vec<(PathBuf, bool)>,
 }
 
 impl PathScope {
-    /// Roots that no longer exist are dropped, so they allow nothing.
-    pub fn new(roots: &[String], case_insensitive: bool) -> Self {
+    /// Roots that no longer exist are dropped, so they allow nothing. Whether a root's file
+    /// system ignores case is probed per root, not assumed from the OS: APFS and NTFS
+    /// folders can be case-sensitive, and treating them as insensitive would let a
+    /// differently-cased sibling through.
+    pub fn new(roots: &[String]) -> Self {
         let roots = roots
             .iter()
             .filter_map(|r| std::fs::canonicalize(r).ok())
             .filter(|r| r.is_dir())
+            .map(|r| {
+                let ci = fs_ignores_case(&r);
+                (r, ci)
+            })
             .collect();
-        Self {
-            roots,
-            case_insensitive,
-        }
-    }
-
-    /// For the running OS.
-    pub fn for_this_os(roots: &[String]) -> Self {
-        Self::new(roots, cfg!(any(windows, target_os = "macos")))
+        Self { roots }
     }
 
     /// An existing file or folder inside the roots. Returns its canonical path.
@@ -59,6 +61,9 @@ impl PathScope {
         if matches!(p.components().next_back(), Some(Component::ParentDir)) {
             return Err(PathError::Invalid);
         }
+        if !valid_leaf_name(&name.to_string_lossy(), cfg!(windows)) {
+            return Err(PathError::Invalid);
+        }
         let parent = p.parent().ok_or(PathError::Invalid)?;
         let canon_parent = std::fs::canonicalize(parent).map_err(|_| PathError::Missing)?;
         let canon_parent = self.inside(canon_parent)?;
@@ -66,11 +71,7 @@ impl PathScope {
     }
 
     fn inside(&self, canon: PathBuf) -> Result<PathBuf, PathError> {
-        if self
-            .roots
-            .iter()
-            .any(|r| within(r, &canon, self.case_insensitive))
-        {
+        if self.roots.iter().any(|(r, ci)| within(r, &canon, *ci)) {
             Ok(canon)
         } else {
             Err(PathError::OutsideRoots)
@@ -98,11 +99,83 @@ fn pre_check(raw: &str) -> Result<&Path, PathError> {
     Ok(p)
 }
 
+/// Whether the file system holding `root` ignores case, found by asking it: the same name
+/// with its case swapped resolves to the same folder. A name with no letters cannot tell,
+/// so fall back to the platform default.
+fn fs_ignores_case(root: &Path) -> bool {
+    let default = cfg!(windows);
+    let (Some(name), Some(parent)) = (root.file_name(), root.parent()) else {
+        return default;
+    };
+    let name = name.to_string_lossy();
+    let flipped: String = name
+        .chars()
+        .map(|c| {
+            if c.is_lowercase() {
+                c.to_uppercase().next().unwrap_or(c)
+            } else if c.is_uppercase() {
+                c.to_lowercase().next().unwrap_or(c)
+            } else {
+                c
+            }
+        })
+        .collect();
+    if flipped == name {
+        return default;
+    }
+    std::fs::canonicalize(parent.join(flipped)).is_ok_and(|c| c == root)
+}
+
+/// A destination file name that means what it says on every OS: no `:` (an alternate data
+/// stream on NTFS, a separator on classic macOS), no control characters, not `.`/`..`.
+/// With `windows_rules` it also refuses reserved device names (`CON`, `NUL`, `COM1`...),
+/// names Windows silently rewrites (trailing dot or space) and `<>"|?*`.
+fn valid_leaf_name(name: &str, windows_rules: bool) -> bool {
+    if name.is_empty() || name == "." || name == ".." {
+        return false;
+    }
+    if name
+        .chars()
+        .any(|c| c == ':' || c == '/' || c == '\\' || c.is_control())
+    {
+        return false;
+    }
+    if windows_rules {
+        if name.ends_with('.') || name.ends_with(' ') {
+            return false;
+        }
+        if name
+            .chars()
+            .any(|c| matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+        {
+            return false;
+        }
+        let stem = name
+            .split('.')
+            .next()
+            .unwrap_or(name)
+            .trim_end()
+            .to_uppercase();
+        let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || ["COM", "LPT"].iter().any(|p| {
+                stem.strip_prefix(p)
+                    .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
+            });
+        if reserved {
+            return false;
+        }
+    }
+    true
+}
+
 /// True if `path` is `root` or below it, compared component by component, so a sibling
 /// such as `/data/root-evil` is not inside `/data/root`.
 fn within(root: &Path, path: &Path, case_insensitive: bool) -> bool {
+    if path.starts_with(root) {
+        return true; // an exact match is always right
+    }
     if !case_insensitive {
-        return path.starts_with(root);
+        return false;
     }
     let mut r = root.components();
     let mut p = path.components();
@@ -140,7 +213,7 @@ mod tests {
     }
 
     fn scope(root: &Path) -> PathScope {
-        PathScope::new(&[root.to_string_lossy().into_owned()], false)
+        PathScope::new(&[root.to_string_lossy().into_owned()])
     }
 
     #[test]
@@ -277,15 +350,94 @@ mod tests {
     #[test]
     fn missing_roots_allow_nothing() {
         let gone = std::env::temp_dir().join(format!("jarvis-gone-{}", uuid::Uuid::now_v7()));
-        let s = PathScope::new(&[plain(&gone)], false);
+        let s = PathScope::new(&[plain(&gone)]);
         assert_eq!(
             s.check_existing(&plain(&gone.join("x"))),
             Err(PathError::Missing)
         );
-        let empty = PathScope::new(&[], false);
+        let empty = PathScope::new(&[]);
         assert_eq!(
             empty.check_existing(&plain(&std::env::temp_dir())),
             Err(PathError::OutsideRoots)
         );
+    }
+
+    #[test]
+    fn leaf_names_with_streams_devices_and_tricks_are_refused() {
+        // On every OS: alternate streams, control characters, separators, dot names.
+        for bad in ["report.txt:hidden", "a\u{7}b", "a/b", "a\\b", "", ".", ".."] {
+            assert!(!valid_leaf_name(bad, false), "{bad:?}");
+        }
+        assert!(valid_leaf_name("report.txt", false));
+        assert!(
+            valid_leaf_name("CON", false),
+            "reserved names matter only on Windows"
+        );
+        // Windows rules.
+        for bad in [
+            "CON",
+            "con",
+            "NUL.txt",
+            "com1",
+            "LPT9.log",
+            "Aux ",
+            "prn.tar.gz",
+            "a.txt.",
+            "a.txt ",
+            "a<b",
+            "a|b",
+            "what?",
+            "star*",
+        ] {
+            assert!(!valid_leaf_name(bad, true), "{bad:?}");
+        }
+        for ok in [
+            "report.txt",
+            "COM10",
+            "console.log",
+            "LPT",
+            "a b.txt",
+            "archive.2026.tar",
+        ] {
+            assert!(valid_leaf_name(ok, true), "{ok:?}");
+        }
+    }
+
+    #[test]
+    fn check_new_refuses_stream_names_on_this_os() {
+        let root = dir("leaf");
+        let s = scope(&root);
+        let bad = root.join("report.txt:hidden");
+        assert_eq!(s.check_new(&plain(&bad)), Err(PathError::Invalid));
+    }
+
+    #[test]
+    fn case_sensitivity_is_probed_from_the_file_system_not_assumed() {
+        let root = dir("MixedCase");
+        let name = root.file_name().unwrap().to_string_lossy().into_owned();
+        let flipped: String = name
+            .chars()
+            .map(|c| {
+                if c.is_lowercase() {
+                    c.to_ascii_uppercase()
+                } else {
+                    c.to_ascii_lowercase()
+                }
+            })
+            .collect();
+        let sibling_resolves = root.parent().unwrap().join(&flipped).exists();
+        assert_eq!(fs_ignores_case(&root), sibling_resolves);
+    }
+
+    #[test]
+    fn a_case_sensitive_root_matches_only_exactly() {
+        let root = PathBuf::from("/data/Docs");
+        let sibling = PathBuf::from("/data/docs/file.txt");
+        assert!(!within(&root, &sibling, false), "~/docs is not ~/Docs here");
+        assert!(
+            within(&root, &sibling, true),
+            "but it is on a case-insensitive volume"
+        );
+        assert!(within(&root, &PathBuf::from("/data/Docs/file.txt"), false));
     }
 }

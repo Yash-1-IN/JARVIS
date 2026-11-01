@@ -178,6 +178,25 @@ fn injection_a_file_that_asks_for_a_move_never_auto_runs() {
 }
 
 #[test]
+fn taint_survives_new_requests_until_the_history_is_cleared() {
+    // Turn 1 reads a file and taints. Turn 2 is a different request but the file text is
+    // still in the history, so a medium action must still ask even with auto-allow on.
+    let g = rig();
+    g.gw.set_auto_allow_medium(true);
+    g.gw.mark_tainted();
+    let mut turn_two = proposal("files.move", ToolRisk::Medium, json!({"n": 2}));
+    turn_two.request_id = "req-2".into();
+    let card = ask(g.gw.evaluate(turn_two));
+    assert!(card.tainted && card.request_id == "req-2");
+    // Only clearing the history (a new conversation) lifts it.
+    g.gw.reset_taint();
+    assert!(matches!(
+        g.gw.evaluate(proposal("files.move", ToolRisk::Medium, json!({"n": 3}))),
+        Verdict::Run(_)
+    ));
+}
+
+#[test]
 fn approval_is_single_use() {
     let g = rig();
     let r = ask(g

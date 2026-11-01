@@ -59,8 +59,10 @@ pub struct Proposal {
     pub args: Value,
 }
 
-/// Permission to run exactly one call. Present it to `verify_args` before executing.
-#[derive(Debug, Clone)]
+/// Permission to run exactly one call. Present it to `verify_args` before executing, then
+/// hand it to `finish`, which consumes it. It is deliberately not `Clone`, and its fields
+/// cannot be built outside this module, so one approval cannot be used twice.
+#[derive(Debug)]
 pub struct Ticket {
     pub activity_id: String,
     pub request_id: String,
@@ -207,7 +209,9 @@ impl Gateway {
         self.tainted.store(true, Ordering::SeqCst);
     }
 
-    /// A new conversation starts clean.
+    /// Clears the taint. Call this **only when the conversation history is cleared**
+    /// (a new conversation), never per turn: the history, and with it any instructions that
+    /// came from a file or web page, stays in the model's context across turns.
     pub fn reset_taint(&self) {
         self.tainted.store(false, Ordering::SeqCst);
     }
