@@ -104,6 +104,12 @@ impl MemoryStore {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Folds the write-ahead log into the main file and empties it, so text that was just
+    /// changed or deleted does not linger in the `-wal` file of a long-running app.
+    fn scrub(conn: &Connection) {
+        let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+    }
+
     fn get(conn: &Connection, id: &str) -> Result<Memory, StoreError> {
         conn.query_row(
             &format!("SELECT {COLUMNS} FROM memories WHERE id = ?1"),
@@ -165,21 +171,33 @@ impl MemoryStore {
         let content = clean(content)?;
         let conn = self.conn();
         Self::get(&conn, id)?;
+        let same: Option<String> = conn
+            .query_row(
+                "SELECT id FROM memories
+                 WHERE content = ?1 AND id != ?2 AND status IN ('proposed', 'active')",
+                params![content, id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if same.is_some() {
+            return Err(StoreError::Invalid("You already have that memory.".into()));
+        }
         conn.execute(
             "UPDATE memories SET content = ?2, updated_at = ?3 WHERE id = ?1",
             params![id, content, now_ms as i64],
         )?;
+        Self::scrub(&conn);
         Self::get(&conn, id)
     }
 
     /// Hard delete, for any status. Denying a proposal is this call.
     pub fn delete(&self, id: &str) -> Result<(), StoreError> {
-        let n = self
-            .conn()
-            .execute("DELETE FROM memories WHERE id = ?1", [id])?;
+        let conn = self.conn();
+        let n = conn.execute("DELETE FROM memories WHERE id = ?1", [id])?;
         if n == 0 {
             return Err(StoreError::NotFound);
         }
+        Self::scrub(&conn);
         Ok(())
     }
 

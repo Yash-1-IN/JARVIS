@@ -50,3 +50,7 @@ CREATE TRIGGER memories_after_update AFTER UPDATE OF content ON memories BEGIN
     VALUES ('delete', old.rowid, old.content);
     INSERT INTO memories_fts (rowid, content) VALUES (new.rowid, new.content);
 END;
+
+-- Deleted text must not survive in the FTS5 index segments either (spec §8.4); without this
+-- the index keeps deleted terms until a later merge. Needs SQLite 3.44 or newer.
+INSERT INTO memories_fts (memories_fts, rank) VALUES ('secure-delete', 1);

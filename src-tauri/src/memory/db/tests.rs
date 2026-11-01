@@ -164,3 +164,36 @@ fn deleting_a_conversation_removes_its_messages() {
         .is_err()
     );
 }
+
+#[test]
+fn only_a_damaged_file_counts_as_corrupt_never_a_bad_statement() {
+    let conn = open_in_memory().unwrap();
+    // A bad FTS expression must not look like a damaged database.
+    let e = conn
+        .query_row(
+            "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH '\"'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_err();
+    // A bad FTS expression is an ordinary error, not a damaged file, whatever its text says.
+    assert!(!is_corrupt_code(&e), "{e}");
+    // A real garbage file is detected by its error code.
+    let path = tmp("code");
+    std::fs::write(&path, b"garbage garbage garbage garbage").unwrap();
+    let c = Connection::open(&path).unwrap();
+    let err = configure(&c).unwrap_err();
+    assert!(is_corrupt_code(&err), "{err}");
+}
+
+#[test]
+fn a_failing_migration_never_moves_a_healthy_file_aside() {
+    // A migration error is reported as such even if its text says "malformed".
+    let mut conn = Connection::open_in_memory().unwrap();
+    let e = migrate_with(
+        &mut conn,
+        &["CREATE VIRTUAL TABLE t USING fts5(x); SELECT * FROM t WHERE t MATCH '\"';"],
+    )
+    .unwrap_err();
+    assert!(matches!(e, DbError::Migration { version: 1, .. }), "{e}");
+}

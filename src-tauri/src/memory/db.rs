@@ -7,7 +7,7 @@
 //! - A file that is not a database (or is corrupt) is renamed aside and replaced by a fresh
 //!   one; the caller gets the backup path so the UI can say so.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
 
 /// Each entry takes the schema from version `i` to `i + 1`. Never edit a shipped entry.
@@ -66,23 +66,49 @@ pub fn migrate_with(conn: &mut Connection, migrations: &[&str]) -> Result<(), Db
     Ok(())
 }
 
-fn open_and_migrate(path: &Path) -> Result<Connection, DbError> {
-    let mut conn = Connection::open(path).map_err(|e| DbError::Open(e.to_string()))?;
-    configure(&conn).map_err(|e| DbError::Open(e.to_string()))?;
-    migrate_with(&mut conn, MIGRATIONS)?;
+/// Why the database could not be prepared for use.
+enum Prepare {
+    /// SQLite says the file is not a database or is damaged (by error code, never by text).
+    Corrupt(DbError),
+    Other(DbError),
+}
+
+fn is_corrupt_code(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(ErrorCode::NotADatabase | ErrorCode::DatabaseCorrupt)
+    )
+}
+
+fn classify(e: rusqlite::Error) -> Prepare {
+    let corrupt = is_corrupt_code(&e);
+    let err = DbError::Open(e.to_string());
+    if corrupt {
+        Prepare::Corrupt(err)
+    } else {
+        Prepare::Other(err)
+    }
+}
+
+/// Opens the file and reads its schema version. Only a failure here can mean a damaged
+/// file; a failing migration step never does (it rolls back and is reported as it is).
+fn prepare(path: &Path) -> Result<Connection, Prepare> {
+    let conn = Connection::open(path).map_err(classify)?;
+    configure(&conn).map_err(classify)?;
+    schema_version(&conn).map_err(classify)?;
     Ok(conn)
 }
 
-fn looks_corrupt(e: &DbError) -> bool {
-    // `NotADatabase` and `DatabaseCorrupt` surface either while opening or while reading
-    // the schema version / running the first migration.
-    let text = match e {
-        DbError::Open(m) => m,
-        DbError::Migration { message, .. } => message,
-        DbError::TooNew { .. } => return false,
-    };
-    let t = text.to_lowercase();
-    t.contains("not a database") || t.contains("malformed") || t.contains("corrupt")
+fn open_and_migrate(path: &Path) -> Result<Connection, Prepare> {
+    let mut conn = prepare(path)?;
+    migrate_with(&mut conn, MIGRATIONS).map_err(Prepare::Other)?;
+    Ok(conn)
+}
+
+fn into_error(p: Prepare) -> DbError {
+    match p {
+        Prepare::Corrupt(e) | Prepare::Other(e) => e,
+    }
 }
 
 /// Opens (creating if needed) the database at `path`. `now_ms` names a backup file.
@@ -95,7 +121,7 @@ pub fn open(path: &Path, now_ms: u64) -> Result<Opened, DbError> {
             conn,
             recovered_from: None,
         }),
-        Err(e) if looks_corrupt(&e) => {
+        Err(Prepare::Corrupt(_)) => {
             let mut backup = path.as_os_str().to_owned();
             backup.push(format!(".corrupt-{now_ms}"));
             let backup = PathBuf::from(backup);
@@ -106,13 +132,13 @@ pub fn open(path: &Path, now_ms: u64) -> Result<Opened, DbError> {
                 side.push(ext);
                 let _ = std::fs::remove_file(PathBuf::from(side));
             }
-            let conn = open_and_migrate(path)?;
+            let conn = open_and_migrate(path).map_err(into_error)?;
             Ok(Opened {
                 conn,
                 recovered_from: Some(backup),
             })
         }
-        Err(e) => Err(e),
+        Err(p) => Err(into_error(p)),
     }
 }
 

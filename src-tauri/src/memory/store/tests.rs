@@ -185,3 +185,95 @@ fn archived_memories_are_not_retrieved() {
     assert!(s.retrieve("llamas", 5).unwrap().is_empty());
     assert_eq!(s.list(Some(MemoryStatus::Archived)).unwrap().len(), 1);
 }
+
+// --------------------------------------------------------------- bytes on disk (spec §8.4)
+
+use std::path::{Path, PathBuf};
+
+fn disk_store(name: &str) -> (MemoryStore, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("jarvis-mem-{name}-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let o = crate::memory::db::open(&dir.join("jarvis.db"), 1).unwrap();
+    (MemoryStore::new(o.conn), dir)
+}
+
+/// True if any file in `dir` (database, `-wal`, `-shm`) holds `needle`, in any letter case.
+fn on_disk(dir: &Path, needle: &str) -> bool {
+    let lower = needle.to_lowercase().into_bytes();
+    std::fs::read_dir(dir).unwrap().flatten().any(|e| {
+        let bytes = std::fs::read(e.path()).unwrap_or_default();
+        let hay: Vec<u8> = bytes.iter().map(u8::to_ascii_lowercase).collect();
+        hay.windows(lower.len()).any(|w| w == lower.as_slice())
+    })
+}
+
+fn fill(s: &MemoryStore) {
+    // Enough rows that the text is not alone on its page.
+    for i in 0..30 {
+        let m = s
+            .propose(&format!("filler fact number {i} about gardens"), None, i)
+            .unwrap();
+        s.accept(&m.id, i + 1).unwrap();
+    }
+}
+
+#[test]
+fn deleted_text_is_absent_from_every_file_on_disk_even_with_the_store_open() {
+    let (s, dir) = disk_store("delete");
+    fill(&s);
+    let m = s
+        .propose("zebrapassphrase quokkasecretword", None, 100)
+        .unwrap();
+    s.accept(&m.id, 101).unwrap();
+    // Sanity: the test can see the text while it exists.
+    assert!(on_disk(&dir, "zebrapassphrase") || on_disk(&dir, "quokkasecretword"));
+    s.delete(&m.id).unwrap();
+    // The connection is still open here, as in a running app.
+    assert!(
+        !on_disk(&dir, "zebrapassphrase"),
+        "first word is still on disk"
+    );
+    assert!(
+        !on_disk(&dir, "quokkasecretword"),
+        "second word is still on disk"
+    );
+    drop(s);
+    assert!(!on_disk(&dir, "zebrapassphrase") && !on_disk(&dir, "quokkasecretword"));
+}
+
+#[test]
+fn text_replaced_by_an_edit_and_then_deleted_leaves_no_trace_on_disk() {
+    let (s, dir) = disk_store("edit");
+    fill(&s);
+    let m = s
+        .propose("zebrapassphrase quokkasecretword", None, 100)
+        .unwrap();
+    s.accept(&m.id, 101).unwrap();
+    s.edit(&m.id, "now something harmless instead", 102)
+        .unwrap();
+    assert!(
+        !on_disk(&dir, "zebrapassphrase"),
+        "old text survives an edit"
+    );
+    assert!(
+        !on_disk(&dir, "quokkasecretword"),
+        "old text survives an edit"
+    );
+    s.delete(&m.id).unwrap();
+    assert!(!on_disk(&dir, "harmless instead"));
+    drop(s);
+    assert!(!on_disk(&dir, "zebrapassphrase") && !on_disk(&dir, "harmless instead"));
+}
+
+#[test]
+fn an_edit_cannot_copy_another_memory() {
+    let s = store();
+    s.propose("Owns a bike", None, 1).unwrap();
+    let b = s.propose("Owns a car", None, 2).unwrap();
+    assert!(matches!(
+        s.edit(&b.id, "Owns   a bike", 3),
+        Err(StoreError::Invalid(_))
+    ));
+    // Editing a memory to its own text is fine.
+    assert!(s.edit(&b.id, "Owns a car", 4).is_ok());
+}
