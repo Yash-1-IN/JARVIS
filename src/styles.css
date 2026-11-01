@@ -181,3 +181,23 @@ kbd {
     animation: none !important;
   }
 }
+
+.policy-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.policy-list li {
+  margin: 0.25rem 0;
+}
+
+.app-list {
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.app-id {
+  font-size: 0.8em;
+  opacity: 0.8;
+  word-break: break-all;
+}

@@ -74,6 +74,8 @@ describe("TauriTransport", () => {
       ["api_key_clear"],
       ["usage_get"],
     ]);
+    await t.appsInstalled();
+    expect(invoke).toHaveBeenLastCalledWith("apps_installed");
   });
 
   it("delivers usage_updated envelopes", async () => {

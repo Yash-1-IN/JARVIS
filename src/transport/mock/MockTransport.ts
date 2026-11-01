@@ -404,6 +404,10 @@ export class MockTransport implements Transport {
     return { ...this.settings.apiKey };
   }
 
+  async appsInstalled(): Promise<AllowedApp[]> {
+    return MOCK_INSTALLED_APPS.map((a) => ({ ...a }));
+  }
+
   async getUsage(): Promise<UsageSummary> {
     return this.usageSummary();
   }

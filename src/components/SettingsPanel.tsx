@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { describeError } from "../state/errors";
+import { PolicySettings } from "./PolicySettings";
 import {
   capToInput,
   formatReset,
@@ -84,15 +85,21 @@ export function SettingsPanel({ transport }: { transport: Transport }) {
     };
   }, [transport]);
 
-  const run = async (action: () => Promise<void>, done: string) => {
+  /** Runs a backend action with shared busy/notice/error handling; true if it succeeded. */
+  const run = async (
+    action: () => Promise<void>,
+    done: string,
+  ): Promise<boolean> => {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
       await action();
       setNotice(done);
+      return true;
     } catch (e) {
       setError(describeError(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -117,6 +124,9 @@ export function SettingsPanel({ transport }: { transport: Transport }) {
       const apiKey = await transport.clearApiKey();
       setSettings((s) => s && { ...s, apiKey });
     }, "API key removed.");
+
+  const savePatch = (patch: SettingsPatch, done: string) =>
+    run(async () => setSettings(await transport.updateSettings(patch)), done);
 
   const saveModel = (model: string) =>
     run(
@@ -224,6 +234,12 @@ export function SettingsPanel({ transport }: { transport: Transport }) {
             A cap stops new cloud requests once reached; one long reply can go
             slightly over. Local commands keep working.
           </p>
+          <PolicySettings
+            transport={transport}
+            settings={settings}
+            save={savePatch}
+            busy={busy}
+          />
           <h3>Usage</h3>
           {usage && <UsageView usage={usage} />}
         </>

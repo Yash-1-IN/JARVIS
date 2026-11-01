@@ -1,3 +1,4 @@
+import type { AllowedApp } from "../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
 import type { PingResponse } from "../types/generated/PingResponse";
@@ -53,6 +54,11 @@ export interface Transport {
   setApiKey(key: string): Promise<ApiKeyStatus>;
   clearApiKey(): Promise<ApiKeyStatus>;
   getUsage(): Promise<UsageSummary>;
+  /**
+   * Contract `apps_installed`: what may go on the app allow-list. Only these ids are
+   * accepted by `settings_set`, and the name always comes from this list.
+   */
+  appsInstalled(): Promise<AllowedApp[]>;
   /** `usage.updated` broadcasts. Returns an unsubscribe function. */
   onUsage(listener: UsageListener): () => void;
 }
