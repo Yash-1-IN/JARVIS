@@ -38,10 +38,28 @@ sha2 = "0.11.1"
 zeroize = "1.9.1"
 
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Info.plist (binary or XML) for app bundle ids, platform/apps.rs.
+plist = "1.10.3"
+
+[target.'cfg(unix)'.dependencies]
+# renameat2 (Linux) / renamex_np (macOS) for no-overwrite moves, platform/fs.rs.
+libc = "0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+# MoveFileExW without REPLACE_EXISTING for no-overwrite moves, platform/fs.rs.
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+# Start-menu shortcuts to their .exe targets, platform/apps.rs.
+lnk = "0.6.4"
+
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Unwind, not abort: platform/apps.rs relies on catch_unwind to survive a parser
+# panic on a malformed Start-menu shortcut (any program can write one), and the
+# voice worker will need the same so an audio failure cannot crash the app (#21).
+panic = "unwind"
 strip = true

@@ -24,6 +24,8 @@ pub trait InstalledApps: Send + Sync {
     fn list(&self) -> Vec<AllowedApp>;
 }
 
+// Replaced by platform::apps::PlatformApps in the app; kept as an empty test double.
+#[allow(dead_code)]
 pub struct NoApps;
 
 impl InstalledApps for NoApps {
