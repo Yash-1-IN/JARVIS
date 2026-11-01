@@ -29,6 +29,7 @@ const MAX_OUTPUT_TOKENS: u32 = 4096;
 /// Spec §7.2: at most five tool calls in one turn.
 const MAX_TOOL_CALLS: usize = 5;
 
+mod offline;
 mod toolcalls;
 use toolcalls::CallResult;
 pub use toolcalls::ToolWiring;
@@ -251,7 +252,16 @@ impl TurnRunner {
             let reply = self.local_reply(&intent);
             return self.finish_text(id, &reply, sink);
         }
+        // Questions the tools can answer (time, status, open an app, find a file) are answered
+        // here, with no model, whenever the cloud cannot be used: the spend cap is reached,
+        // there is no key, or the network is down.
+        let tool_intent = intents::route(&text).filter(|i| !answered_locally(i));
         if let Err(c) = self.spend.check(self.today()) {
+            if let Some(i) = &tool_intent
+                && self.answer_with_tools(id, i, &cancel, sink).await
+            {
+                return;
+            }
             let what = match c.kind {
                 CapKind::Daily => "daily",
                 CapKind::Monthly => "monthly",
@@ -269,6 +279,11 @@ impl TurnRunner {
             );
         }
         let Some(provider) = (self.provider)() else {
+            if let Some(i) = &tool_intent
+                && self.answer_with_tools(id, i, &cancel, sink).await
+            {
+                return;
+            }
             return self.fail(
                 id,
                 err(
@@ -312,6 +327,12 @@ impl TurnRunner {
                 Ok(s) => s,
                 Err(e) => {
                     self.rollback(added);
+                    if e == ProviderError::Offline
+                        && let Some(i) = &tool_intent
+                        && self.answer_with_tools(id, i, &cancel, sink).await
+                    {
+                        return;
+                    }
                     return self.provider_failed(id, &e, sink);
                 }
             };
@@ -401,10 +422,7 @@ impl TurnRunner {
             for (cid, name, args) in calls {
                 let res = if calls_made >= MAX_TOOL_CALLS {
                     over_limit = true;
-                    CallResult {
-                        content: "Tool call limit reached for this request.".into(),
-                        is_error: true,
-                    }
+                    CallResult::over_limit()
                 } else {
                     calls_made += 1;
                     match self.run_tool_call(w, id, &name, args, &cancel, sink).await {
@@ -473,7 +491,7 @@ impl TurnRunner {
             Intent::RepeatLast => lock(&self.last_reply)
                 .clone()
                 .unwrap_or_else(|| "I haven't said anything yet.".into()),
-            _ => String::new(), // unreachable: `answered_locally` filters the rest out
+            _ => unreachable!("`answered_locally` filters the other intents out"),
         }
     }
 
