@@ -58,15 +58,41 @@ pub fn run() {
 
             let orch = Arc::new(orchestrator::Orchestrator::default());
             let (for_provider, for_config) = (svc.clone(), svc.clone());
-            let runner = Arc::new(TurnRunner::new(
-                orch.clone(),
-                svc.spend.clone(),
-                // Cloud turns read the stored key each time; no key means PROVIDER_AUTH.
-                Box::new(move || for_provider.provider()),
-                // The model and its price come from the current settings (D-16).
-                Box::new(move || for_config.turn_config()),
-                Box::new(now_secs),
+            let activity = Arc::new(permissions::activity::ActivityLog::new(500));
+            let gateway = Arc::new(permissions::gateway::Gateway::new(
+                Box::new(|| now_secs() * 1000),
+                activity.clone(),
             ));
+            let for_tools = svc.clone();
+            let for_gateway = gateway.clone();
+            let tools = orchestrator::turn::ToolWiring {
+                gateway,
+                registry: Arc::new(tools::Registry::alpha()),
+                activity: activity.clone(),
+                // Built for every call from the saved settings, so a changed allow-list or
+                // policy applies to the very next tool call.
+                context: Box::new(move || {
+                    let s = for_tools.settings();
+                    for_gateway.set_auto_allow_medium(s.auto_allow_medium);
+                    tools::ToolContext {
+                        scope: permissions::paths::PathScope::new(&s.allowed_folders),
+                        now_secs: Arc::new(now_secs),
+                    }
+                }),
+            };
+            let runner = Arc::new(
+                TurnRunner::new(
+                    orch.clone(),
+                    svc.spend.clone(),
+                    // Cloud turns read the stored key each time; no key means PROVIDER_AUTH.
+                    Box::new(move || for_provider.provider()),
+                    // The model and its price come from the current settings (D-16).
+                    Box::new(move || for_config.turn_config()),
+                    Box::new(now_secs),
+                )
+                .with_tools(tools),
+            );
+            app.manage(activity);
             app.manage(orch);
             app.manage(runner);
             app.manage(svc);
@@ -83,7 +109,9 @@ pub fn run() {
             ipc::commands::usage_get,
             ipc::commands::api_key_set,
             ipc::commands::api_key_clear,
-            ipc::commands::apps_installed
+            ipc::commands::apps_installed,
+            ipc::commands::resolve_approval,
+            ipc::commands::activity_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
