@@ -8,6 +8,7 @@
 // Wired into the turn runner by the next M4 PR.
 #![allow(dead_code)]
 
+pub mod adapters;
 pub mod apps;
 pub mod files;
 pub mod memory;

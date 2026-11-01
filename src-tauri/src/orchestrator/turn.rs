@@ -465,7 +465,7 @@ impl TurnRunner {
 
     fn local_reply(&self, intent: &Intent) -> String {
         match intent {
-            Intent::WhatCanYouDo => "For now I can chat and handle a few quick commands such as stop and mute. Opening apps, files and system status arrive in a later milestone.".into(),
+            Intent::WhatCanYouDo => "I can chat, handle quick commands such as stop and mute, open apps you allow, check system status, and work with files in the folders you allow (reading and moving ask you first). Voice is not built yet.".into(),
             Intent::RepeatLast => lock(&self.last_reply)
                 .clone()
                 .unwrap_or_else(|| "I haven't said anything yet.".into()),

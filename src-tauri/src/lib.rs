@@ -63,9 +63,7 @@ pub fn run() {
                 Box::new(|| now_secs() * 1000),
                 activity.clone(),
             ));
-            // TODO(Dev B, platform/): real `AppLauncher` and `StatusSource` adapters replace
-            // these placeholders (B-12 `system_status`); until then those tools say so.
-            let ports = Arc::new(tools::ports::Ports::placeholders());
+            let ports = Arc::new(tools::adapters::platform_ports());
             let for_tools = svc.clone();
             let for_gateway = gateway.clone();
             let tools = orchestrator::turn::ToolWiring {
