@@ -21,6 +21,16 @@ Spec: `docs/spec.md` §5.
 | `usage_get` | none | `UsageSummary` | M2 |
 | `apps_installed` | none | `AllowedApp[]` | M4 (backend now, platform list by Dev B) |
 | `activity_list` | `limit: number` (1 to 200), `before?: string` (an `ActivityEntry.id`) | `ActivityEntry[]` newest first | M4 |
+| `memory_list` | `status?: MemoryStatus` | `Memory[]` newest first | M5 |
+| `memory_accept` | `id: string` | `Memory` (now `active`) | M5 |
+| `memory_edit` | `id: string`, `content: string` (1 to 500 characters) | `Memory` | M5 |
+| `memory_delete` | `id: string` | `void` | M5 |
+| `memory_export` | none | `string` (JSON of all memories and history) | M5 |
+| `history_list` | `limit: number` (1 to 200), `before?: string` (a `ConversationSummary.id`) | `ConversationSummary[]` newest first | M5 |
+| `history_get` | `conversationId: string` | `HistoryMessage[]` oldest first | M5 |
+| `history_delete_all` | none | `void` | M5 |
+| `history_settings_get` | none | `HistorySettings` | M5 |
+| `history_settings_set` | `settings: HistorySettings` | `HistorySettings` | M5 |
 
 Errors are `JarvisError` (`code` from the closed `ErrorCode` enum).
 The command signatures marked M2/M4 are agreed here and implemented in their milestone.
@@ -65,6 +75,7 @@ Every event is an `Envelope<P>`: `{ v, seq, id, ts, kind, payload }`, where `kin
 | `error.raised` | `error_raised` | `JarvisError` |
 | `turn.interrupted` | `turn_interrupted` | `TurnInterrupted { requestId, reason }` |
 | `usage.updated` | `usage_updated` | `UsageSummary` |
+| `memory.proposed` | `memory_proposed` | `Memory` (status `proposed`) |
 
 - `turn.interrupted` reasons: `user_cancel`, `hotkey`, `wake_word`, `error`. Afterwards the phase is `listening` for `wake_word` and `idle` otherwise. The turn channel still ends with exactly one `done { stopReason: "cancelled" }`.
 - `usage.updated` is emitted after every recorded turn, including cancelled turns (whose tokens are estimated).
@@ -73,3 +84,13 @@ Every event is an `Envelope<P>`: `{ v, seq, id, ts, kind, payload }`, where `kin
 - The frontend never transitions assistant state; it renders snapshots and sends commands.
 - `interrupted`/`cancelled` are events, not states.
 - Additive changes keep `PROTOCOL_VERSION`; breaking changes bump it.
+
+### Memory and history (M5)
+Agreed here before any code (spec §8). Nothing is implemented until the M5 backend PR.
+- **Nothing becomes a memory without the user.** "Remember that X" and a model's `memory.propose` both create a `proposed` row and emit `memory.proposed`; the UI shows a card with the exact `content`. **Accept** is `memory_accept` (the row becomes `active`). **Deny** is `memory_delete`: a denied proposal is gone, nothing is stored. Only `active` memories are ever put into a prompt, as quoted data, never as instructions.
+- `memory_edit` changes the text of any memory. Editing an `active` memory keeps it `active`; the new text is what the user sees and confirms in the form. Maximum 500 characters, control characters are removed, an empty text is rejected.
+- **Delete is a hard delete.** The text is removed from the database, the search index, retrieval and the next prompt (a backend test asserts this).
+- `history_*`: conversations end after 10 minutes idle or on "new conversation". Stored messages hold tool results as one-line summaries, never file contents; raw audio, API keys and detected secrets are never stored. `history_delete_all` leaves an empty database. `memory_export` returns one JSON document and never contains API keys.
+- `HistorySettings.retention` is `off | days7 | days30 | days365 | forever`; the default is `days30`. Changing it purges what is now older than the limit on the next purge run (at start-up and daily).
+- Money, time and ids follow the existing rules (Unix ms, UUIDv7 strings). Errors are `JarvisError`; an unknown id is `INTERNAL` with a message the UI can show.
+- Additive only: no existing type changed, so `PROTOCOL_VERSION` stays 1.
