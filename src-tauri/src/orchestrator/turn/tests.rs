@@ -238,6 +238,43 @@ async fn stop_cancels_the_running_turn() {
 }
 
 #[tokio::test]
+async fn cancelled_turn_still_counts_estimated_spend() {
+    let (r, _, spend) = runner(Some(Fake::new(Script::HangAfterText)), Caps::default());
+    let a = Arc::new(Rec::default());
+    r.start("long answer please".into(), a.clone()).unwrap();
+    for _ in 0..100 {
+        if a.text() == "Hi" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    r.start("stop".into(), Arc::new(Rec::default())).unwrap();
+    a.wait_done().await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    // 18 input chars -> 5 tokens, 2 output chars -> 1 token: 5 + 5 micro-dollars.
+    assert_eq!(spend.totals(Day::from_unix_secs(NOW)).today, 10);
+}
+
+#[test]
+fn usage_estimate_rounds_up() {
+    assert_eq!(estimate_usage(0, 0), Usage::default());
+    assert_eq!(
+        estimate_usage(1, 4),
+        Usage {
+            input_tokens: 1,
+            output_tokens: 1
+        }
+    );
+    assert_eq!(
+        estimate_usage(5, 9),
+        Usage {
+            input_tokens: 2,
+            output_tokens: 3
+        }
+    );
+}
+
+#[tokio::test]
 async fn cancel_is_idempotent() {
     let (r, _, _) = runner(None, Caps::default());
     assert!(!r.cancel("no-such-request", &Rec::default()));

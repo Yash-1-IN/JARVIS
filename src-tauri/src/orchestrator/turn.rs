@@ -259,12 +259,13 @@ impl TurnRunner {
             tools: vec![],
             max_output_tokens: MAX_OUTPUT_TOKENS,
         };
+        let input_chars: usize = req.messages.iter().map(|m| m.content.len()).sum();
         let mut stream = match provider.stream_turn(req, cancel.clone()).await {
             Ok(s) => s,
             Err(e) => return self.provider_failed(id, &e, sink),
         };
         let mut reply = String::new();
-        let mut usage = Usage::default();
+        let mut reported: Option<Usage> = None;
         while let Some(item) = stream.next().await {
             match item {
                 Ok(TurnEvent::TextDelta(t)) => {
@@ -272,14 +273,14 @@ impl TurnRunner {
                     sink.event(TurnStreamEvent::TextDelta { text: t });
                 }
                 Ok(TurnEvent::ToolCall { .. }) => {} // no tools are offered yet
-                Ok(TurnEvent::Done { usage: u, .. }) => usage = u,
+                Ok(TurnEvent::Done { usage: u, .. }) => reported = Some(u),
                 Err(e) => {
-                    self.record(usage);
+                    self.record(reported, input_chars, reply.len());
                     return self.provider_failed(id, &e, sink);
                 }
             }
         }
-        self.record(usage);
+        self.record(reported, input_chars, reply.len());
         lock(&self.history).push(Message {
             role: Role::Assistant,
             content: reply.clone(),
@@ -288,7 +289,10 @@ impl TurnRunner {
         self.finish(id, StopReason::End, sink);
     }
 
-    fn record(&self, usage: Usage) {
+    /// Records spend. A cancelled or failed stream never reports usage, so it is
+    /// estimated (about 4 characters per token) rather than counted as zero.
+    fn record(&self, reported: Option<Usage>, input_chars: usize, output_chars: usize) {
+        let usage = reported.unwrap_or_else(|| estimate_usage(input_chars, output_chars));
         if usage != Usage::default() {
             self.spend.record(self.today(), usage, self.cfg.price);
         }
@@ -343,6 +347,15 @@ impl TurnRunner {
         sink.event(TurnStreamEvent::Done {
             stop_reason: reason,
         });
+    }
+}
+
+/// ~4 characters per token, rounded up; used only when the provider reported no usage.
+fn estimate_usage(input_chars: usize, output_chars: usize) -> Usage {
+    let tokens = |c: usize| c.div_ceil(4).min(u32::MAX as usize) as u32;
+    Usage {
+        input_tokens: tokens(input_chars),
+        output_tokens: tokens(output_chars),
     }
 }
 
