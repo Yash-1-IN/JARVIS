@@ -4,4 +4,12 @@
  * Partial update. For the caps: omit the field to leave it unchanged, send `null`
  * to clear the cap, send a number to set it.
  */
-export type SettingsPatch = { model?: string, dailyCapMicroUsd?: number | null, monthlyCapMicroUsd?: number | null, };
+export type SettingsPatch = { model?: string, dailyCapMicroUsd?: number | null, monthlyCapMicroUsd?: number | null, 
+/**
+ * Replaces the whole list. Each folder is canonicalised and must exist.
+ */
+allowedFolders?: Array<string>, 
+/**
+ * Replaces the whole list.
+ */
+allowedApps?: Array<string>, autoAllowMedium?: boolean, };

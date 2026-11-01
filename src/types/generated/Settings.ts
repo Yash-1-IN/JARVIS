@@ -13,4 +13,17 @@ availableModels: Array<string>,
 /**
  * Micro-dollars (1e-6 USD). `null` means no cap.
  */
-dailyCapMicroUsd: number | null, monthlyCapMicroUsd: number | null, };
+dailyCapMicroUsd: number | null, monthlyCapMicroUsd: number | null, 
+/**
+ * Folders the file tools may touch (spec §9.4). Absolute paths; empty means none.
+ */
+allowedFolders: Array<string>, 
+/**
+ * Apps `apps.launch` may start, by display name. Empty means none.
+ */
+allowedApps: Array<string>, 
+/**
+ * Let medium-risk actions run without a card when no untrusted content is in the
+ * context. Off by default. Never applies to high risk, and never while tainted.
+ */
+autoAllowMedium: boolean, };
