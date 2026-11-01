@@ -130,6 +130,7 @@ fn req() -> TurnRequest {
         }],
         tools: vec![],
         max_output_tokens: 256,
+        effort: Effort::Low,
     }
 }
 
@@ -166,6 +167,10 @@ async fn streams_text_deltas_and_usage() {
     assert!(sent.contains("x-api-key: sk-ant-fakekey-for-tests"));
     assert!(sent.contains("anthropic-version: 2023-06-01"));
     assert!(sent.contains("\"stream\":true") && sent.contains("\"model\":\"test-model\""));
+    assert!(
+        sent.contains("\"output_config\":{\"effort\":\"low\"}"),
+        "{sent}"
+    );
 }
 
 #[tokio::test]
@@ -342,4 +347,87 @@ async fn mid_stream_error_event_is_surfaced() {
 fn config_debug_hides_api_key() {
     let c = AnthropicConfig::new("sk-ant-SECRET123456".into());
     assert!(!format!("{c:?}").contains("SECRET"));
+}
+
+#[tokio::test]
+async fn key_check_accepts_a_good_key_and_sends_no_body_tokens() {
+    let (url, seen) = serve(vec![Reply::Full {
+        status: 200,
+        body: "{}".into(),
+    }])
+    .await;
+    assert_eq!(
+        check_key(&url, "sk-ant-FAKEKEY-for-tests", Duration::from_secs(2)).await,
+        Ok(())
+    );
+    let sent = seen.lock().unwrap()[0].to_lowercase();
+    assert!(sent.starts_with("get /v1/models"), "{sent}");
+    assert!(sent.contains("x-api-key: sk-ant-fakekey-for-tests"));
+}
+
+#[tokio::test]
+async fn key_check_maps_rejection_offline_and_timeout() {
+    let (url, _) = serve(vec![Reply::Full {
+        status: 401,
+        body: "{}".into(),
+    }])
+    .await;
+    assert_eq!(
+        check_key(&url, "bad", Duration::from_secs(2)).await,
+        Err(ProviderError::Auth)
+    );
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = format!("http://{}", l.local_addr().unwrap());
+    drop(l);
+    // Generous timeout: Windows takes about 2 s to report a refused connection, and a
+    // short limit would turn this into "timed out" instead of "offline".
+    assert_eq!(
+        check_key(&dead, "k", Duration::from_secs(15)).await,
+        Err(ProviderError::Offline)
+    );
+    // A server that accepts the connection and never answers.
+    let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", silent.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _held = silent.accept().await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    });
+    let r = check_key(&url, "k", Duration::from_millis(200)).await;
+    assert!(matches!(r, Err(ProviderError::Unavailable(_))), "{r:?}");
+}
+
+#[tokio::test]
+async fn key_with_invalid_header_characters_is_rejected_without_a_request() {
+    assert_eq!(
+        check_key("http://127.0.0.1:1", "bad\nkey", Duration::from_secs(1)).await,
+        Err(ProviderError::Auth)
+    );
+}
+
+#[tokio::test]
+async fn refusal_and_max_tokens_stop_reasons_are_mapped() {
+    for (reason, expected) in [
+        ("refusal", StopReason::Refusal),
+        ("max_tokens", StopReason::MaxTokens),
+    ] {
+        let body = sse(&[
+            (
+                "message_start",
+                r#"{"message":{"usage":{"input_tokens":1}}}"#,
+            ),
+            (
+                "message_delta",
+                &format!(
+                    r#"{{"delta":{{"stop_reason":"{reason}"}},"usage":{{"output_tokens":7}}}}"#
+                ),
+            ),
+            ("message_stop", "{}"),
+        ]);
+        let (url, _) = serve(vec![Reply::Full { status: 200, body }]).await;
+        let evs = collect(&provider(url)).await.unwrap();
+        assert!(
+            matches!(evs.last(), Some(TurnEvent::Done { stop, .. }) if *stop == expected),
+            "{reason}: {evs:?}"
+        );
+    }
 }

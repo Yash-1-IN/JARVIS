@@ -8,11 +8,12 @@
 use super::{Orchestrator, TransitionError};
 use crate::intelligence::intents::{self, Intent};
 use crate::intelligence::provider::{
-    Message, ModelProvider, ProviderError, Role, TurnEvent, TurnRequest, Usage,
+    Effort, Message, ModelProvider, ProviderError, Role, StopReason as ProviderStop, TurnEvent,
+    TurnRequest, Usage,
 };
 use crate::intelligence::spend::{CapKind, Day, Price, SpendMeter};
 use crate::ipc::types::{
-    AssistantPhase, ErrorCode, JarvisError, Snapshot, StopReason, TurnStreamEvent,
+    AssistantPhase, ErrorCode, JarvisError, Snapshot, StopReason, TurnStreamEvent, UsageSummary,
 };
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -20,7 +21,9 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 const PERSONA: &str = include_str!("../../resources/prompts/persona.md");
-const MAX_OUTPUT_TOKENS: u32 = 512;
+/// Thinking tokens count toward `max_tokens`, so this is generous; short spoken replies
+/// come from the persona prompt and low effort, not from a tight limit.
+const MAX_OUTPUT_TOKENS: u32 = 4096;
 /// Rough budget for conversation history sent to the model (~8k tokens at 4 chars each).
 const HISTORY_CHAR_BUDGET: usize = 32_000;
 
@@ -28,6 +31,8 @@ const HISTORY_CHAR_BUDGET: usize = 32_000;
 pub trait TurnSink: Send + Sync {
     fn event(&self, e: TurnStreamEvent);
     fn snapshot(&self, s: Snapshot);
+    /// Called after spend is recorded (the `usage.updated` event).
+    fn usage(&self, _u: UsageSummary) {}
 }
 
 type ProviderFactory = dyn Fn() -> Option<Arc<dyn ModelProvider>> + Send + Sync;
@@ -41,7 +46,7 @@ pub struct TurnRunner {
     orch: Arc<Orchestrator>,
     spend: Arc<SpendMeter>,
     provider: Box<ProviderFactory>,
-    cfg: TurnConfig,
+    config: Box<dyn Fn() -> TurnConfig + Send + Sync>,
     now_secs: Box<dyn Fn() -> u64 + Send + Sync>,
     history: Mutex<Vec<Message>>,
     last_reply: Mutex<Option<String>>,
@@ -101,14 +106,14 @@ impl TurnRunner {
         orch: Arc<Orchestrator>,
         spend: Arc<SpendMeter>,
         provider: Box<ProviderFactory>,
-        cfg: TurnConfig,
+        config: Box<dyn Fn() -> TurnConfig + Send + Sync>,
         now_secs: Box<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
         Self {
             orch,
             spend,
             provider,
-            cfg,
+            config,
             now_secs,
             history: Mutex::new(Vec::new()),
             last_reply: Mutex::new(None),
@@ -252,12 +257,15 @@ impl TurnRunner {
             h.clone()
         };
         sink.snapshot(self.orch.set_cloud_in_use(true));
+        let cfg = (self.config)();
+        tracing::debug!(provider = provider.id(), model = %cfg.model, "starting cloud turn");
         let req = TurnRequest {
-            model: self.cfg.model.clone(),
+            model: cfg.model.clone(),
             system: PERSONA.to_owned(),
             messages,
             tools: vec![],
             max_output_tokens: MAX_OUTPUT_TOKENS,
+            effort: Effort::Low,
         };
         let input_chars: usize = req.messages.iter().map(|m| m.content.len()).sum();
         let mut stream = match provider.stream_turn(req, cancel.clone()).await {
@@ -269,6 +277,7 @@ impl TurnRunner {
         };
         let mut reply = String::new();
         let mut reported: Option<Usage> = None;
+        let mut stop: Option<ProviderStop> = None;
         while let Some(item) = stream.next().await {
             match item {
                 Ok(TurnEvent::TextDelta(t)) => {
@@ -276,15 +285,47 @@ impl TurnRunner {
                     sink.event(TurnStreamEvent::TextDelta { text: t });
                 }
                 Ok(TurnEvent::ToolCall { .. }) => {} // no tools are offered yet
-                Ok(TurnEvent::Done { usage: u, .. }) => reported = Some(u),
+                Ok(TurnEvent::Done {
+                    usage: u,
+                    stop: why,
+                }) => {
+                    reported = Some(u);
+                    stop = Some(why);
+                }
                 Err(e) => {
-                    self.record(reported, input_chars, reply.len());
+                    self.record(reported, input_chars, reply.len(), cfg.price, sink);
                     self.drop_dangling_user();
                     return self.provider_failed(id, &e, sink);
                 }
             }
         }
-        self.record(reported, input_chars, reply.len());
+        self.record(reported, input_chars, reply.len(), cfg.price, sink);
+        match stop {
+            // The provider declined: say so plainly, and do not keep the request in history.
+            Some(ProviderStop::Refusal) => {
+                self.drop_dangling_user();
+                if reply.trim().is_empty() {
+                    return self.finish_text(id, "I'm not able to help with that.", sink);
+                }
+                return self.finish(id, StopReason::End, sink);
+            }
+            // All of the budget went on thinking: nothing to show, so report it for a retry.
+            Some(ProviderStop::MaxTokens) if reply.trim().is_empty() => {
+                self.drop_dangling_user();
+                return self.fail(
+                    id,
+                    err(
+                        ErrorCode::ProviderUnavailable,
+                        "The model ran out of room before it answered. Try again.",
+                        true,
+                        Some(id),
+                    ),
+                    StopReason::Error,
+                    sink,
+                );
+            }
+            _ => {}
+        }
         lock(&self.history).push(Message {
             role: Role::Assistant,
             content: reply.clone(),
@@ -304,10 +345,18 @@ impl TurnRunner {
 
     /// Records spend. A cancelled or failed stream never reports usage, so it is
     /// estimated (about 4 characters per token) rather than counted as zero.
-    fn record(&self, reported: Option<Usage>, input_chars: usize, output_chars: usize) {
+    fn record(
+        &self,
+        reported: Option<Usage>,
+        input_chars: usize,
+        output_chars: usize,
+        price: Price,
+        sink: &dyn TurnSink,
+    ) {
         let usage = reported.unwrap_or_else(|| estimate_usage(input_chars, output_chars));
         if usage != Usage::default() {
-            self.spend.record(self.today(), usage, self.cfg.price);
+            self.spend.record(self.today(), usage, price);
+            sink.usage(self.spend.summary(self.today()));
         }
     }
 
@@ -363,12 +412,15 @@ impl TurnRunner {
     }
 }
 
-/// ~4 characters per token, rounded up; used only when the provider reported no usage.
+/// Used only when a stream ended without reporting usage (cancelled or failed). Input is
+/// about 4 characters per token. Output is charged at the full output limit: hidden
+/// thinking tokens are billed but never streamed, so counting only visible text would
+/// undercount, and the spend cap should err on the safe side.
 fn estimate_usage(input_chars: usize, output_chars: usize) -> Usage {
     let tokens = |c: usize| c.div_ceil(4).min(u32::MAX as usize) as u32;
     Usage {
         input_tokens: tokens(input_chars),
-        output_tokens: tokens(output_chars),
+        output_tokens: tokens(output_chars).max(MAX_OUTPUT_TOKENS),
     }
 }
 

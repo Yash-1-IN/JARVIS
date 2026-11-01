@@ -50,6 +50,43 @@ impl std::fmt::Debug for AnthropicConfig {
     }
 }
 
+/// Checks an API key without spending tokens, by listing models (GET /v1/models).
+/// `Auth` means rejected, `Offline` means no connection; nothing is stored either way.
+pub async fn check_key(
+    base_url: &str,
+    api_key: &str,
+    timeout: Duration,
+) -> Result<(), ProviderError> {
+    let mut key = HeaderValue::from_str(api_key).map_err(|_| ProviderError::Auth)?;
+    key.set_sensitive(true);
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| ProviderError::Unavailable(e.to_string()))?;
+    let resp = client
+        .get(format!("{base_url}/v1/models?limit=1"))
+        .header("x-api-key", key)
+        .header("anthropic-version", API_VERSION)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_connect() {
+                ProviderError::Offline
+            } else if e.is_timeout() {
+                ProviderError::Unavailable("the key check timed out".into())
+            } else {
+                ProviderError::Unavailable(e.without_url().to_string())
+            }
+        })?;
+    match resp.status().as_u16() {
+        200..=299 => Ok(()),
+        401 | 403 => Err(ProviderError::Auth),
+        429 => Err(ProviderError::RateLimit),
+        s if s >= 500 => Err(ProviderError::Unavailable(format!("HTTP {s}"))),
+        s => Err(ProviderError::Protocol(format!("unexpected HTTP {s}"))),
+    }
+}
+
 pub struct AnthropicProvider {
     cfg: AnthropicConfig,
     http: reqwest::Client,
@@ -70,6 +107,7 @@ impl AnthropicProvider {
             "max_tokens": req.max_output_tokens,
             "system": req.system,
             "messages": req.messages,
+            "output_config": { "effort": req.effort.as_str() },
             "stream": true,
         });
         if !req.tools.is_empty() {
@@ -317,6 +355,7 @@ impl Accumulator {
                     Some("end_turn") => StopReason::EndTurn,
                     Some("tool_use") => StopReason::ToolUse,
                     Some("max_tokens") => StopReason::MaxTokens,
+                    Some("refusal") => StopReason::Refusal,
                     _ => StopReason::Other,
                 });
                 Ok(vec![])

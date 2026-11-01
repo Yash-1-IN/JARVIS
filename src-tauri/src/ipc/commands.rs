@@ -1,7 +1,10 @@
 use super::{PROTOCOL_VERSION, types::*};
+use crate::intelligence::spend::Day;
 use crate::orchestrator::Orchestrator;
 use crate::orchestrator::turn::{TurnRunner, TurnSink};
+use crate::services::Services;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use tauri::ipc::Channel;
@@ -31,6 +34,28 @@ pub fn publish(app: &tauri::AppHandle, s: Snapshot) {
     if let Err(e) = app.emit(&env.kind.tauri_event_name(), &env) {
         tracing::warn!(error = %e, "failed to emit state.snapshot");
     }
+}
+
+/// Sequence for events that are not snapshots (snapshots carry their own `seq`).
+static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Emits `usage.updated` (Tauri event `usage_updated`).
+pub fn publish_usage(app: &tauri::AppHandle, u: UsageSummary) {
+    let env = Envelope {
+        v: PROTOCOL_VERSION,
+        seq: EVENT_SEQ.fetch_add(1, Ordering::Relaxed) + 1,
+        id: uuid::Uuid::now_v7().to_string(),
+        ts: now_ms(),
+        kind: EventKind::UsageUpdated,
+        payload: u,
+    };
+    if let Err(e) = app.emit(&env.kind.tauri_event_name(), &env) {
+        tracing::warn!(error = %e, "failed to emit usage.updated");
+    }
+}
+
+fn today() -> Day {
+    Day::from_unix_secs(now_ms() / 1000)
 }
 
 pub fn ping_response() -> PingResponse {
@@ -73,6 +98,9 @@ impl TurnSink for AppSink {
     fn snapshot(&self, s: Snapshot) {
         publish(&self.app, s);
     }
+    fn usage(&self, u: UsageSummary) {
+        publish_usage(&self.app, u);
+    }
 }
 
 #[tauri::command]
@@ -104,6 +132,41 @@ pub async fn submit_text(
         channel: Some(on_event),
     });
     runner.start(text, sink)
+}
+
+#[tauri::command]
+pub fn settings_get(svc: tauri::State<'_, Arc<Services>>) -> Settings {
+    svc.settings()
+}
+
+#[tauri::command]
+pub fn settings_set(
+    app: tauri::AppHandle,
+    svc: tauri::State<'_, Arc<Services>>,
+    patch: SettingsPatch,
+) -> Result<Settings, JarvisError> {
+    let out = svc.set_settings(&patch)?;
+    publish_usage(&app, svc.usage(today())); // the caps changed
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn usage_get(svc: tauri::State<'_, Arc<Services>>) -> UsageSummary {
+    svc.usage(today())
+}
+
+// No `tracing::instrument` and no logging of arguments: `key` is the API key.
+#[tauri::command]
+pub async fn api_key_set(
+    svc: tauri::State<'_, Arc<Services>>,
+    key: String,
+) -> Result<ApiKeyStatus, JarvisError> {
+    svc.set_api_key(&key).await
+}
+
+#[tauri::command]
+pub fn api_key_clear(svc: tauri::State<'_, Arc<Services>>) -> Result<ApiKeyStatus, JarvisError> {
+    svc.clear_api_key()
 }
 
 #[cfg(test)]
