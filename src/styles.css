@@ -641,3 +641,25 @@ blockquote.memory-text {
 .confirm p {
   margin: 0 0 0.4rem;
 }
+
+/* ---- 3D hologram (ADR-015) ---- */
+.hologram-3d {
+  width: 140px;
+  height: 140px;
+  flex: none;
+}
+
+.display-settings {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.display-settings legend {
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.display-settings > div {
+  margin: 0.3rem 0;
+}

@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { describeError } from "../state/errors";
+import { DisplaySettings } from "./DisplaySettings";
 import { PolicySettings } from "./PolicySettings";
 import {
   capToInput,
@@ -68,6 +69,7 @@ const TABS = {
   account: "Key and model",
   spending: "Spending",
   permissions: "Permissions",
+  display: "Display",
 } as const;
 type TabId = keyof typeof TABS;
 const TAB_IDS = Object.keys(TABS) as TabId[];
@@ -339,6 +341,7 @@ export function SettingsPanel({ transport }: { transport: Transport }) {
                 busy={busy}
               />
             ),
+            display: <DisplaySettings />,
           }}
         </SettingsTabs>
       )}

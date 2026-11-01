@@ -7,7 +7,7 @@ import { HistoryPanel } from "./components/HistoryPanel";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { MemoryProposalCard } from "./components/MemoryProposalCard";
 import { MockBadge } from "./components/MockBadge";
-import { Orb2D } from "./components/Orb2D";
+import { Hologram } from "./components/hologram/Hologram";
 import { MockControls } from "./components/MockControls";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SidePanel } from "./components/SidePanel";
@@ -179,7 +179,7 @@ export default function App({ transport }: { transport: Transport }) {
           {!error && snapshot && (
             <>
               <div className="assistant-status">
-                <Orb2D phase={snapshot.phase} mic={snapshot.mic} />
+                <Hologram phase={snapshot.phase} mic={snapshot.mic} />
                 <div>
                   <StatusPanel snapshot={snapshot} onRetry={retryTurn} />
                   <Controls
