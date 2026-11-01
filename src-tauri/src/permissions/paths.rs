@@ -486,7 +486,8 @@ mod tests {
             "bad<name>.txt",
             "what?.txt",
         ] {
-            let p = plain(&root.join(bad));
+            // Joined as text: `Path::join("a:b.txt")` would read `a:` as a drive and drop the root.
+            let p = format!("{}\\{bad}", plain(&root));
             assert_eq!(s.check_new(&p), Err(PathError::Invalid), "{bad:?}");
         }
         assert!(s.check_new(&plain(&root.join("report.txt"))).is_ok());
