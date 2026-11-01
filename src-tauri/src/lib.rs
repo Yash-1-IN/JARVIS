@@ -67,7 +67,7 @@ pub fn run() {
             let for_gateway = gateway.clone();
             let tools = orchestrator::turn::ToolWiring {
                 gateway,
-                registry: Arc::new(tools::Registry::alpha()),
+                registry: Arc::new(tools::Registry::wired()),
                 activity: activity.clone(),
                 // Built for every call from the saved settings, so a changed allow-list or
                 // policy applies to the very next tool call.

@@ -661,3 +661,56 @@ async fn reading_a_file_taints_the_context_so_a_following_move_still_asks() {
     assert!(card.tainted);
     assert!(root.join("a.txt").exists(), "nothing was moved");
 }
+
+#[tokio::test]
+async fn a_timeout_cancels_the_token_the_tool_was_given() {
+    struct Probe(Arc<std::sync::Mutex<Option<CancellationToken>>>);
+    #[async_trait]
+    impl Tool for Probe {
+        fn name(&self) -> &'static str {
+            "time.now"
+        }
+        fn description(&self) -> &'static str {
+            ""
+        }
+        fn input_schema(&self) -> Value {
+            empty_schema()
+        }
+        fn base_risk(&self) -> ToolRisk {
+            ToolRisk::Low
+        }
+        fn timeout(&self) -> Duration {
+            Duration::from_millis(30)
+        }
+        fn prepare(&self, _: &Value, _: &ToolContext) -> Result<Prepared, ToolError> {
+            unreachable!()
+        }
+        async fn run(
+            &self,
+            _: &Value,
+            _: &ToolContext,
+            c: CancellationToken,
+        ) -> Result<ToolOutput, ToolError> {
+            *self.0.lock().unwrap() = Some(c);
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            unreachable!()
+        }
+    }
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let r = execute(
+        &Probe(seen.clone()),
+        &json!({}),
+        &ctx_for(&[]),
+        &CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(r.unwrap_err(), ToolError::Timeout);
+    assert!(seen.lock().unwrap().as_ref().unwrap().is_cancelled());
+}
+
+#[test]
+fn the_wired_set_holds_back_move_and_rename() {
+    let names = Registry::wired().names();
+    assert_eq!(names, vec!["files.read_text", "files.search", "time.now"]);
+    assert!(Registry::alpha().names().contains(&"files.rename"));
+}
