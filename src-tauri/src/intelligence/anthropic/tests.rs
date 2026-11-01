@@ -428,3 +428,48 @@ async fn refusal_and_max_tokens_stop_reasons_are_mapped() {
         );
     }
 }
+
+#[test]
+fn tool_names_are_sent_without_dots_and_come_back_with_them() {
+    use crate::intelligence::provider::{Block, ToolSpec};
+    let mut req = req();
+    req.tools = vec![ToolSpec {
+        name: "files.read_text".into(),
+        description: "d".into(),
+        input_schema: json!({"type": "object"}),
+    }];
+    req.messages.push(Message {
+        role: Role::Assistant,
+        content: String::new(),
+        blocks: vec![Block::ToolUse {
+            id: "t1".into(),
+            name: "time.now".into(),
+            input: json!({}),
+        }],
+    });
+    let body = AnthropicProvider::body(&req);
+    assert_eq!(body["tools"][0]["name"], "files__read_text");
+    assert_eq!(body["messages"][1]["content"][0]["name"], "time__now");
+    // Every name is inside the API's allowed set.
+    let ok = |n: &str| {
+        n.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    assert!(ok(body["tools"][0]["name"].as_str().unwrap()));
+    assert!(ok(body["messages"][1]["content"][0]["name"]
+        .as_str()
+        .unwrap()));
+    assert_eq!(
+        super::tool_name_from_wire("files__read_text"),
+        "files.read_text"
+    );
+}
+
+#[test]
+fn a_rejected_request_keeps_the_api_error_type_and_message() {
+    let d = super::api_error_detail(
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"tools.0.name: bad"}}"#,
+    );
+    assert_eq!(d, "invalid_request_error: tools.0.name: bad");
+    assert_eq!(super::api_error_detail(""), "unknown_error: ");
+}

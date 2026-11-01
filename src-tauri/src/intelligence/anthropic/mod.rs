@@ -87,6 +87,26 @@ pub async fn check_key(
     }
 }
 
+/// Anthropic only accepts tool names made of letters, digits, `_` and `-` (our names such as
+/// `files.read_text` contain a dot), so the dot travels as `__` and is restored on the way
+/// back. No tool name contains `__`, so the mapping is exact.
+fn wire_tool_name(name: &str) -> String {
+    name.replace('.', "__")
+}
+
+fn tool_name_from_wire(name: &str) -> String {
+    name.replace("__", ".")
+}
+
+/// `type: message` from an Anthropic error body, cut short; empty body gives a plain note.
+fn api_error_detail(body: &str) -> String {
+    let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let t = v["error"]["type"].as_str().unwrap_or("unknown_error");
+    let m = v["error"]["message"].as_str().unwrap_or("");
+    let text = format!("{t}: {m}");
+    text.chars().filter(|c| !c.is_control()).take(300).collect()
+}
+
 pub struct AnthropicProvider {
     cfg: AnthropicConfig,
     http: reqwest::Client,
@@ -113,7 +133,33 @@ impl AnthropicProvider {
         if !req.tools.is_empty() {
             b["tools"] = json!(req.tools);
         }
+        Self::encode_tool_names(&mut b);
         b
+    }
+
+    /// Rewrites every tool name in the request (tool list and earlier tool calls in the
+    /// history) to the form the API accepts.
+    fn encode_tool_names(b: &mut Value) {
+        if let Some(tools) = b["tools"].as_array_mut() {
+            for t in tools {
+                if let Some(n) = t["name"].as_str() {
+                    t["name"] = json!(wire_tool_name(n));
+                }
+            }
+        }
+        if let Some(msgs) = b["messages"].as_array_mut() {
+            for m in msgs {
+                if let Some(blocks) = m["content"].as_array_mut() {
+                    for blk in blocks {
+                        if blk["type"] == "tool_use"
+                            && let Some(n) = blk["name"].as_str()
+                        {
+                            blk["name"] = json!(wire_tool_name(n));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     async fn send_once(&self, body: &Value) -> Result<reqwest::Response, ProviderError> {
@@ -140,7 +186,16 @@ impl AnthropicProvider {
             401 | 403 => Err(ProviderError::Auth),
             429 => Err(ProviderError::RateLimit),
             s if s >= 500 => Err(ProviderError::Unavailable(format!("HTTP {s}"))),
-            s => Err(ProviderError::Protocol(format!("unexpected HTTP {s}"))),
+            s => {
+                // A rejected request: keep what the API said (its error type and message
+                // describe our request, never the key) so the log shows the cause.
+                let body = resp.text().await.unwrap_or_default();
+                let detail = api_error_detail(&body);
+                tracing::warn!(status = s, detail = %detail, "provider rejected the request");
+                Err(ProviderError::Protocol(format!(
+                    "unexpected HTTP {s}: {detail}"
+                )))
+            }
         }
     }
 
@@ -343,7 +398,7 @@ impl Accumulator {
                     };
                     Ok(vec![TurnEvent::ToolCall {
                         id: t.id,
-                        name: t.name,
+                        name: tool_name_from_wire(&t.name),
                         args,
                     }])
                 }
