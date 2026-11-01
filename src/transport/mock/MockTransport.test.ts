@@ -404,3 +404,30 @@ describe("MockTransport approvals", () => {
     ).rejects.toMatchObject({ code: "TOOL_DENIED" });
   });
 });
+
+describe("MockTransport policy settings (contract #19)", () => {
+  it("accepts only installed app ids and takes the name from the installed list", async () => {
+    const t = new MockTransport();
+    const s = await t.updateSettings({
+      allowedApps: [{ id: "mock.app.music", name: "Totally Safe Bank" }],
+      allowedFolders: ["/home/u/Documents"],
+      autoAllowMedium: true,
+    });
+    expect(s.allowedApps).toEqual([
+      { id: "mock.app.music", name: "Mock Music" },
+    ]);
+    expect(s.allowedFolders).toEqual(["/home/u/Documents"]);
+    expect(s.autoAllowMedium).toBe(true);
+    await expect(
+      t.updateSettings({
+        allowedApps: [{ id: "evil.exe", name: "Mock Music" }],
+      }),
+    ).rejects.toMatchObject({ code: "INTERNAL" });
+    await expect(
+      t.updateSettings({ allowedFolders: ["relative/path"] }),
+    ).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    expect((await t.getSettings()).allowedApps).toHaveLength(1);
+  });
+});

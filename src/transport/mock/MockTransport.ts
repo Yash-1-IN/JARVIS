@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION } from "../../protocol";
+import type { AllowedApp } from "../../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../../types/generated/ApprovalDecision";
 import type { ErrorCode } from "../../types/generated/ErrorCode";
@@ -29,6 +30,12 @@ const MOCK_TURN_TOKENS = { input: 300, output: 40 };
 const MIN_KEY_LEN_FOR_HINT = 16;
 
 const DAY_MS = 86_400_000;
+
+/** What the mock pretends is installed (the real list comes from platform/). */
+const MOCK_INSTALLED_APPS: AllowedApp[] = [
+  { id: "mock.app.music", name: "Mock Music" },
+  { id: "mock.app.notes", name: "Mock Notes" },
+];
 
 function nextUtcMidnight(now: number): number {
   return Math.floor(now / DAY_MS) * DAY_MS + DAY_MS;
@@ -90,6 +97,9 @@ export class MockTransport implements Transport {
     availableModels: ["mock-model-fast", "mock-model-smart"],
     dailyCapMicroUsd: null,
     monthlyCapMicroUsd: null,
+    allowedFolders: [],
+    allowedApps: [],
+    autoAllowMedium: false,
   };
   private spent = {
     today: 0,
@@ -333,7 +343,25 @@ export class MockTransport implements Transport {
         );
       }
     }
+    // Contract #19: folders must be absolute; apps must be installed ids, and the
+    // name always comes from the installed list, never from the patch.
+    if (
+      patch.allowedFolders?.some((f) => !/^(\/|[A-Za-z]:[\\/])/.test(f.trim()))
+    ) {
+      throw jarvisError("INTERNAL", "Folders must be absolute paths.");
+    }
+    const apps = patch.allowedApps?.map((a) => {
+      const known = MOCK_INSTALLED_APPS.find((i) => i.id === a.id);
+      if (!known) throw jarvisError("INTERNAL", `Unknown app: ${a.id}`);
+      return { ...known };
+    });
     const next = { ...this.settings };
+    if (patch.allowedFolders !== undefined) {
+      next.allowedFolders = patch.allowedFolders.map((f) => f.trim());
+    }
+    if (apps !== undefined) next.allowedApps = apps;
+    if (patch.autoAllowMedium !== undefined)
+      next.autoAllowMedium = patch.autoAllowMedium;
     if (patch.model !== undefined) next.model = patch.model;
     if (patch.dailyCapMicroUsd !== undefined)
       next.dailyCapMicroUsd = patch.dailyCapMicroUsd;
