@@ -12,6 +12,7 @@ import { MockControls } from "./components/MockControls";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SidePanel } from "./components/SidePanel";
 import { StatusPanel } from "./components/StatusPanel";
+import { WelcomeNotice } from "./components/WelcomeNotice";
 import { useMemories } from "./hooks/useMemories";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { PROTOCOL_VERSION } from "./protocol";
@@ -151,6 +152,7 @@ export default function App({ transport }: { transport: Transport }) {
           ))}
         </nav>
       </header>
+      <WelcomeNotice transport={transport} />
       {/* Approval and memory cards sit above everything else, so an open panel never hides them. */}
       {((snapshot && snapshot.pendingApprovals.length > 0) ||
         proposals.length > 0) && (
