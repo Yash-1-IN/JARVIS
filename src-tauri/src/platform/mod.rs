@@ -5,3 +5,8 @@ pub mod apps;
 #[allow(dead_code)]
 pub mod fs;
 pub mod keychain;
+// Called by the apps.launch and system.status tools (Dev A's next M4 PR).
+#[allow(dead_code)]
+pub mod launch;
+#[allow(dead_code)]
+pub mod status;
