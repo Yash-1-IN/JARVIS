@@ -5,7 +5,7 @@ coding assistants alike.
 
 ## Short version
 
-- `main` is the only integration branch. One task, one branch, one pull request into `main`.
+- `main` is the only integration branch (decided in issue #12). One task, one branch, one pull request into `main`. The cross-review rules between the two developers are in issue #15.
 - Fill in the pull request template. Say what you ran and what you could not run (for example,
   anything that needs a microphone, a speaker, macOS or Windows).
 - Changes to the shared contract (`src-tauri/src/ipc/`, `src/types/generated/`, `docs/contracts.md`) go

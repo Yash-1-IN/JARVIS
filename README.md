@@ -13,6 +13,7 @@ Tauri 2 and Rust on the backend, React and TypeScript on the front.
 - Spend meter with daily and monthly caps, checked before every request.
 - Quick local commands (stop, mute, repeat) that never touch the cloud.
 - Settings for the model, caps, allowed folders and allowed apps.
+- An activity view that lists every tool call, including refused ones, newest first.
 - Tools the model can ask for, all gated by a permission layer in Rust: `time.now`, `files.search`,
   `files.read_text`, `files.move` and `files.rename`. Anything that changes or reads your files needs your
   approval first, on an approval card; approvals are single-use and expire after 60 seconds.
