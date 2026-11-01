@@ -523,6 +523,17 @@ pub struct ConversationSummary {
     pub message_count: u64,
 }
 
+/// Who wrote a stored message. Closed so the history view cannot meet an unknown role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum HistoryRole {
+    User,
+    Assistant,
+    /// A tool call or result, stored as a one-line summary.
+    Tool,
+}
+
 /// One stored message. Tool results are stored as one-line summaries, never file contents
 /// (spec §8.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -530,7 +541,7 @@ pub struct ConversationSummary {
 #[ts(export)]
 pub struct HistoryMessage {
     pub id: String,
-    pub role: String,
+    pub role: HistoryRole,
     pub content: String,
     #[ts(type = "number")]
     pub ts: u64,
@@ -696,6 +707,14 @@ mod tests {
         .unwrap();
         assert_eq!(c["endedAt"], serde_json::Value::Null);
         assert_eq!(c["messageCount"], 3);
+        let msg = serde_json::to_value(HistoryMessage {
+            id: "x".into(),
+            role: HistoryRole::Tool,
+            content: "Searched".into(),
+            ts: 9,
+        })
+        .unwrap();
+        assert_eq!(msg["role"], "tool");
         let h: HistorySettings = serde_json::from_str(r#"{"retention":"off"}"#).unwrap();
         assert_eq!(h.retention, HistoryRetention::Off);
     }
