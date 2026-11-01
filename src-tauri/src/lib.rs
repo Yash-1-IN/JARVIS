@@ -2,6 +2,7 @@ mod intelligence;
 mod ipc;
 mod logging;
 mod orchestrator;
+mod platform;
 
 use tauri::Manager;
 
