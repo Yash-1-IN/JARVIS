@@ -8,6 +8,8 @@ import type { ApiKeyStatus } from "../../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../../types/generated/ApprovalDecision";
 import type { ErrorCode } from "../../types/generated/ErrorCode";
 import type { JarvisError } from "../../types/generated/JarvisError";
+import type { Memory } from "../../types/generated/Memory";
+import type { MemoryStatus } from "../../types/generated/MemoryStatus";
 import type { PingResponse } from "../../types/generated/PingResponse";
 import type { Settings } from "../../types/generated/Settings";
 import type { SettingsPatch } from "../../types/generated/SettingsPatch";
@@ -17,12 +19,14 @@ import type { InterruptReason } from "../../types/generated/InterruptReason";
 import type { TurnInterrupted } from "../../types/generated/TurnInterrupted";
 import type { UsageSummary } from "../../types/generated/UsageSummary";
 import type {
+  MemoryListener,
   SnapshotListener,
   Transport,
   TurnListener,
   UsageListener,
 } from "../index";
 import { MOCK_FAULTS, type MockFault } from "./faults";
+import { MockMemoryStore, rememberText } from "./memory";
 import { MOCK_SCRIPTS, type MockScript, type SnapshotPatch } from "./scripts";
 
 const APPROVAL_TTL_MS = 60_000;
@@ -98,6 +102,7 @@ export class MockTransport implements Transport {
   private activityListeners = new Set<(e: ActivityEntry) => void>();
   private activityCount = 0;
   private interruptListeners = new Set<(e: TurnInterrupted) => void>();
+  private memory = new MockMemoryStore();
   private settings: Settings = {
     schemaVersion: 1,
     apiKey: { isSet: false, storage: null, hint: null },
@@ -162,6 +167,32 @@ export class MockTransport implements Transport {
     this.endTurn("cancelled");
     const requestId = `mock-turn-${++this.turnCount}`;
     this.turn = { requestId, onEvent };
+
+    // "Remember that ..." is answered locally, like the backend: no cloud, no
+    // cost, works at the spend cap. The card shows the text, the reply doesn't.
+    const remember = rememberText(text);
+    if (remember !== null) {
+      let reply = "Okay. Confirm it on the card and I will keep it.";
+      try {
+        this.memory.propose(remember);
+      } catch (e) {
+        reply = (e as JarvisError).message;
+      }
+      this.apply({
+        phase: "thinking",
+        activeRequestId: requestId,
+        lastError: null,
+      });
+      this.timers.push(
+        setTimeout(() => {
+          onEvent({ type: "text_delta", text: reply });
+          this.endTurn("end");
+          this.apply({ phase: "idle", activeRequestId: null });
+        }, 100),
+      );
+      return requestId;
+    }
+
     this.apply({
       phase: "thinking",
       activeRequestId: requestId,
@@ -326,6 +357,31 @@ export class MockTransport implements Transport {
   onActivity(listener: (e: ActivityEntry) => void): () => void {
     this.activityListeners.add(listener);
     return () => this.activityListeners.delete(listener);
+  }
+
+  async listMemories(status?: MemoryStatus): Promise<Memory[]> {
+    return this.memory.list(status);
+  }
+
+  async acceptMemory(id: string): Promise<Memory> {
+    return this.memory.accept(id);
+  }
+
+  async editMemory(id: string, content: string): Promise<Memory> {
+    return this.memory.edit(id, content);
+  }
+
+  async deleteMemory(id: string): Promise<void> {
+    this.memory.delete(id);
+  }
+
+  onMemoryProposed(listener: MemoryListener): () => void {
+    return this.memory.onProposed(listener);
+  }
+
+  /** Dev helper: the model proposes a memory (`memory.propose`), as in a cloud turn. */
+  simulateMemoryProposal(): void {
+    this.memory.propose("Prefers short answers before 9 am.");
   }
 
   /** Dev helper: the model reached for a tool that does not exist (logged, never run). */

@@ -7,6 +7,8 @@ import type { ActivityEntry } from "../types/generated/ActivityEntry";
 import type { AllowedApp } from "../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
+import type { Memory } from "../types/generated/Memory";
+import type { MemoryStatus } from "../types/generated/MemoryStatus";
 import type { PingResponse } from "../types/generated/PingResponse";
 import type { Settings } from "../types/generated/Settings";
 import type { SettingsPatch } from "../types/generated/SettingsPatch";
@@ -21,12 +23,14 @@ import type {
   UsageListener,
   InterruptListener,
   ActivityListener,
+  MemoryListener,
 } from "./index";
 
 export const SNAPSHOT_EVENT = "state_snapshot";
 export const USAGE_EVENT = "usage_updated";
 export const INTERRUPT_EVENT = "turn_interrupted";
 export const ACTIVITY_EVENT = "activity_appended";
+export const MEMORY_PROPOSED_EVENT = "memory_proposed";
 
 export class TauriTransport implements Transport {
   readonly isMock = false;
@@ -87,6 +91,30 @@ export class TauriTransport implements Transport {
     return subscribe<ActivityEntry>(
       ACTIVITY_EVENT,
       "activity.appended",
+      listener,
+    );
+  }
+
+  listMemories(status?: MemoryStatus): Promise<Memory[]> {
+    return invoke<Memory[]>("memory_list", { status });
+  }
+
+  acceptMemory(id: string): Promise<Memory> {
+    return invoke<Memory>("memory_accept", { id });
+  }
+
+  editMemory(id: string, content: string): Promise<Memory> {
+    return invoke<Memory>("memory_edit", { id, content });
+  }
+
+  deleteMemory(id: string): Promise<void> {
+    return invoke("memory_delete", { id });
+  }
+
+  onMemoryProposed(listener: MemoryListener): () => void {
+    return subscribe<Memory>(
+      MEMORY_PROPOSED_EVENT,
+      "memory.proposed",
       listener,
     );
   }

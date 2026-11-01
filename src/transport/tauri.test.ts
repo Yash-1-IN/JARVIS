@@ -146,4 +146,44 @@ describe("TauriTransport", () => {
     });
     expect(got).toEqual([{ id: "a1" }]);
   });
+
+  it("maps memory to the memory_* commands and memory_proposed", async () => {
+    invoke.mockResolvedValue([]);
+    const t = new TauriTransport();
+    await t.listMemories("proposed");
+    expect(invoke).toHaveBeenLastCalledWith("memory_list", {
+      status: "proposed",
+    });
+    await t.listMemories();
+    expect(invoke).toHaveBeenLastCalledWith("memory_list", {
+      status: undefined,
+    });
+    await t.acceptMemory("m1");
+    expect(invoke).toHaveBeenLastCalledWith("memory_accept", { id: "m1" });
+    await t.editMemory("m1", "Likes tea");
+    expect(invoke).toHaveBeenLastCalledWith("memory_edit", {
+      id: "m1",
+      content: "Likes tea",
+    });
+    await t.deleteMemory("m1");
+    expect(invoke).toHaveBeenLastCalledWith("memory_delete", { id: "m1" });
+
+    const got: unknown[] = [];
+    t.onMemoryProposed((m) => got.push(m));
+    await Promise.resolve();
+    const envelope = (kind: string) => ({
+      payload: {
+        v: PROTOCOL_VERSION,
+        seq: 4,
+        id: "x",
+        ts: 0,
+        kind,
+        payload: { id: "m2" },
+      },
+    });
+    handlers.get("memory_proposed")!(envelope("memory.proposed"));
+    // Another kind on the same event name is dropped.
+    handlers.get("memory_proposed")!(envelope("usage.updated"));
+    expect(got).toEqual([{ id: "m2" }]);
+  });
 });

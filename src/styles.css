@@ -514,3 +514,73 @@ kbd {
 .activity-targets code {
   word-break: break-all;
 }
+
+/* ---- Memory (M5) ---- */
+.memory-card {
+  max-width: 52rem;
+  margin: 0 auto 0.5rem;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+}
+
+.memory-card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.memory-text {
+  margin: 0.25rem 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+blockquote.memory-text {
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--accent);
+}
+
+.memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.4rem 0;
+}
+
+.memory-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.memory-item {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-item .hint {
+  margin: 0.1rem 0;
+}
+
+.memory-editor textarea {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--surface);
+}
+
+.memory-count {
+  margin: 0.15rem 0;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+
+.memory-count.over {
+  color: var(--danger);
+  font-weight: 600;
+}

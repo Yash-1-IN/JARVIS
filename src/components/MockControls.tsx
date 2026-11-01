@@ -25,6 +25,13 @@ export function MockControls({ transport }: { transport: MockTransport }) {
       </button>
       <button
         type="button"
+        title="The model proposes a memory; the confirmation card appears"
+        onClick={() => transport.simulateMemoryProposal()}
+      >
+        memory: model proposes
+      </button>
+      <button
+        type="button"
         title="Interrupt the running reply as if the wake word was heard"
         onClick={() => transport.interrupt("wake_word")}
       >
