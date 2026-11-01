@@ -3,7 +3,8 @@ mod ipc;
 mod logging;
 mod orchestrator;
 
-use intelligence::spend::{Caps, Day, Price, SpendMeter};
+use intelligence::pricing::{DEFAULT_MODEL, PriceTable};
+use intelligence::spend::{Caps, Day, SpendMeter};
 use orchestrator::turn::{TurnConfig, TurnRunner};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,18 +25,17 @@ pub fn run() {
     ));
     // No provider until the API key is wired (settings contract, #8): turns that need
     // the cloud report PROVIDER_AUTH; local commands work.
+    let default_price = PriceTable::embedded()
+        .and_then(|t| t.price(DEFAULT_MODEL))
+        .expect("the embedded pricing table must price the default model");
     let runner = Arc::new(TurnRunner::new(
         orch.clone(),
         spend,
         Box::new(|| None),
-        // TODO(#11 wiring): replace with `settings_get().model` and the price from
-        // `resources/pricing.json` when the API key is wired (D-16). Never ship hard-coded.
+        // TODO(#11 wiring): take the model from `settings_get().model` once settings exist.
         TurnConfig {
-            model: "claude-haiku-5-5".into(),
-            price: Price {
-                input_per_mtok: 1_000_000,
-                output_per_mtok: 5_000_000,
-            },
+            model: DEFAULT_MODEL.into(),
+            price: default_price,
         },
         Box::new(now_secs),
     ));
