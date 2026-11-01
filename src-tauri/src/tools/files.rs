@@ -414,15 +414,14 @@ async fn do_rename(plan: Plan, cancel: &CancellationToken) -> Result<ToolOutput,
         return Err(ToolError::Cancelled);
     }
     let Plan { from, to, .. } = plan;
-    tokio::task::spawn_blocking(move || std::fs::rename(from, to))
+    // The OS refuses an existing destination atomically (no check-then-replace window).
+    tokio::task::spawn_blocking(move || crate::platform::fs::rename_no_replace(&from, &to))
         .await
         .map_err(|_| ToolError::Failed("The move failed.".into()))?
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::CrossesDevices {
-                ToolError::Failed("The destination is on a different drive; moving across drives is not supported yet.".into())
-            } else {
-                ToolError::Failed("The move failed.".into())
-            }
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::CrossesDevices => ToolError::Failed("The destination is on a different drive; moving across drives is not supported yet.".into()),
+            std::io::ErrorKind::AlreadyExists => ToolError::Failed("Something already exists at the destination; nothing was changed.".into()),
+            _ => ToolError::Failed("The move failed.".into()),
         })?;
     Ok(ToolOutput {
         text: "Done.".into(),
@@ -533,5 +532,28 @@ impl Tool for FilesRename {
     ) -> Result<ToolOutput, ToolError> {
         let a: RenameArgs = parse_args(args)?;
         do_rename(plan_rename(&ctx.scope, &a.path, &a.new_name)?, &cancel).await
+    }
+}
+
+#[cfg(test)]
+mod race_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_destination_created_after_the_check_is_never_overwritten() {
+        let d = std::env::temp_dir().join(format!("jarvis-race-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a.txt"), "A").unwrap();
+        // The plan was made while `b.txt` did not exist; now it appears.
+        let plan = Plan {
+            from: d.join("a.txt"),
+            to: d.join("b.txt"),
+            is_dir: false,
+        };
+        std::fs::write(d.join("b.txt"), "B").unwrap();
+        let r = do_rename(plan, &CancellationToken::new()).await;
+        assert!(matches!(r, Err(ToolError::Failed(m)) if m.contains("already exists")));
+        assert_eq!(std::fs::read_to_string(d.join("a.txt")).unwrap(), "A");
+        assert_eq!(std::fs::read_to_string(d.join("b.txt")).unwrap(), "B");
     }
 }

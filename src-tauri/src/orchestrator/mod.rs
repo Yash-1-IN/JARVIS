@@ -4,7 +4,7 @@
 
 pub mod turn;
 
-use crate::ipc::types::{AssistantPhase, JarvisError, MicState, Snapshot};
+use crate::ipc::types::{ApprovalRequest, AssistantPhase, JarvisError, MicState, Snapshot};
 use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -111,6 +111,7 @@ impl Orchestrator {
         if to == AssistantPhase::Idle {
             g.snap.active_request_id = None;
             g.snap.cloud_in_use = false;
+            g.snap.pending_approvals.clear();
         }
         Ok(Self::bump(&mut g))
     }
@@ -146,6 +147,14 @@ impl Orchestrator {
     pub fn set_cloud_in_use(&self, on: bool) -> Snapshot {
         let mut g = self.lock();
         g.snap.cloud_in_use = on;
+        Self::bump(&mut g)
+    }
+
+    /// Replaces the approvals shown to the user (`pendingApprovals`). Cleared again when the
+    /// turn ends or fails.
+    pub fn set_pending_approvals(&self, v: Vec<ApprovalRequest>) -> Snapshot {
+        let mut g = self.lock();
+        g.snap.pending_approvals = v;
         Self::bump(&mut g)
     }
 

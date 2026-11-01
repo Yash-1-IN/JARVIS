@@ -63,3 +63,7 @@ opt-level = 3
 # voice worker will need the same so an audio failure cannot crash the app (#21).
 panic = "unwind"
 strip = true
+
+[dev-dependencies]
+# Paused clock for the approval-expiry test; same crate, test builds only.
+tokio = { version = "1.54.1", features = ["test-util"] }

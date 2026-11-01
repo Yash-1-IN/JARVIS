@@ -124,10 +124,7 @@ fn req() -> TurnRequest {
     TurnRequest {
         model: "test-model".into(),
         system: "You are JARVIS.".into(),
-        messages: vec![Message {
-            role: Role::User,
-            content: "hello".into(),
-        }],
+        messages: vec![Message::text(Role::User, "hello")],
         tools: vec![],
         max_output_tokens: 256,
         effort: Effort::Low,

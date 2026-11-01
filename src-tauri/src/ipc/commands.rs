@@ -2,6 +2,8 @@ use super::{PROTOCOL_VERSION, types::*};
 use crate::intelligence::spend::Day;
 use crate::orchestrator::Orchestrator;
 use crate::orchestrator::turn::{TurnRunner, TurnSink};
+use crate::permissions::activity::ActivityLog;
+use crate::permissions::gateway::Channel as ApprovalChannel;
 use crate::services::Services;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,6 +115,41 @@ impl TurnSink for AppSink {
     fn interrupted(&self, i: TurnInterrupted) {
         publish_event(&self.app, EventKind::TurnInterrupted, i);
     }
+    fn approval(&self, r: ApprovalRequest) {
+        publish_event(&self.app, EventKind::ApprovalRequested, r);
+    }
+    fn activity(&self, e: ActivityEntry) {
+        publish_event(&self.app, EventKind::ActivityAppended, e);
+    }
+}
+
+/// Answers an approval card. Only the window can call this: voice has no route to it, and
+/// the gateway independently refuses voice for high risk.
+#[tauri::command]
+pub fn resolve_approval(
+    app: tauri::AppHandle,
+    runner: tauri::State<'_, Arc<TurnRunner>>,
+    decision: ApprovalDecision,
+) -> Result<(), JarvisError> {
+    let sink = AppSink { app, channel: None };
+    runner
+        .resolve_approval(decision, ApprovalChannel::Window, &sink)
+        .map_err(|e| JarvisError {
+            code: ErrorCode::ToolDenied,
+            message: e.to_string(),
+            retryable: false,
+            request_id: None,
+        })
+}
+
+/// Pages the activity log, newest first.
+#[tauri::command]
+pub fn activity_list(
+    log: tauri::State<'_, Arc<ActivityLog>>,
+    limit: usize,
+    before: Option<String>,
+) -> Vec<ActivityEntry> {
+    log.list(limit, before.as_deref())
 }
 
 #[tauri::command]

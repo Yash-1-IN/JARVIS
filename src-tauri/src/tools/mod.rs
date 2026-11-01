@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ToolError {
-    /// The arguments are malformed or break a rule. Safe to show; never echoes values.
+    /// The arguments are malformed or break a rule. Safe to show to the user and the model; serde's messages can include the offending value.
     #[error("{0}")]
     Invalid(String),
     /// Outside the allowed folders, or an app that is not on the allow-list.
@@ -138,7 +138,18 @@ impl Registry {
         self.tools.insert(t.name(), t);
     }
 
-    /// The tools implemented so far.
+    /// The tools the model is offered.
+    pub fn wired() -> Self {
+        let mut r = Self::new();
+        r.register(Arc::new(timenow::TimeNow));
+        r.register(Arc::new(files::FilesSearch));
+        r.register(Arc::new(files::FilesReadText));
+        r.register(Arc::new(files::FilesMove));
+        r.register(Arc::new(files::FilesRename));
+        r
+    }
+
+    /// Every tool implemented so far (tests, and the future full set).
     pub fn alpha() -> Self {
         let mut r = Self::new();
         r.register(Arc::new(timenow::TimeNow));
@@ -207,12 +218,17 @@ pub async fn execute(
     ctx: &ToolContext,
     cancel: &CancellationToken,
 ) -> Result<ToolOutput, ToolError> {
-    let run = tool.run(args, ctx, cancel.clone());
-    tokio::select! {
+    let child = cancel.child_token();
+    let run = tool.run(args, ctx, child.clone());
+    let out = tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(ToolError::Cancelled),
         r = tokio::time::timeout(tool.timeout(), run) => r.unwrap_or(Err(ToolError::Timeout)),
-    }
+    };
+    // Dropping the future on a timeout does not stop blocking work it started (a folder
+    // walk); the token does. Cancelling after a normal finish is harmless.
+    child.cancel();
+    out
 }
 
 #[cfg(test)]

@@ -2,20 +2,21 @@
 //! spend check, then the cloud model, with every step cancellable. It talks to the
 //! UI only through `TurnSink`, so it is testable without Tauri.
 //!
-//! Tools are not wired yet (M4): the model gets none, and the turn limit of five
-//! tool calls does not apply until then.
+//! Tools are optional (`with_tools`). Each call goes propose → gateway → run, at most
+//! five per turn, and results go back to the model as untrusted data.
 
 use super::{Orchestrator, TransitionError};
 use crate::intelligence::intents::{self, Intent};
 use crate::intelligence::provider::{
-    Effort, Message, ModelProvider, ProviderError, Role, StopReason as ProviderStop, TurnEvent,
-    TurnRequest, Usage,
+    Block, Effort, Message, ModelProvider, ProviderError, Role, StopReason as ProviderStop,
+    TurnEvent, TurnRequest, Usage,
 };
 use crate::intelligence::spend::{CapKind, Day, Price, SpendMeter};
 use crate::ipc::types::{
-    AssistantPhase, ErrorCode, InterruptReason, JarvisError, Snapshot, StopReason, TurnInterrupted,
-    TurnStreamEvent, UsageSummary,
+    ActivityEntry, ApprovalRequest, AssistantPhase, ErrorCode, InterruptReason, JarvisError,
+    Snapshot, StopReason, TurnInterrupted, TurnStreamEvent, UsageSummary,
 };
+use crate::permissions::gateway::Resolved;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -25,6 +26,12 @@ const PERSONA: &str = include_str!("../../resources/prompts/persona.md");
 /// Thinking tokens count toward `max_tokens`, so this is generous; short spoken replies
 /// come from the persona prompt and low effort, not from a tight limit.
 const MAX_OUTPUT_TOKENS: u32 = 4096;
+/// Spec §7.2: at most five tool calls in one turn.
+const MAX_TOOL_CALLS: usize = 5;
+
+mod toolcalls;
+use toolcalls::CallResult;
+pub use toolcalls::ToolWiring;
 /// Rough budget for conversation history sent to the model (~8k tokens at 4 chars each).
 const HISTORY_CHAR_BUDGET: usize = 32_000;
 
@@ -36,6 +43,10 @@ pub trait TurnSink: Send + Sync {
     fn usage(&self, _u: UsageSummary) {}
     /// Called when a running turn is cut short (the `turn.interrupted` event).
     fn interrupted(&self, _i: TurnInterrupted) {}
+    /// A tool call needs the user's answer (the `approval.requested` event).
+    fn approval(&self, _r: ApprovalRequest) {}
+    /// A tool call was decided or finished (the `activity.appended` event).
+    fn activity(&self, _e: ActivityEntry) {}
 }
 
 type ProviderFactory = dyn Fn() -> Option<Arc<dyn ModelProvider>> + Send + Sync;
@@ -54,6 +65,9 @@ pub struct TurnRunner {
     history: Mutex<Vec<Message>>,
     last_reply: Mutex<Option<String>>,
     tokens: Mutex<HashMap<String, CancellationToken>>,
+    tools: Option<ToolWiring>,
+    /// Turns waiting for an approval card, by approval id.
+    waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Resolved>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -121,7 +135,15 @@ impl TurnRunner {
             history: Mutex::new(Vec::new()),
             last_reply: Mutex::new(None),
             tokens: Mutex::new(HashMap::new()),
+            tools: None,
+            waiters: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Offers tools to the model. Without this the model gets none.
+    pub fn with_tools(mut self, w: ToolWiring) -> Self {
+        self.tools = Some(w);
+        self
     }
 
     fn today(&self) -> Day {
@@ -255,98 +277,171 @@ impl TurnRunner {
                 sink,
             );
         };
-        let messages = {
+        {
             let mut h = lock(&self.history);
-            h.push(Message {
-                role: Role::User,
-                content: text,
-            });
+            h.push(Message::text(Role::User, text));
             trim_history(&mut h);
-            h.clone()
-        };
+        }
+        // Messages this turn has added, so a failure can take exactly those back out.
+        let mut added = 1usize;
+        let mut calls_made = 0usize;
         sink.snapshot(self.orch.set_cloud_in_use(true));
         let cfg = (self.config)();
         tracing::debug!(provider = provider.id(), model = %cfg.model, "starting cloud turn");
-        let req = TurnRequest {
-            model: cfg.model.clone(),
-            system: PERSONA.to_owned(),
-            messages,
-            tools: vec![],
-            max_output_tokens: MAX_OUTPUT_TOKENS,
-            effort: Effort::Low,
-        };
-        let input_chars: usize = req.messages.iter().map(|m| m.content.len()).sum();
-        let mut stream = match provider.stream_turn(req, cancel.clone()).await {
-            Ok(s) => s,
-            Err(e) => {
-                self.drop_dangling_user();
-                return self.provider_failed(id, &e, sink);
-            }
-        };
-        let mut reply = String::new();
-        let mut reported: Option<Usage> = None;
-        let mut stop: Option<ProviderStop> = None;
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(TurnEvent::TextDelta(t)) => {
-                    reply.push_str(&t);
-                    sink.event(TurnStreamEvent::TextDelta { text: t });
-                }
-                Ok(TurnEvent::ToolCall { .. }) => {} // no tools are offered yet
-                Ok(TurnEvent::Done {
-                    usage: u,
-                    stop: why,
-                }) => {
-                    reported = Some(u);
-                    stop = Some(why);
-                }
+        loop {
+            let messages = lock(&self.history).clone();
+            let tools = self
+                .tools
+                .as_ref()
+                .map(|w| w.registry.specs())
+                .unwrap_or_default();
+            let req = TurnRequest {
+                model: cfg.model.clone(),
+                system: PERSONA.to_owned(),
+                messages,
+                tools,
+                max_output_tokens: MAX_OUTPUT_TOKENS,
+                effort: Effort::Low,
+            };
+            let input_chars: usize = req.messages.iter().map(Message::size).sum();
+            let mut stream = match provider.stream_turn(req, cancel.clone()).await {
+                Ok(s) => s,
                 Err(e) => {
-                    self.record(reported, input_chars, reply.len(), cfg.price, sink);
-                    self.drop_dangling_user();
+                    self.rollback(added);
                     return self.provider_failed(id, &e, sink);
                 }
-            }
-        }
-        self.record(reported, input_chars, reply.len(), cfg.price, sink);
-        match stop {
-            // The provider declined: say so plainly, and do not keep the request in history.
-            Some(ProviderStop::Refusal) => {
-                self.drop_dangling_user();
-                if reply.trim().is_empty() {
-                    return self.finish_text(id, "I'm not able to help with that.", sink);
+            };
+            let mut reply = String::new();
+            let mut calls: Vec<(String, String, serde_json::Value)> = Vec::new();
+            let mut reported: Option<Usage> = None;
+            let mut stop: Option<ProviderStop> = None;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(TurnEvent::TextDelta(t)) => {
+                        reply.push_str(&t);
+                        sink.event(TurnStreamEvent::TextDelta { text: t });
+                    }
+                    Ok(TurnEvent::ToolCall {
+                        id: cid,
+                        name,
+                        args,
+                    }) => calls.push((cid, name, args)),
+                    Ok(TurnEvent::Done {
+                        usage: u,
+                        stop: why,
+                    }) => {
+                        reported = Some(u);
+                        stop = Some(why);
+                    }
+                    Err(e) => {
+                        self.record(reported, input_chars, reply.len(), cfg.price, sink);
+                        self.rollback(added);
+                        return self.provider_failed(id, &e, sink);
+                    }
                 }
+            }
+            self.record(reported, input_chars, reply.len(), cfg.price, sink);
+            match stop {
+                // The provider declined: say so plainly, and do not keep the request in history.
+                Some(ProviderStop::Refusal) => {
+                    self.rollback(added);
+                    if reply.trim().is_empty() {
+                        return self.finish_text(id, "I'm not able to help with that.", sink);
+                    }
+                    return self.finish(id, StopReason::End, sink);
+                }
+                // All of the budget went on thinking: nothing to show, so report it for a retry.
+                Some(ProviderStop::MaxTokens) if reply.trim().is_empty() && calls.is_empty() => {
+                    self.rollback(added);
+                    return self.fail(
+                        id,
+                        err(
+                            ErrorCode::ProviderUnavailable,
+                            "The model ran out of room before it answered. Try again.",
+                            true,
+                            Some(id),
+                        ),
+                        StopReason::Error,
+                        sink,
+                    );
+                }
+                _ => {}
+            }
+            let Some(w) = self.tools.as_ref().filter(|_| !calls.is_empty()) else {
+                lock(&self.history).push(Message::text(Role::Assistant, reply.clone()));
+                *lock(&self.last_reply) = Some(reply);
                 return self.finish(id, StopReason::End, sink);
+            };
+            // The model asked for tools: keep its message, run each call through the gateway.
+            let mut blocks = Vec::new();
+            if !reply.trim().is_empty() {
+                blocks.push(Block::Text {
+                    text: reply.clone(),
+                });
             }
-            // All of the budget went on thinking: nothing to show, so report it for a retry.
-            Some(ProviderStop::MaxTokens) if reply.trim().is_empty() => {
-                self.drop_dangling_user();
-                return self.fail(
-                    id,
-                    err(
-                        ErrorCode::ProviderUnavailable,
-                        "The model ran out of room before it answered. Try again.",
-                        true,
-                        Some(id),
-                    ),
-                    StopReason::Error,
-                    sink,
-                );
+            for (cid, name, args) in &calls {
+                blocks.push(Block::ToolUse {
+                    id: cid.clone(),
+                    name: name.clone(),
+                    input: args.clone(),
+                });
             }
-            _ => {}
+            lock(&self.history).push(Message {
+                role: Role::Assistant,
+                content: reply.clone(),
+                blocks,
+            });
+            added += 1;
+            let mut results = Vec::new();
+            let mut over_limit = false;
+            for (cid, name, args) in calls {
+                let res = if calls_made >= MAX_TOOL_CALLS {
+                    over_limit = true;
+                    CallResult {
+                        content: "Tool call limit reached for this request.".into(),
+                        is_error: true,
+                    }
+                } else {
+                    calls_made += 1;
+                    match self.run_tool_call(w, id, &name, args, &cancel, sink).await {
+                        Some(r) => r,
+                        None => {
+                            self.rollback(added);
+                            return sink.event(TurnStreamEvent::Done {
+                                stop_reason: StopReason::Cancelled,
+                            });
+                        }
+                    }
+                };
+                results.push(Block::ToolResult {
+                    tool_use_id: cid,
+                    content: res.content,
+                    is_error: res.is_error,
+                });
+            }
+            lock(&self.history).push(Message {
+                role: Role::User,
+                content: String::new(),
+                blocks: results,
+            });
+            added += 1;
+            if let Ok(s) = self.orch.transition(id, AssistantPhase::Thinking) {
+                sink.snapshot(s);
+            }
+            if over_limit {
+                let msg = "I reached my limit of five actions for one request.";
+                lock(&self.history).push(Message::text(Role::Assistant, msg));
+                return self.finish_text(id, msg, sink);
+            }
         }
-        lock(&self.history).push(Message {
-            role: Role::Assistant,
-            content: reply.clone(),
-        });
-        *lock(&self.last_reply) = Some(reply);
-        self.finish(id, StopReason::End, sink);
     }
 
-    /// A failed or cancelled turn has no reply, so its user message is removed again:
-    /// history stays alternating, and a Retry that resends the text does not duplicate it.
-    fn drop_dangling_user(&self) {
+    /// A failed or cancelled turn has no reply, so everything it added to the history is
+    /// removed again: history stays valid, and a Retry that resends the text does not
+    /// duplicate it.
+    fn rollback(&self, added: usize) {
         let mut h = lock(&self.history);
-        if h.last().is_some_and(|m| m.role == Role::User) {
+        for _ in 0..added {
             h.pop();
         }
     }
@@ -434,11 +529,16 @@ fn estimate_usage(input_chars: usize, output_chars: usize) -> Usage {
 
 /// Drops the oldest messages until the history fits the budget, keeping it starting on a user turn.
 fn trim_history(h: &mut Vec<Message>) {
-    let size = |h: &[Message]| h.iter().map(|m| m.content.len()).sum::<usize>();
+    let size = |h: &[Message]| h.iter().map(Message::size).sum::<usize>();
     while h.len() > 1 && size(h) > HISTORY_CHAR_BUDGET {
         h.remove(0);
     }
-    while h.first().is_some_and(|m| m.role == Role::Assistant) && h.len() > 1 {
+    // Start on a plain user message: never on a reply, or on a tool result whose call was cut.
+    while h
+        .first()
+        .is_some_and(|m| m.role == Role::Assistant || !m.blocks.is_empty())
+        && h.len() > 1
+    {
         h.remove(0);
     }
 }
