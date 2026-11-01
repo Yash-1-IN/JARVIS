@@ -978,3 +978,62 @@ async fn injected_instructions_in_a_file_cannot_trigger_an_unasked_move() {
     t.sink.wait_done().await;
     assert!(t.root.join("a.txt").exists() && !t.root.join("stolen.txt").exists());
 }
+
+#[tokio::test]
+async fn time_and_status_questions_go_to_the_model_not_a_placeholder() {
+    let fake = Fake::new(Script::Ok(vec!["It is evening."], Usage::default()));
+    let (r, _, _) = runner(Some(fake.clone()), Caps::default());
+    for q in [
+        "what time is it",
+        "system status",
+        "open chrome",
+        "find my tax file",
+    ] {
+        let sink = Arc::new(Rec::default());
+        r.start(q.into(), sink.clone()).unwrap();
+        sink.wait_done().await;
+        assert_eq!(sink.text(), "It is evening.", "{q}");
+    }
+    assert_eq!(*lock(&fake.calls), 4);
+}
+
+#[test]
+#[should_panic(expected = "must not contain '__'")]
+fn a_tool_name_with_a_double_underscore_cannot_be_registered() {
+    // Guards the dot-to-underscore wire mapping for the model API.
+    struct Bad;
+    #[async_trait]
+    impl crate::tools::Tool for Bad {
+        fn name(&self) -> &'static str {
+            "time__now"
+        }
+        fn description(&self) -> &'static str {
+            ""
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            crate::tools::empty_schema()
+        }
+        fn base_risk(&self) -> crate::ipc::types::ToolRisk {
+            crate::ipc::types::ToolRisk::Low
+        }
+        fn timeout(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+        fn prepare(
+            &self,
+            _: &serde_json::Value,
+            _: &crate::tools::ToolContext,
+        ) -> Result<crate::tools::Prepared, crate::tools::ToolError> {
+            unreachable!()
+        }
+        async fn run(
+            &self,
+            _: &serde_json::Value,
+            _: &crate::tools::ToolContext,
+            _: CancellationToken,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            unreachable!()
+        }
+    }
+    crate::tools::Registry::new().register(Arc::new(Bad));
+}
