@@ -55,6 +55,22 @@ fn clean_message(text: &str) -> String {
     masked.chars().take(MAX_MESSAGE_CHARS).collect()
 }
 
+/// What `record_message` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Recorded {
+    /// The message was written (false when history is off or the text is empty).
+    pub stored: bool,
+    /// This message opened a new conversation (the first ever, or after ten idle minutes).
+    pub new_conversation: bool,
+}
+
+impl Recorded {
+    const NOTHING: Self = Self {
+        stored: false,
+        new_conversation: false,
+    };
+}
+
 impl MemoryStore {
     /// How long history is kept. 30 days until the user chooses otherwise.
     pub fn history_retention(&self) -> Result<HistoryRetention, StoreError> {
@@ -89,20 +105,20 @@ impl MemoryStore {
     }
 
     /// Stores one message in the open conversation, starting a new one after ten idle minutes.
-    /// Does nothing when retention is `Off`. Returns whether anything was stored.
+    /// Does nothing when retention is `Off`.
     pub fn record_message(
         &self,
         role: HistoryRole,
         content: &str,
         tool_call_json: Option<&str>,
         now_ms: u64,
-    ) -> Result<bool, StoreError> {
+    ) -> Result<Recorded, StoreError> {
         if self.history_retention()? == HistoryRetention::Off {
-            return Ok(false);
+            return Ok(Recorded::NOTHING);
         }
         let content = clean_message(content);
         if content.is_empty() {
-            return Ok(false);
+            return Ok(Recorded::NOTHING);
         }
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -117,9 +133,11 @@ impl MemoryStore {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
+        let mut new_conversation = false;
         let current = match open {
             Some((id, last)) if now_ms.saturating_sub(last.max(0) as u64) <= IDLE_MS => id,
             _ => {
+                new_conversation = true;
                 let id = uuid::Uuid::now_v7().to_string();
                 tx.execute(
                     "INSERT INTO conversations (id, started_at) VALUES (?1, ?2)",
@@ -162,7 +180,10 @@ impl MemoryStore {
             ],
         )?;
         tx.commit()?;
-        Ok(true)
+        Ok(Recorded {
+            stored: true,
+            new_conversation,
+        })
     }
 
     /// Conversations, newest first. `before` is a conversation id: only older ones are

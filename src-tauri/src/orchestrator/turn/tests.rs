@@ -1452,3 +1452,72 @@ async fn delete_all_history_also_clears_what_the_next_cloud_turn_would_send() {
     assert_eq!(seen[1].messages.len(), 1, "only the new question is sent");
     assert_eq!(seen[1].messages[0].content, "second question");
 }
+
+// ------------------------------------------------------- follow-ups to the history work
+
+#[tokio::test]
+async fn a_new_database_conversation_starts_the_models_context_fresh() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let clock = Arc::new(AtomicU64::new(NOW));
+    let c = clock.clone();
+    let fake = Fake::new(Script::Ok(vec!["Ok."], Usage::default()));
+    let f = fake.clone();
+    let orch = Arc::new(Orchestrator::default());
+    let spend = Arc::new(SpendMeter::new(Caps::default(), Day::from_unix_secs(NOW)));
+    let store = Arc::new(crate::memory::store::MemoryStore::new(
+        crate::memory::db::open_in_memory().unwrap(),
+    ));
+    let r = Arc::new(
+        TurnRunner::new(
+            orch,
+            spend,
+            Box::new(move || Some(f.clone() as Arc<dyn ModelProvider>)),
+            Box::new(|| TurnConfig {
+                model: "test-model".into(),
+                price: PRICE,
+            }),
+            Box::new(move || c.load(Ordering::SeqCst)),
+        )
+        .with_memory(store),
+    );
+    for (q, at) in [
+        ("first question", NOW),
+        ("follow up", NOW + 120), // two minutes later: same conversation
+        ("after a long pause", NOW + 3_600), // an hour later: a new one
+    ] {
+        clock.store(at, Ordering::SeqCst);
+        let s = Arc::new(Rec::default());
+        r.start(q.into(), s.clone()).unwrap();
+        s.wait_done().await;
+    }
+    let seen = lock(&fake.seen);
+    assert_eq!(
+        seen[1].messages.len(),
+        3,
+        "the follow-up carries the conversation"
+    );
+    assert_eq!(seen[2].messages.len(), 1, "a new conversation starts fresh");
+    assert_eq!(seen[2].messages[0].content, "after a long pause");
+}
+
+#[tokio::test]
+async fn cancel_active_stops_the_running_turn_and_says_so_only_once() {
+    let fake = Fake::new(Script::HangAfterText);
+    let (r, _, _) = runner(Some(fake), Caps::default());
+    let sink = Arc::new(Rec::default());
+    r.start("long reply please".into(), sink.clone()).unwrap();
+    for _ in 0..200 {
+        if !sink.text().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(r.cancel_active(InterruptReason::UserCancel, sink.as_ref()));
+    sink.wait_done().await;
+    assert_eq!(sink.dones(), vec![StopReason::Cancelled]);
+    assert_eq!(lock(&sink.interrupts).len(), 1);
+    assert!(
+        !r.cancel_active(InterruptReason::UserCancel, sink.as_ref()),
+        "nothing left to cancel"
+    );
+}
