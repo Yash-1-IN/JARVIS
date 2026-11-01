@@ -3,6 +3,7 @@ import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
 import { Controls } from "./components/Controls";
 import { MockBadge } from "./components/MockBadge";
+import { Orb2D } from "./components/Orb2D";
 import { MockControls } from "./components/MockControls";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { StatusPanel } from "./components/StatusPanel";
@@ -119,6 +120,7 @@ export default function App({ transport }: { transport: Transport }) {
       {error && <p role="alert">{error}</p>}
       {!error && snapshot && (
         <>
+          <Orb2D phase={snapshot.phase} mic={snapshot.mic} />
           <StatusPanel snapshot={snapshot} onRetry={retryTurn} />
           {snapshot.pendingApprovals.map((r) => (
             <ApprovalCard
