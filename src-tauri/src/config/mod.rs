@@ -186,7 +186,7 @@ fn canonical_folders(input: &[String]) -> Result<Vec<String>, SettingsError> {
 
 /// Windows returns `\\?\C:\...` from `canonicalize`; show the plain drive path.
 /// UNC and other device paths (`\\?\UNC\...`) are left alone for the gateway to reject.
-fn display_path(p: &Path) -> String {
+pub(crate) fn display_path(p: &Path) -> String {
     let s = p.to_string_lossy().into_owned();
     match s.strip_prefix(r"\\?\") {
         Some(rest) if rest.len() > 2 && rest.as_bytes()[1] == b':' => rest.to_owned(),
