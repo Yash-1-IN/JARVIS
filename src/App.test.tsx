@@ -140,3 +140,61 @@ describe("App chat", () => {
     vi.useRealTimers();
   });
 });
+
+describe("App errors", () => {
+  beforeEach(() => {
+    useSnapshotStore.setState({ snapshot: null });
+    useChatStore.setState({ turns: [] });
+  });
+
+  it("shows a typed error for a failed turn and Retry resends it", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    render(<App transport={t} />);
+    await act(async () => {});
+
+    t.failNextTurn("http-429");
+    fireEvent.change(screen.getByLabelText("Message JARVIS"), {
+      target: { value: "weather?" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveAttribute("data-code", "PROVIDER_RATE_LIMIT");
+    expect(screen.getByText(/\[Stopped by an error\]/)).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(/You said: "weather\?"/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("no Retry for a non-retryable auth error", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    render(<App transport={t} />);
+    await act(async () => {});
+    t.failNextTurn("no-key");
+    fireEvent.change(screen.getByLabelText("Message JARVIS"), {
+      target: { value: "hi" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("API key problem");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    vi.useRealTimers();
+  });
+});

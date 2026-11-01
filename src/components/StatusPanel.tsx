@@ -1,7 +1,13 @@
 import { MIC_LABELS, NETWORK_LABELS, PHASE_LABELS } from "../state/labels";
 import type { Snapshot } from "../types/generated/Snapshot";
+import { ErrorBanner } from "./ErrorBanner";
 
-export function StatusPanel({ snapshot }: { snapshot: Snapshot }) {
+interface Props {
+  snapshot: Snapshot;
+  onRetry?: () => void;
+}
+
+export function StatusPanel({ snapshot, onRetry }: Props) {
   const approval = snapshot.pendingApprovals[0];
   return (
     <section aria-label="Assistant status" className="status-panel">
@@ -24,7 +30,9 @@ export function StatusPanel({ snapshot }: { snapshot: Snapshot }) {
           </>
         )}
       </p>
-      {snapshot.lastError && <p role="alert">{snapshot.lastError.message}</p>}
+      {snapshot.lastError && (
+        <ErrorBanner error={snapshot.lastError} onRetry={onRetry} />
+      )}
       {approval && (
         // Approval card UI (buttons, expiry countdown) lands in a later M1 slice.
         <p data-testid="approval">

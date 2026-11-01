@@ -1,7 +1,9 @@
 import { PROTOCOL_VERSION } from "../../protocol";
 import type { PingResponse } from "../../types/generated/PingResponse";
 import type { Snapshot } from "../../types/generated/Snapshot";
+import type { StopReason } from "../../types/generated/StopReason";
 import type { SnapshotListener, Transport, TurnListener } from "../index";
+import { MOCK_FAULTS, type MockFault } from "./faults";
 import { MOCK_SCRIPTS, type MockScript, type SnapshotPatch } from "./scripts";
 
 const APPROVAL_TTL_MS = 60_000;
@@ -28,11 +30,13 @@ function initialSnapshot(): Snapshot {
 export class MockTransport implements Transport {
   readonly isMock = true;
   readonly scripts: readonly MockScript[];
+  readonly faults = Object.keys(MOCK_FAULTS) as MockFault[];
   private snapshot = initialSnapshot();
   private listeners = new Set<SnapshotListener>();
   private timers: ReturnType<typeof setTimeout>[] = [];
   private turn: { requestId: string; onEvent: TurnListener } | null = null;
   private turnCount = 0;
+  private nextFault: MockFault | null = null;
 
   constructor(scripts: readonly MockScript[] = MOCK_SCRIPTS) {
     this.scripts = scripts;
@@ -67,6 +71,11 @@ export class MockTransport implements Transport {
     }
   }
 
+  /** The next submitText fails with this fault instead of replying. */
+  failNextTurn(fault: MockFault | null): void {
+    this.nextFault = fault;
+  }
+
   /** Streams a canned, clearly labelled reply word by word. */
   async submitText(text: string, onEvent: TurnListener): Promise<string> {
     this.stop();
@@ -79,6 +88,30 @@ export class MockTransport implements Transport {
       cloudInUse: true,
       lastError: null,
     });
+
+    const fault = this.nextFault;
+    if (fault) {
+      this.nextFault = null;
+      const err = MOCK_FAULTS[fault];
+      this.timers.push(
+        setTimeout(() => {
+          this.endTurn(
+            err.code === "SPEND_CAP_REACHED" ? "spend_cap" : "error",
+          );
+          this.apply({
+            phase: "error",
+            activeRequestId: null,
+            cloudInUse: false,
+            network:
+              err.code === "NETWORK_OFFLINE"
+                ? "offline"
+                : this.snapshot.network,
+            lastError: { ...err, requestId },
+          });
+        }, FIRST_TOKEN_MS),
+      );
+      return requestId;
+    }
 
     const reply = `(MOCK reply, not a model) You said: "${text.trim()}".`;
     const words = reply.split(/(?<= )/);
@@ -124,7 +157,7 @@ export class MockTransport implements Transport {
     this.apply({ mic: muted ? "muted" : "standby" });
   }
 
-  private endTurn(stopReason: "end" | "cancelled"): void {
+  private endTurn(stopReason: StopReason): void {
     this.turn?.onEvent({ type: "done", stopReason });
     this.turn = null;
   }

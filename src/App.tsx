@@ -57,6 +57,15 @@ export default function App({ transport }: { transport: Transport }) {
     [transport],
   );
 
+  // Retry resends the failed turn's text; offered only when that turn is known.
+  const failedTurn = turns.find(
+    (t) =>
+      t.requestId !== null && t.requestId === snapshot?.lastError?.requestId,
+  );
+  const retryTurn = failedTurn
+    ? () => onSubmitText(failedTurn.user)
+    : undefined;
+
   useEffect(() => {
     let cancelled = false;
     // Subscribe before fetching so no update between the two is lost; the
@@ -89,7 +98,7 @@ export default function App({ transport }: { transport: Transport }) {
       {error && <p role="alert">{error}</p>}
       {!error && snapshot && (
         <>
-          <StatusPanel snapshot={snapshot} />
+          <StatusPanel snapshot={snapshot} onRetry={retryTurn} />
           <Controls
             snapshot={snapshot}
             onCancel={onCancel}

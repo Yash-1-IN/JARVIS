@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantPhase } from "../../types/generated/AssistantPhase";
 import type { Snapshot } from "../../types/generated/Snapshot";
 import type { TurnStreamEvent } from "../../types/generated/TurnStreamEvent";
+import { MOCK_FAULTS } from "./faults";
 import { MockTransport } from "./MockTransport";
 import { MOCK_SCRIPTS } from "./scripts";
 
@@ -180,5 +181,50 @@ describe("MockTransport submitText", () => {
       type: "done",
       stopReason: "cancelled",
     });
+  });
+});
+
+describe("MockTransport fault injection", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it.each(Object.entries(MOCK_FAULTS))(
+    "%s ends the turn with a typed error",
+    async (name, err) => {
+      const t = new MockTransport();
+      const snaps = record(t);
+      const events: TurnStreamEvent[] = [];
+      t.failNextTurn(name as keyof typeof MOCK_FAULTS);
+      const id = await t.submitText("hi", (e) => events.push(e));
+      vi.advanceTimersByTime(60_000);
+
+      expect(events.filter((e) => e.type === "text_delta")).toHaveLength(0);
+      expect(events).toEqual([
+        {
+          type: "done",
+          stopReason: err.code === "SPEND_CAP_REACHED" ? "spend_cap" : "error",
+        },
+      ]);
+      expect(snaps[snaps.length - 1]).toMatchObject({
+        phase: "error",
+        activeRequestId: null,
+        lastError: { code: err.code, retryable: err.retryable, requestId: id },
+      });
+    },
+  );
+
+  it("a fault applies to one turn only", async () => {
+    const t = new MockTransport();
+    t.failNextTurn("http-500");
+    await t.submitText("a", () => {});
+    vi.advanceTimersByTime(60_000);
+    const events: TurnStreamEvent[] = [];
+    await t.submitText("b", (e) => events.push(e));
+    vi.advanceTimersByTime(60_000);
+    expect(events[events.length - 1]).toEqual({
+      type: "done",
+      stopReason: "end",
+    });
+    expect((await t.getSnapshot()).lastError).toBeNull();
   });
 });
