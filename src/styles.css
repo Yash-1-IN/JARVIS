@@ -584,3 +584,60 @@ blockquote.memory-text {
   color: var(--danger);
   font-weight: 600;
 }
+
+/* ---- History (M5) ---- */
+.history-list,
+.history-messages {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.history-open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  margin: 0.25rem 0;
+  text-align: left;
+}
+
+.history-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.history-messages > li {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-role {
+  font-weight: 600;
+}
+
+.history-messages > li[data-role="tool"] .history-role {
+  color: var(--muted);
+}
+
+.history-when {
+  font-size: 0.8em;
+  color: var(--muted);
+}
+
+.history-text {
+  margin: 0.2rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.confirm {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid var(--danger);
+  background: var(--bg);
+}
+
+.confirm p {
+  margin: 0 0 0.4rem;
+}

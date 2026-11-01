@@ -2,6 +2,9 @@ import type { ActivityEntry } from "../types/generated/ActivityEntry";
 import type { AllowedApp } from "../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
+import type { ConversationSummary } from "../types/generated/ConversationSummary";
+import type { HistoryMessage } from "../types/generated/HistoryMessage";
+import type { HistorySettings } from "../types/generated/HistorySettings";
 import type { Memory } from "../types/generated/Memory";
 import type { MemoryStatus } from "../types/generated/MemoryStatus";
 import type { PingResponse } from "../types/generated/PingResponse";
@@ -85,4 +88,20 @@ export interface Transport {
   deleteMemory(id: string): Promise<void>;
   /** `memory.proposed`: show the confirmation card with the exact text. */
   onMemoryProposed(listener: MemoryListener): () => void;
+  /** Contract `memory_export`: one JSON document of memories and history. */
+  exportData(): Promise<string>;
+
+  // History (M5).
+  /** Contract `history_list`: newest first; `before` is a conversation id. */
+  listConversations(
+    limit: number,
+    before?: string,
+  ): Promise<ConversationSummary[]>;
+  /** Contract `history_get`: oldest first; an unknown id is `NOT_FOUND`. */
+  getConversation(conversationId: string): Promise<HistoryMessage[]>;
+  /** Contract `history_delete_all`: memories and settings stay. */
+  deleteAllHistory(): Promise<void>;
+  getHistorySettings(): Promise<HistorySettings>;
+  /** A shorter period deletes what is now too old at once. */
+  setHistorySettings(settings: HistorySettings): Promise<HistorySettings>;
 }
