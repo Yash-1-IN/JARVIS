@@ -53,6 +53,10 @@ export const ERROR_INFO: Record<ErrorCode, ErrorInfo> = {
     title: "Action failed",
     hint: "See the activity log for what ran.",
   },
+  NOT_FOUND: {
+    title: "Not found",
+    hint: "That item no longer exists. Refresh the list.",
+  },
   INTERNAL: {
     title: "Something went wrong",
     hint: "Retry; if it keeps happening, check the logs.",

@@ -1,5 +1,6 @@
 use super::{PROTOCOL_VERSION, types::*};
 use crate::intelligence::spend::Day;
+use crate::memory::store::{MemoryStore, StoreError};
 use crate::orchestrator::Orchestrator;
 use crate::orchestrator::turn::{TurnRunner, TurnSink};
 use crate::permissions::activity::ActivityLog;
@@ -222,6 +223,63 @@ pub async fn api_key_set(
 #[tauri::command]
 pub fn api_key_clear(svc: tauri::State<'_, Arc<Services>>) -> Result<ApiKeyStatus, JarvisError> {
     svc.clear_api_key()
+}
+
+/// What a store error looks like to the webview. Database details go to the log only.
+fn store_error(e: StoreError) -> JarvisError {
+    let (code, message) = match e {
+        StoreError::NotFound => (ErrorCode::NotFound, e.to_string()),
+        StoreError::Invalid(m) => (ErrorCode::Internal, m),
+        StoreError::Db(detail) => {
+            tracing::error!(detail = %detail, "memory database error");
+            (
+                ErrorCode::Internal,
+                "The memory database failed.".to_owned(),
+            )
+        }
+    };
+    JarvisError {
+        code,
+        message,
+        retryable: false,
+        request_id: None,
+    }
+}
+
+/// Memories, newest change first; optionally only one status.
+#[tauri::command]
+pub fn memory_list(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+    status: Option<MemoryStatus>,
+) -> Result<Vec<Memory>, JarvisError> {
+    store.list(status).map_err(store_error)
+}
+
+/// The user accepted a proposed memory: it becomes active.
+#[tauri::command]
+pub fn memory_accept(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+    id: String,
+) -> Result<Memory, JarvisError> {
+    store.accept(&id, now_ms()).map_err(store_error)
+}
+
+#[tauri::command]
+pub fn memory_edit(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+    id: String,
+    content: String,
+) -> Result<Memory, JarvisError> {
+    store.edit(&id, &content, now_ms()).map_err(store_error)
+}
+
+/// Deletes a memory for good. Denying a proposal is this call.
+#[tauri::command]
+pub fn memory_delete(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+    id: String,
+) -> Result<(), JarvisError> {
+    store.delete(&id).map_err(store_error)
 }
 
 #[cfg(test)]

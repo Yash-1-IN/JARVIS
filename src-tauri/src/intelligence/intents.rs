@@ -15,6 +15,8 @@ pub enum Intent {
     RepeatLast,
     WhatCanYouDo,
     FindFile(String),
+    /// "Remember that ...": the text exactly as spoken, for the confirmation card.
+    Remember(String),
 }
 
 const FILLER_PREFIXES: &[&str] = &[
@@ -78,7 +80,32 @@ fn arg_after(s: &str, prefixes: &[&str]) -> Option<String> {
     None
 }
 
+/// The text after "remember that", kept exactly as the user wrote it (case and punctuation),
+/// because the confirmation card shows it back for approval.
+fn remember_text(input: &str) -> Option<String> {
+    let t = input.trim();
+    for p in [
+        "please remember that ",
+        "jarvis remember that ",
+        "remember that ",
+        "remember: ",
+    ] {
+        if let Some(head) = t.get(..p.len())
+            && head.eq_ignore_ascii_case(p)
+        {
+            let rest = t[p.len()..].trim();
+            if !rest.is_empty() {
+                return Some(rest.to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn route(input: &str) -> Option<Intent> {
+    if let Some(text) = remember_text(input) {
+        return Some(Intent::Remember(text));
+    }
     let s = normalise(input);
     if s.is_empty() {
         return None;
@@ -271,5 +298,35 @@ mod tests {
     #[test]
     fn punctuation_and_case_are_normalised() {
         assert_eq!(route("  WHAT   TIME is it ?!  "), Some(TimeNow));
+    }
+
+    #[test]
+    fn remember_keeps_the_text_exactly_and_needs_that_or_a_colon() {
+        assert_eq!(
+            route("Remember that my sister's name is Anaïs."),
+            Some(Remember("my sister's name is Anaïs.".into()))
+        );
+        assert_eq!(
+            route("  please REMEMBER THAT I like Tea  "),
+            Some(Remember("I like Tea".into()))
+        );
+        assert_eq!(
+            route("remember: call mum"),
+            Some(Remember("call mum".into()))
+        );
+        // Not a request to store anything.
+        for q in [
+            "remember",
+            "remember when we met",
+            "remember that",
+            "do you remember that",
+        ] {
+            assert!(!matches!(route(q), Some(Remember(_))), "{q}");
+        }
+        // The words inside never trigger other intents.
+        assert!(matches!(
+            route("remember that stop means stop"),
+            Some(Remember(_))
+        ));
     }
 }
