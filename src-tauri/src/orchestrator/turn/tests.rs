@@ -956,13 +956,14 @@ async fn injected_instructions_in_a_file_cannot_trigger_an_unasked_move() {
     assert_eq!(req.tool, "files.rename");
     assert!(req.tainted);
     assert!(t.root.join("a.txt").exists() && !t.root.join("stolen.txt").exists());
-    let a = lock(&t.sink.activity);
-    assert_eq!(a.len(), 1);
-    assert_eq!(
-        (a[0].tool.as_str(), a[0].decision),
-        ("files.read_text", ToolDecision::AutoAllowed)
-    );
-    drop(a);
+    {
+        let a = lock(&t.sink.activity);
+        assert_eq!(a.len(), 1);
+        assert_eq!(
+            (a[0].tool.as_str(), a[0].decision),
+            ("files.read_text", ToolDecision::AutoAllowed)
+        );
+    }
     // The user says no: the file is untouched.
     t.r.resolve_approval(
         ApprovalDecision {
