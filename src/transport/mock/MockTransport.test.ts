@@ -28,6 +28,7 @@ describe("MockTransport", () => {
     expect(MOCK_SCRIPTS.map((s) => s.name).sort()).toEqual(
       [
         "approval",
+        "approval-high",
         "error",
         "interrupt",
         "offline",
@@ -333,5 +334,73 @@ describe("MockTransport interrupts", () => {
 
     t.interrupt("hotkey"); // nothing active: no event
     expect(seen).toHaveLength(2);
+  });
+});
+
+describe("MockTransport approvals", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function pending(t: MockTransport, script = "approval") {
+    t.runScript(script);
+    vi.advanceTimersByTime(1000);
+    return (await t.getSnapshot()).pendingApprovals[0];
+  }
+
+  it("waits for a decision, then runs on approve", async () => {
+    const t = new MockTransport();
+    const a = await pending(t);
+    vi.advanceTimersByTime(10_000);
+    expect((await t.getSnapshot()).phase).toBe("awaiting_approval");
+    await t.resolveApproval({
+      approvalId: a.approvalId,
+      argsDigest: a.argsDigest,
+      decision: "approve",
+    });
+    expect(await t.getSnapshot()).toMatchObject({
+      phase: "acting",
+      pendingApprovals: [],
+    });
+    vi.advanceTimersByTime(5_000);
+    expect((await t.getSnapshot()).phase).toBe("idle");
+  });
+
+  it("rejects a wrong digest, a second decision and an expired approval", async () => {
+    const t = new MockTransport();
+    const a = await pending(t);
+    await expect(
+      t.resolveApproval({
+        approvalId: a.approvalId,
+        argsDigest: "tampered",
+        decision: "approve",
+      }),
+    ).rejects.toMatchObject({ code: "TOOL_DENIED" });
+    await t.resolveApproval({
+      approvalId: a.approvalId,
+      argsDigest: a.argsDigest,
+      decision: "deny",
+    });
+    await expect(
+      t.resolveApproval({
+        approvalId: a.approvalId,
+        argsDigest: a.argsDigest,
+        decision: "approve",
+      }),
+    ).rejects.toMatchObject({ code: "TOOL_DENIED" });
+
+    const b = await pending(t, "approval-high");
+    expect(b).toMatchObject({ risk: "high", allowVoice: false, tainted: true });
+    vi.advanceTimersByTime(60_000);
+    expect(await t.getSnapshot()).toMatchObject({
+      pendingApprovals: [],
+      phase: "idle",
+    });
+    await expect(
+      t.resolveApproval({
+        approvalId: b.approvalId,
+        argsDigest: b.argsDigest,
+        decision: "approve",
+      }),
+    ).rejects.toMatchObject({ code: "TOOL_DENIED" });
   });
 });

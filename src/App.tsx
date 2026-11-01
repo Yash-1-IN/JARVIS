@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
 import { Controls } from "./components/Controls";
 import { MockBadge } from "./components/MockBadge";
@@ -119,6 +120,19 @@ export default function App({ transport }: { transport: Transport }) {
       {!error && snapshot && (
         <>
           <StatusPanel snapshot={snapshot} onRetry={retryTurn} />
+          {snapshot.pendingApprovals.map((r) => (
+            <ApprovalCard
+              key={r.approvalId}
+              request={r}
+              onDecide={(decision) =>
+                transport.resolveApproval({
+                  approvalId: r.approvalId,
+                  argsDigest: r.argsDigest,
+                  decision,
+                })
+              }
+            />
+          ))}
           <Controls
             snapshot={snapshot}
             onCancel={onCancel}

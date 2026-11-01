@@ -4,6 +4,7 @@ import { PROTOCOL_VERSION } from "../protocol";
 import type { Envelope } from "../types/generated/Envelope";
 import type { EventKind } from "../types/generated/EventKind";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
+import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
 import type { PingResponse } from "../types/generated/PingResponse";
 import type { Settings } from "../types/generated/Settings";
 import type { SettingsPatch } from "../types/generated/SettingsPatch";
@@ -86,6 +87,12 @@ export class TauriTransport implements Transport {
     const channel = new Channel<TurnStreamEvent>();
     channel.onmessage = onEvent;
     return invoke<string>("submit_text", { text, onEvent: channel });
+  }
+
+  // Arg name `decision` is this side's reading of docs/contracts.md
+  // (`resolve_approval(ApprovalDecision)`); confirm in the M4 contract PR.
+  resolveApproval(decision: ApprovalDecision): Promise<void> {
+    return invoke("resolve_approval", { decision });
   }
 
   setMute(muted: boolean): Promise<void> {

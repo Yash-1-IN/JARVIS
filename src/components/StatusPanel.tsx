@@ -8,7 +8,6 @@ interface Props {
 }
 
 export function StatusPanel({ snapshot, onRetry }: Props) {
-  const approval = snapshot.pendingApprovals[0];
   return (
     <section aria-label="Assistant status" className="status-panel">
       {/* Polite so state changes are announced without interrupting speech. */}
@@ -32,12 +31,6 @@ export function StatusPanel({ snapshot, onRetry }: Props) {
       </p>
       {snapshot.lastError && (
         <ErrorBanner error={snapshot.lastError} onRetry={onRetry} />
-      )}
-      {approval && (
-        // Approval card UI (buttons, expiry countdown) lands in a later M1 slice.
-        <p data-testid="approval">
-          Approval needed ({approval.risk} risk): {approval.summary}
-        </p>
       )}
     </section>
   );

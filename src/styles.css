@@ -71,3 +71,28 @@ kbd {
 .usage dt {
   font-weight: 600;
 }
+
+.approval-card {
+  border: 2px solid currentColor;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.approval-card.risk-high {
+  border-width: 3px;
+  border-style: double;
+}
+
+.approval-card .risk {
+  font-size: 0.8em;
+  font-weight: 700;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+}
+
+.approval-targets code {
+  word-break: break-all;
+}

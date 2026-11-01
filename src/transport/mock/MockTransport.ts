@@ -1,5 +1,6 @@
 import { PROTOCOL_VERSION } from "../../protocol";
 import type { ApiKeyStatus } from "../../types/generated/ApiKeyStatus";
+import type { ApprovalDecision } from "../../types/generated/ApprovalDecision";
 import type { ErrorCode } from "../../types/generated/ErrorCode";
 import type { JarvisError } from "../../types/generated/JarvisError";
 import type { PingResponse } from "../../types/generated/PingResponse";
@@ -79,6 +80,8 @@ export class MockTransport implements Transport {
   private turnCount = 0;
   private nextFault: MockFault | null = null;
   private usageListeners = new Set<UsageListener>();
+  /** Approval ids already decided: a decision is single-use. */
+  private decided = new Set<string>();
   private interruptListeners = new Set<(e: TurnInterrupted) => void>();
   private settings: Settings = {
     schemaVersion: 1,
@@ -234,6 +237,78 @@ export class MockTransport implements Transport {
     for (const l of this.interruptListeners) l({ requestId, reason });
   }
 
+  /**
+   * Mirrors the gateway rules (spec §9.3): the decision must echo the shown
+   * argsDigest, arrive before expiry, and be the first for that approval.
+   */
+  async resolveApproval(d: ApprovalDecision): Promise<void> {
+    const req = this.snapshot.pendingApprovals.find(
+      (a) => a.approvalId === d.approvalId,
+    );
+    if (!req || this.decided.has(d.approvalId)) {
+      throw jarvisError(
+        "TOOL_DENIED",
+        "This approval is no longer pending; nothing was run.",
+      );
+    }
+    if (d.argsDigest !== req.argsDigest) {
+      throw jarvisError(
+        "TOOL_DENIED",
+        "The action changed since it was shown; nothing was run.",
+      );
+    }
+    if (Date.now() >= req.expiresAt) {
+      this.expire(req.approvalId);
+      throw jarvisError(
+        "TOOL_DENIED",
+        "The approval expired; nothing was run.",
+      );
+    }
+    this.decided.add(d.approvalId);
+    const rest = this.snapshot.pendingApprovals.filter(
+      (a) => a.approvalId !== d.approvalId,
+    );
+    if (d.decision === "approve") {
+      this.apply({ pendingApprovals: rest, phase: "acting" });
+      this.timers.push(
+        setTimeout(() => this.apply({ phase: "thinking" }), 1500),
+      );
+      this.timers.push(
+        setTimeout(
+          () => this.apply({ phase: "idle", activeRequestId: null }),
+          2500,
+        ),
+      );
+    } else {
+      this.apply({ pendingApprovals: rest, phase: "thinking" });
+      this.timers.push(
+        setTimeout(
+          () => this.apply({ phase: "idle", activeRequestId: null }),
+          800,
+        ),
+      );
+    }
+  }
+
+  /** An unanswered approval lapses: nothing runs and the turn ends. */
+  private expire(approvalId: string): void {
+    if (
+      !this.snapshot.pendingApprovals.some((a) => a.approvalId === approvalId)
+    )
+      return;
+    this.decided.add(approvalId);
+    const rest = this.snapshot.pendingApprovals.filter(
+      (a) => a.approvalId !== approvalId,
+    );
+    this.apply({
+      pendingApprovals: rest,
+      ...(rest.length === 0 && {
+        phase: "idle" as const,
+        activeRequestId: null,
+      }),
+    });
+  }
+
   async setMute(muted: boolean): Promise<void> {
     if (this.snapshot.mic === "unavailable") return;
     this.apply({ mic: muted ? "muted" : "standby" });
@@ -377,6 +452,11 @@ export class MockTransport implements Transport {
       ...(pendingApprovals && { pendingApprovals }),
       seq: this.snapshot.seq + 1,
     };
+    for (const a of pendingApprovals ?? []) {
+      this.timers.push(
+        setTimeout(() => this.expire(a.approvalId), a.expiresAt - now),
+      );
+    }
     for (const l of this.listeners) l(this.snapshot);
   }
 }

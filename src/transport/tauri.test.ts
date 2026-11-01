@@ -109,4 +109,15 @@ describe("TauriTransport", () => {
     });
     expect(got).toEqual([{ requestId: "r", reason: "hotkey" }]);
   });
+
+  it("sends resolve_approval with the decision object", async () => {
+    invoke.mockResolvedValue(undefined);
+    const d = {
+      approvalId: "a",
+      argsDigest: "d",
+      decision: "approve" as const,
+    };
+    await new TauriTransport().resolveApproval(d);
+    expect(invoke).toHaveBeenCalledWith("resolve_approval", { decision: d });
+  });
 });

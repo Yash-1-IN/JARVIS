@@ -231,3 +231,33 @@ describe("App interrupts", () => {
     vi.useRealTimers();
   });
 });
+
+describe("App approvals", () => {
+  beforeEach(() => {
+    useSnapshotStore.setState({ snapshot: null });
+    useChatStore.setState({ turns: [], pendingInterrupts: {} });
+  });
+
+  it("shows the approval card and sends the digest with the decision", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    const spy = vi.spyOn(t, "resolveApproval");
+    render(<App transport={t} />);
+    await act(async () => {});
+    act(() => {
+      t.runScript("approval");
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByTestId("approval-card")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+    });
+    expect(spy).toHaveBeenCalledWith({
+      approvalId: "mock-appr-1",
+      argsDigest: "mock-digest-0000",
+      decision: "deny",
+    });
+    expect(screen.queryByTestId("approval-card")).toBeNull();
+    vi.useRealTimers();
+  });
+});

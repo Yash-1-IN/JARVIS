@@ -1,4 +1,5 @@
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
+import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
 import type { PingResponse } from "../types/generated/PingResponse";
 import type { Settings } from "../types/generated/Settings";
 import type { SettingsPatch } from "../types/generated/SettingsPatch";
@@ -33,6 +34,11 @@ export interface Transport {
    * channel still ends with `done { stopReason: "cancelled" }`.
    */
   onInterrupted(listener: InterruptListener): () => void;
+  /**
+   * Contract: `resolve_approval`. Must echo the request's `argsDigest`; the
+   * backend rejects a mismatch, an expired request, or a second decision.
+   */
+  resolveApproval(decision: ApprovalDecision): Promise<void>;
   /** Contract: `set_mute`. */
   setMute(muted: boolean): Promise<void>;
 
