@@ -12,10 +12,70 @@ pub enum Role {
     Assistant,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A structured part of a message, used when the model calls tools.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Block {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+}
+
+/// One message. Plain chat uses `content` alone; a tool round trip adds `blocks`, which then
+/// replace `content` on the wire (`content` keeps the text part for size accounting).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     pub role: Role,
     pub content: String,
+    pub blocks: Vec<Block>,
+}
+
+impl Message {
+    pub fn text(role: Role, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+            blocks: Vec::new(),
+        }
+    }
+
+    /// Characters the message carries, counting tool arguments and results.
+    pub fn size(&self) -> usize {
+        self.content.len()
+            + self
+                .blocks
+                .iter()
+                .map(|b| match b {
+                    Block::Text { .. } => 0,
+                    Block::ToolUse { input, name, .. } => name.len() + input.to_string().len(),
+                    Block::ToolResult { content, .. } => content.len(),
+                })
+                .sum::<usize>()
+    }
+}
+
+impl Serialize for Message {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("Message", 2)?;
+        st.serialize_field("role", &self.role)?;
+        if self.blocks.is_empty() {
+            st.serialize_field("content", &self.content)?;
+        } else {
+            st.serialize_field("content", &self.blocks)?;
+        }
+        st.end()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,4 +167,45 @@ pub trait ModelProvider: Send + Sync {
         req: TurnRequest,
         cancel: CancellationToken,
     ) -> Result<BoxStream<'static, Result<TurnEvent, ProviderError>>, ProviderError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn plain_message_serialises_as_a_string() {
+        let v = serde_json::to_value(Message::text(Role::User, "hi")).unwrap();
+        assert_eq!(v, json!({"role": "user", "content": "hi"}));
+    }
+
+    #[test]
+    fn tool_round_trip_serialises_as_blocks() {
+        let m = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            blocks: vec![Block::ToolUse {
+                id: "t1".into(),
+                name: "time.now".into(),
+                input: json!({}),
+            }],
+        };
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["content"][0]["type"], "tool_use");
+        let r = Message {
+            role: Role::User,
+            content: String::new(),
+            blocks: vec![Block::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "ok".into(),
+                is_error: false,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&r).unwrap()["content"][0]["type"],
+            "tool_result"
+        );
+        assert!(r.size() >= 2);
+    }
 }

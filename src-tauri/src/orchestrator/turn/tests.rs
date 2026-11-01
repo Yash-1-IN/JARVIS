@@ -520,18 +520,9 @@ async fn second_request_while_busy_is_rejected() {
 fn history_trimming_keeps_budget_and_starts_on_a_user_turn() {
     let big = "x".repeat(HISTORY_CHAR_BUDGET / 2 + 1);
     let mut h = vec![
-        Message {
-            role: Role::User,
-            content: big.clone(),
-        },
-        Message {
-            role: Role::Assistant,
-            content: big.clone(),
-        },
-        Message {
-            role: Role::User,
-            content: "latest".into(),
-        },
+        Message::text(Role::User, big.clone()),
+        Message::text(Role::Assistant, big.clone()),
+        Message::text(Role::User, "latest"),
     ];
     trim_history(&mut h);
     assert_eq!(h.len(), 1);

@@ -257,10 +257,7 @@ impl TurnRunner {
         };
         let messages = {
             let mut h = lock(&self.history);
-            h.push(Message {
-                role: Role::User,
-                content: text,
-            });
+            h.push(Message::text(Role::User, text));
             trim_history(&mut h);
             h.clone()
         };
@@ -275,7 +272,7 @@ impl TurnRunner {
             max_output_tokens: MAX_OUTPUT_TOKENS,
             effort: Effort::Low,
         };
-        let input_chars: usize = req.messages.iter().map(|m| m.content.len()).sum();
+        let input_chars: usize = req.messages.iter().map(Message::size).sum();
         let mut stream = match provider.stream_turn(req, cancel.clone()).await {
             Ok(s) => s,
             Err(e) => {
@@ -334,10 +331,7 @@ impl TurnRunner {
             }
             _ => {}
         }
-        lock(&self.history).push(Message {
-            role: Role::Assistant,
-            content: reply.clone(),
-        });
+        lock(&self.history).push(Message::text(Role::Assistant, reply.clone()));
         *lock(&self.last_reply) = Some(reply);
         self.finish(id, StopReason::End, sink);
     }
@@ -434,11 +428,16 @@ fn estimate_usage(input_chars: usize, output_chars: usize) -> Usage {
 
 /// Drops the oldest messages until the history fits the budget, keeping it starting on a user turn.
 fn trim_history(h: &mut Vec<Message>) {
-    let size = |h: &[Message]| h.iter().map(|m| m.content.len()).sum::<usize>();
+    let size = |h: &[Message]| h.iter().map(Message::size).sum::<usize>();
     while h.len() > 1 && size(h) > HISTORY_CHAR_BUDGET {
         h.remove(0);
     }
-    while h.first().is_some_and(|m| m.role == Role::Assistant) && h.len() > 1 {
+    // Start on a plain user message: never on a reply, or on a tool result whose call was cut.
+    while h
+        .first()
+        .is_some_and(|m| m.role == Role::Assistant || !m.blocks.is_empty())
+        && h.len() > 1
+    {
         h.remove(0);
     }
 }
