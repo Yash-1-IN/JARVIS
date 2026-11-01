@@ -150,6 +150,12 @@ pub fn settings_set(
     Ok(out)
 }
 
+/// Apps that can be put on the allow-list (`AllowedApp.id` is what is checked and launched).
+#[tauri::command]
+pub fn apps_installed(svc: tauri::State<'_, Arc<Services>>) -> Vec<AllowedApp> {
+    svc.apps_installed()
+}
+
 #[tauri::command]
 pub fn usage_get(svc: tauri::State<'_, Arc<Services>>) -> UsageSummary {
     svc.usage(today())

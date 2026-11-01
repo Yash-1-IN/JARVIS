@@ -19,6 +19,7 @@ Spec: `docs/spec.md` §5.
 | `settings_get` | none | `Settings` | M2 |
 | `settings_set` | `patch: SettingsPatch` | `Settings` | M2 |
 | `usage_get` | none | `UsageSummary` | M2 |
+| `apps_installed` | none | `AllowedApp[]` | M4 (backend now, platform list by Dev B) |
 | `activity_list` | `limit: number` (1 to 200), `before?: string` (an `ActivityEntry.id`) | `ActivityEntry[]` newest first | M4 |
 
 Errors are `JarvisError` (`code` from the closed `ErrorCode` enum).
@@ -41,7 +42,7 @@ The command signatures marked M2/M4 are agreed here and implemented in their mil
 - **Voice never approves a `high` risk action** (`allowVoice` is false), and `resolve_approval` is only reachable from the window, so a spoken "yes" cannot call it.
 - `activity.appended` carries one `ActivityEntry` for every tool call, including denied, expired and prohibited ones (`outcome: "not_run"`). `activity_list` pages the same rows newest first. Entries contain what ran, on what and how it ended, **never file contents or arguments**.
 - `ToolDecision`: `auto_allowed`, `approved`, `denied`, `expired`, `prohibited`. `ToolOutcome`: `ok`, `failed`, `timed_out`, `cancelled`, `not_run`. `ToolRisk`: `low`, `medium`, `high`.
-- **Policy settings:** `Settings.allowedFolders` and `allowedApps` replace the whole list when patched; folders are canonicalised and must exist. `autoAllowMedium` is off by default, never applies to `high`, and never applies while the context is tainted.
+- **Policy settings:** `Settings.allowedFolders` replaces the whole list when patched; folders are canonicalised and must exist. `Settings.allowedApps` is a list of `AllowedApp { id, name }`: the **id** is a stable platform id (macOS bundle id, Windows AppUserModelID or canonical .exe path, Linux .desktop id) and is the only thing the gateway checks and `apps.launch` starts; the **name** is display only and never used for matching. `settings_set` accepts only ids that `apps_installed` returns, and takes the display name from that list, so a patch cannot rename an app. Until the platform adapter exists, `apps_installed` is empty and an allow-list cannot be set (clearing it always works). `autoAllowMedium` is off by default, never applies to `high`, and never applies while the context is tainted.
 - `Settings` gained three fields (`allowedFolders`, `allowedApps`, `autoAllowMedium`); the wire change is additive, but code that builds a `Settings` value (mocks, tests) must add them.
 
 ## Channel: per-turn stream

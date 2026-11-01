@@ -2,7 +2,7 @@
 //! The API key is never stored here; it lives in the keychain vault.
 
 use crate::intelligence::pricing::{DEFAULT_MODEL, PriceTable};
-use crate::ipc::types::SettingsPatch;
+use crate::ipc::types::{AllowedApp, SettingsPatch};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -12,7 +12,6 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_CAP_MICRO_USD: u64 = 100_000_000_000;
 pub const MAX_ALLOWED_FOLDERS: usize = 50;
 pub const MAX_ALLOWED_APPS: usize = 100;
-const MAX_APP_NAME_CHARS: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,9 +23,9 @@ pub struct StoredSettings {
     /// Canonical absolute paths the file tools may touch. Older files lack this field.
     #[serde(default)]
     pub allowed_folders: Vec<String>,
-    /// Display names `apps.launch` may start.
+    /// Apps `apps.launch` may start, by stable id (the name is display only).
     #[serde(default)]
-    pub allowed_apps: Vec<String>,
+    pub allowed_apps: Vec<AllowedApp>,
     #[serde(default)]
     pub auto_allow_medium: bool,
 }
@@ -53,8 +52,8 @@ pub enum SettingsError {
     CapTooLarge,
     #[error("`{0}` is not an existing folder given as an absolute path")]
     BadFolder(String),
-    #[error("app names must be 1 to 100 printable characters")]
-    BadApp,
+    #[error("`{0}` is not an installed app")]
+    UnknownApp(String),
     #[error("too many entries in an allow-list")]
     TooMany,
     #[error("settings could not be saved")]
@@ -104,10 +103,23 @@ impl SettingsStore {
     }
 
     /// Validates and applies a patch, then saves. On any error nothing changes.
+    /// Like `apply_with` when no apps are known: any non-empty app list is rejected.
+    #[cfg(test)]
     pub fn apply(
         &self,
         patch: &SettingsPatch,
         prices: &PriceTable,
+    ) -> Result<StoredSettings, SettingsError> {
+        self.apply_with(patch, prices, &[])
+    }
+
+    /// Validates and applies a patch, then saves. `installed` is what `apps_installed`
+    /// returns now: only those ids can be allowed. On any error nothing changes.
+    pub fn apply_with(
+        &self,
+        patch: &SettingsPatch,
+        prices: &PriceTable,
+        installed: &[AllowedApp],
     ) -> Result<StoredSettings, SettingsError> {
         let mut next = self.get();
         if let Some(m) = &patch.model {
@@ -126,7 +138,7 @@ impl SettingsStore {
             next.allowed_folders = canonical_folders(folders)?;
         }
         if let Some(apps) = &patch.allowed_apps {
-            next.allowed_apps = clean_apps(apps)?;
+            next.allowed_apps = resolve_apps(apps, installed)?;
         }
         if let Some(on) = patch.auto_allow_medium {
             next.auto_allow_medium = on;
@@ -182,21 +194,23 @@ fn display_path(p: &Path) -> String {
     }
 }
 
-fn clean_apps(input: &[String]) -> Result<Vec<String>, SettingsError> {
+/// Keeps only ids that are installed, and takes the display name from the installed list
+/// so a patch cannot rename an app or smuggle in a spoofed name (spec §9.3).
+fn resolve_apps(
+    input: &[AllowedApp],
+    installed: &[AllowedApp],
+) -> Result<Vec<AllowedApp>, SettingsError> {
     if input.len() > MAX_ALLOWED_APPS {
         return Err(SettingsError::TooMany);
     }
-    let mut out: Vec<String> = Vec::new();
-    for raw in input {
-        let name = raw.trim();
-        if name.is_empty()
-            || name.chars().count() > MAX_APP_NAME_CHARS
-            || name.chars().any(char::is_control)
-        {
-            return Err(SettingsError::BadApp);
-        }
-        if !out.iter().any(|a| a.eq_ignore_ascii_case(name)) {
-            out.push(name.to_owned());
+    let mut out: Vec<AllowedApp> = Vec::new();
+    for want in input {
+        let app = installed
+            .iter()
+            .find(|a| a.id == want.id)
+            .ok_or_else(|| SettingsError::UnknownApp(want.id.clone()))?;
+        if !out.iter().any(|a| a.id == app.id) {
+            out.push(app.clone());
         }
     }
     Ok(out)
@@ -220,6 +234,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jarvis-test-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("settings.json")
+    }
+
+    fn app(id: &str, name: &str) -> AllowedApp {
+        AllowedApp {
+            id: id.into(),
+            name: name.into(),
+        }
+    }
+
+    fn installed() -> Vec<AllowedApp> {
+        vec![
+            app("com.spotify.client", "Spotify"),
+            app("calc", "Calculator"),
+        ]
     }
 
     fn prices() -> PriceTable {
@@ -335,15 +363,22 @@ mod tests {
         let patch = SettingsPatch {
             allowed_folders: Some(vec![dir.to_string_lossy().into_owned()]),
             allowed_apps: Some(vec![
-                "  Spotify ".into(),
-                "spotify".into(),
-                "Calculator".into(),
+                app("com.spotify.client", "SPOOF"),
+                app("com.spotify.client", "x"),
+                app("calc", ""),
             ]),
             auto_allow_medium: Some(true),
             ..Default::default()
         };
-        let out = s.apply(&patch, &prices()).unwrap();
-        assert_eq!(out.allowed_apps, vec!["Spotify", "Calculator"]);
+        let out = s.apply_with(&patch, &prices(), &installed()).unwrap();
+        // Names come from the installed list, ids are deduplicated.
+        assert_eq!(
+            out.allowed_apps,
+            vec![
+                app("com.spotify.client", "Spotify"),
+                app("calc", "Calculator")
+            ]
+        );
         assert!(out.auto_allow_medium && out.allowed_folders.len() == 1);
         assert_eq!(SettingsStore::load(path, &prices()).get(), out);
         // A file written before these fields existed loads with empty lists.
@@ -397,39 +432,40 @@ mod tests {
     }
 
     #[test]
-    fn app_names_are_validated_and_lists_are_bounded() {
+    fn only_installed_app_ids_can_be_allowed() {
         let s = SettingsStore::load(tmp_path(), &prices());
-        for bad in ["", "   ", "tab\there", &"x".repeat(101)] {
-            let r = s.apply(
-                &SettingsPatch {
-                    allowed_apps: Some(vec![bad.to_string()]),
-                    ..Default::default()
-                },
-                &prices(),
-            );
-            assert_eq!(r, Err(SettingsError::BadApp), "{bad:?}");
+        let patch = |apps: Vec<AllowedApp>| SettingsPatch {
+            allowed_apps: Some(apps),
+            ..Default::default()
+        };
+        // An id that is not installed, or an app known only by name, is refused.
+        for bad in [app("com.evil.fake", "Spotify"), app("Spotify", "Spotify")] {
+            let r = s.apply_with(&patch(vec![bad.clone()]), &prices(), &installed());
+            assert_eq!(r, Err(SettingsError::UnknownApp(bad.id.clone())), "{bad:?}");
         }
-        let many: Vec<String> = (0..=MAX_ALLOWED_APPS).map(|i| format!("app{i}")).collect();
+        // With no installed-app list at all, nothing can be allowed.
+        assert!(matches!(
+            s.apply(&patch(vec![app("calc", "Calculator")]), &prices()),
+            Err(SettingsError::UnknownApp(_))
+        ));
+        // Too many entries.
+        let many: Vec<AllowedApp> = (0..=MAX_ALLOWED_APPS)
+            .map(|i| app(&format!("a{i}"), "x"))
+            .collect();
+        let big: Vec<AllowedApp> = many.clone();
         assert_eq!(
-            s.apply(
-                &SettingsPatch {
-                    allowed_apps: Some(many),
-                    ..Default::default()
-                },
-                &prices()
-            ),
+            s.apply_with(&patch(many), &prices(), &big),
             Err(SettingsError::TooMany)
         );
-        // Clearing is a valid patch.
+        // Clearing is always valid, and a rejected patch left the list as it was.
+        assert!(s.get().allowed_apps.is_empty());
+        s.apply_with(&patch(vec![app("calc", "")]), &prices(), &installed())
+            .unwrap();
         assert!(
-            s.apply(
-                &SettingsPatch {
-                    allowed_apps: Some(vec![]),
-                    ..Default::default()
-                },
-                &prices()
-            )
-            .is_ok()
+            s.apply(&patch(vec![]), &prices())
+                .unwrap()
+                .allowed_apps
+                .is_empty()
         );
     }
 }

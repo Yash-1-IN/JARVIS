@@ -237,6 +237,18 @@ pub struct ApiKeyStatus {
     pub hint: Option<String>,
 }
 
+/// An app the user may allow `apps.launch` to start (spec §9.3: app IDs, never names).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AllowedApp {
+    /// Stable platform id: macOS bundle id, Windows AppUserModelID or canonical .exe
+    /// path, Linux .desktop file id. What the gateway checks and `apps.launch` starts.
+    pub id: String,
+    /// What the UI shows. Never used for matching.
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -254,8 +266,8 @@ pub struct Settings {
     pub monthly_cap_micro_usd: Option<u64>,
     /// Folders the file tools may touch (spec §9.4). Absolute paths; empty means none.
     pub allowed_folders: Vec<String>,
-    /// Apps `apps.launch` may start, by display name. Empty means none.
-    pub allowed_apps: Vec<String>,
+    /// Apps `apps.launch` may start, by stable id. Empty means none.
+    pub allowed_apps: Vec<AllowedApp>,
     /// Let medium-risk actions run without a card when no untrusted content is in the
     /// context. Off by default. Never applies to high risk, and never while tainted.
     pub auto_allow_medium: bool,
@@ -284,10 +296,11 @@ pub struct SettingsPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub allowed_folders: Option<Vec<String>>,
-    /// Replaces the whole list.
+    /// Replaces the whole list. Only ids returned by `apps_installed` are accepted; the
+    /// `name` is taken from that list, not from the patch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub allowed_apps: Option<Vec<String>>,
+    pub allowed_apps: Option<Vec<AllowedApp>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub auto_allow_medium: Option<bool>,
@@ -560,6 +573,12 @@ mod tests {
         .unwrap();
         assert_eq!(p.allowed_folders, Some(vec!["/a".to_string()]));
         assert_eq!(p.allowed_apps, Some(vec![]));
+        let q: SettingsPatch = serde_json::from_str(
+            r#"{"allowedApps":[{"id":"com.spotify.client","name":"Spotify"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(q.allowed_apps.unwrap()[0].id, "com.spotify.client");
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"allowedApps":["Spotify"]}"#).is_err());
         assert_eq!(p.auto_allow_medium, Some(true));
         // A misspelt policy field is an error, not a silent no-op.
         assert!(serde_json::from_str::<SettingsPatch>(r#"{"allowedFolder":["/a"]}"#).is_err());
