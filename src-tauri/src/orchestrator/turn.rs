@@ -242,8 +242,12 @@ impl TurnRunner {
     }
 
     async fn run(&self, id: &str, text: String, cancel: CancellationToken, sink: &dyn TurnSink) {
-        // Local intents never pay cloud latency or cost (spec §3.3).
-        if let Some(intent) = intents::route(&text) {
+        // Local intents never pay cloud latency or cost (spec §3.3). Only the ones that can
+        // be answered here are; time, status, app and file requests go to the model, which
+        // now has the tools for them and whose calls go through the permission gateway.
+        if let Some(intent) = intents::route(&text)
+            && answered_locally(&intent)
+        {
             let reply = self.local_reply(&intent);
             return self.finish_text(id, &reply, sink);
         }
@@ -469,7 +473,7 @@ impl TurnRunner {
             Intent::RepeatLast => lock(&self.last_reply)
                 .clone()
                 .unwrap_or_else(|| "I haven't said anything yet.".into()),
-            _ => "I can't do that yet; it arrives with the tools milestone.".into(),
+            _ => String::new(), // unreachable: `answered_locally` filters the rest out
         }
     }
 
@@ -513,6 +517,12 @@ impl TurnRunner {
             stop_reason: reason,
         });
     }
+}
+
+/// Intents with a complete local answer. Stop, mute and unmute are handled before a turn
+/// starts; the others are for the model and its tools.
+fn answered_locally(intent: &Intent) -> bool {
+    matches!(intent, Intent::WhatCanYouDo | Intent::RepeatLast)
 }
 
 /// Used only when a stream ended without reporting usage (cancelled or failed). Input is
