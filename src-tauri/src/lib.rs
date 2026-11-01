@@ -31,6 +31,8 @@ fn now_secs() -> u64 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Used only from Rust (`platform::dialog`); the webview has no dialog permission.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let log_dir = app.path().app_log_dir()?;
             std::fs::create_dir_all(&log_dir)?;
@@ -154,7 +156,8 @@ pub fn run() {
             ipc::commands::history_get,
             ipc::commands::history_delete_all,
             ipc::commands::history_settings_get,
-            ipc::commands::history_settings_set
+            ipc::commands::history_settings_set,
+            ipc::commands::folder_pick
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

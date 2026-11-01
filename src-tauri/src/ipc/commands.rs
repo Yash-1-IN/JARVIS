@@ -211,6 +211,26 @@ pub fn usage_get(svc: tauri::State<'_, Arc<Services>>) -> UsageSummary {
     svc.usage(today())
 }
 
+/// Opens the OS folder picker and returns the chosen folder, or `None` if the user
+/// cancelled. Nothing is allowed by picking: the window adds the path with
+/// `settings_set`, which validates it like a typed one.
+#[tauri::command]
+pub async fn folder_pick(app: tauri::AppHandle) -> Result<Option<String>, JarvisError> {
+    let Some(path) =
+        crate::platform::dialog::pick_folder(&app, "Choose a folder JARVIS may use").await
+    else {
+        return Ok(None);
+    };
+    crate::platform::dialog::as_setting(&path)
+        .map(Some)
+        .ok_or_else(|| JarvisError {
+            code: ErrorCode::Internal,
+            message: "That folder's name contains characters JARVIS cannot store. Rename it or choose another folder.".into(),
+            retryable: false,
+            request_id: None,
+        })
+}
+
 // No `tracing::instrument` and no logging of arguments: `key` is the API key.
 #[tauri::command]
 pub async fn api_key_set(

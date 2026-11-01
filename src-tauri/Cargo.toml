@@ -41,6 +41,7 @@ sysinfo = { version = "0.40.1", default-features = false, features = ["system", 
 # Battery level and state for system.status, platform/status.rs (maintained fork of `battery`).
 starship-battery = "0.12.0"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
+tauri-plugin-dialog = "2"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

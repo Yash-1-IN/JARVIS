@@ -68,6 +68,12 @@ export interface Transport {
    */
   appsInstalled(): Promise<AllowedApp[]>;
   /**
+   * Contract `folder_pick`: opens the OS folder picker and returns the chosen
+   * absolute path, or null if the user cancelled. Picking allows nothing by
+   * itself; add the path with `updateSettings`, which validates it.
+   */
+  pickFolder(): Promise<string | null>;
+  /**
    * Contract `activity_list`: newest first, at most `limit` (1 to 200); with `before`
    * (an entry id) only older entries. An unknown id gives nothing.
    */

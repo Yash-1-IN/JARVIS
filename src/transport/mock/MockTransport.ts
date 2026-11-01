@@ -438,6 +438,13 @@ export class MockTransport implements Transport {
     return { retention: this.history.retention };
   }
 
+  /** The next `pickFolder` answer; `null` acts like Cancel. */
+  nextPickedFolder: string | null = "/Users/mock/Documents/Mock Folder";
+
+  async pickFolder(): Promise<string | null> {
+    return this.nextPickedFolder;
+  }
+
   /** Dev helper: the model proposes a memory (`memory.propose`), as in a cloud turn. */
   simulateMemoryProposal(): void {
     this.memory.propose("Prefers short answers before 9 am.");
