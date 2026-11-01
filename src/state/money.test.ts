@@ -15,14 +15,21 @@ describe("money helpers", () => {
     expect(parseCapInput("2")).toBe(2_000_000);
     expect(parseCapInput("$2.5")).toBe(2_500_000);
     expect(parseCapInput("0.07")).toBe(70_000);
-    for (const bad of ["-1", "abc", "1.234", "1e3", "1,5"]) {
+    expect(parseCapInput("0.0018")).toBe(1_800);
+    expect(parseCapInput("0.000001")).toBe(1);
+    for (const bad of ["-1", "abc", "0.0000001", "1.", ".5", "1e3", "1,5"]) {
       expect(parseCapInput(bad), bad).toBe("invalid");
     }
   });
 
   it("round-trips a cap through the form", () => {
     expect(capToInput(null)).toBe("");
-    expect(parseCapInput(capToInput(12_340_000))).toBe(12_340_000);
+    expect(capToInput(2_000_000)).toBe("2.00");
+    expect(capToInput(2_500_000)).toBe("2.50");
+    expect(capToInput(1_800)).toBe("0.0018");
+    for (const micro of [0, 1, 1_800, 12_340_000, 123_456_789]) {
+      expect(parseCapInput(capToInput(micro)), String(micro)).toBe(micro);
+    }
   });
 
   it("shows only the time for a reset later today, else the date too", () => {

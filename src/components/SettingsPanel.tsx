@@ -142,7 +142,7 @@ export function SettingsPanel({ transport }: { transport: Transport }) {
     if (d === "invalid" || m === "invalid") {
       setNotice(null);
       setError(
-        "Enter caps as dollar amounts like 2 or 2.50, or leave blank for no cap.",
+        "Enter caps as dollar amounts like 2, 2.50 or 0.0018 (up to 6 decimals), or leave blank for no cap.",
       );
       return;
     }
