@@ -1,10 +1,12 @@
 import { PROTOCOL_VERSION } from "../../protocol";
 import type { PingResponse } from "../../types/generated/PingResponse";
 import type { Snapshot } from "../../types/generated/Snapshot";
-import type { SnapshotListener, Transport } from "../index";
+import type { SnapshotListener, Transport, TurnListener } from "../index";
 import { MOCK_SCRIPTS, type MockScript, type SnapshotPatch } from "./scripts";
 
 const APPROVAL_TTL_MS = 60_000;
+const FIRST_TOKEN_MS = 400;
+const TOKEN_MS = 60;
 
 function initialSnapshot(): Snapshot {
   return {
@@ -29,6 +31,8 @@ export class MockTransport implements Transport {
   private snapshot = initialSnapshot();
   private listeners = new Set<SnapshotListener>();
   private timers: ReturnType<typeof setTimeout>[] = [];
+  private turn: { requestId: string; onEvent: TurnListener } | null = null;
+  private turnCount = 0;
 
   constructor(scripts: readonly MockScript[] = MOCK_SCRIPTS) {
     this.scripts = scripts;
@@ -63,9 +67,49 @@ export class MockTransport implements Transport {
     }
   }
 
+  /** Streams a canned, clearly labelled reply word by word. */
+  async submitText(text: string, onEvent: TurnListener): Promise<string> {
+    this.stop();
+    this.endTurn("cancelled");
+    const requestId = `mock-turn-${++this.turnCount}`;
+    this.turn = { requestId, onEvent };
+    this.apply({
+      phase: "thinking",
+      activeRequestId: requestId,
+      cloudInUse: true,
+      lastError: null,
+    });
+
+    const reply = `(MOCK reply, not a model) You said: "${text.trim()}".`;
+    const words = reply.split(/(?<= )/);
+    words.forEach((word, i) => {
+      this.timers.push(
+        setTimeout(
+          () => onEvent({ type: "text_delta", text: word }),
+          FIRST_TOKEN_MS + i * TOKEN_MS,
+        ),
+      );
+    });
+    this.timers.push(
+      setTimeout(
+        () => {
+          this.endTurn("end");
+          this.apply({
+            phase: "idle",
+            activeRequestId: null,
+            cloudInUse: false,
+          });
+        },
+        FIRST_TOKEN_MS + words.length * TOKEN_MS,
+      ),
+    );
+    return requestId;
+  }
+
   async cancel(requestId: string): Promise<void> {
     if (this.snapshot.activeRequestId !== requestId) return;
     this.stop();
+    this.endTurn("cancelled");
     this.apply({
       phase: "idle",
       activeRequestId: null,
@@ -78,6 +122,11 @@ export class MockTransport implements Transport {
   async setMute(muted: boolean): Promise<void> {
     if (this.snapshot.mic === "unavailable") return;
     this.apply({ mic: muted ? "muted" : "standby" });
+  }
+
+  private endTurn(stopReason: "end" | "cancelled"): void {
+    this.turn?.onEvent({ type: "done", stopReason });
+    this.turn = null;
   }
 
   stop(): void {

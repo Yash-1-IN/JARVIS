@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantPhase } from "../../types/generated/AssistantPhase";
 import type { Snapshot } from "../../types/generated/Snapshot";
+import type { TurnStreamEvent } from "../../types/generated/TurnStreamEvent";
 import { MockTransport } from "./MockTransport";
 import { MOCK_SCRIPTS } from "./scripts";
 
@@ -130,5 +131,54 @@ describe("MockTransport commands", () => {
     expect((await t.getSnapshot()).mic).toBe("muted");
     await t.setMute(false);
     expect((await t.getSnapshot()).mic).toBe("standby");
+  });
+});
+
+describe("MockTransport submitText", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("streams deltas then exactly one done, and drives the snapshot", async () => {
+    const t = new MockTransport();
+    const snaps = record(t);
+    const events: TurnStreamEvent[] = [];
+    const id = await t.submitText("hello", (e) => events.push(e));
+    expect(snaps[snaps.length - 1]).toMatchObject({
+      phase: "thinking",
+      activeRequestId: id,
+      cloudInUse: true,
+    });
+
+    vi.advanceTimersByTime(60_000);
+    const text = events
+      .filter((e) => e.type === "text_delta")
+      .map((e) => (e.type === "text_delta" ? e.text : ""))
+      .join("");
+    expect(text).toContain("MOCK");
+    expect(text).toContain('"hello"');
+    expect(events.filter((e) => e.type === "done")).toEqual([
+      { type: "done", stopReason: "end" },
+    ]);
+    expect(events[events.length - 1].type).toBe("done");
+    expect(snaps[snaps.length - 1]).toMatchObject({
+      phase: "idle",
+      activeRequestId: null,
+      cloudInUse: false,
+    });
+  });
+
+  it("cancel ends the stream with done cancelled and no more deltas", async () => {
+    const t = new MockTransport();
+    const events: TurnStreamEvent[] = [];
+    const id = await t.submitText("hello there", (e) => events.push(e));
+    vi.advanceTimersByTime(500);
+    await t.cancel(id);
+    const count = events.length;
+    vi.advanceTimersByTime(60_000);
+    expect(events).toHaveLength(count);
+    expect(events[count - 1]).toEqual({
+      type: "done",
+      stopReason: "cancelled",
+    });
   });
 });

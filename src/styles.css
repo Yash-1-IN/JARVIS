@@ -30,3 +30,30 @@ kbd {
   font-size: 0.75em;
   opacity: 0.75;
 }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.chat-log {
+  list-style: none;
+  padding: 0;
+}
+
+.chat-user {
+  font-weight: 600;
+}
+
+.chat-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.chat-form input {
+  flex: 1;
+}

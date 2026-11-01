@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Chat } from "./components/Chat";
 import { Controls } from "./components/Controls";
 import { MockBadge } from "./components/MockBadge";
 import { MockControls } from "./components/MockControls";
 import { StatusPanel } from "./components/StatusPanel";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { PROTOCOL_VERSION } from "./protocol";
+import { useChatStore } from "./state/chatStore";
 import { useSnapshotStore } from "./state/snapshotStore";
 import type { Transport } from "./transport";
 import type { MockTransport } from "./transport/mock/MockTransport";
@@ -33,6 +35,27 @@ export default function App({ transport }: { transport: Transport }) {
     if (mic && mic !== "unavailable") run(transport.setMute(mic !== "muted"));
   }, [transport, run]);
   useShortcuts({ onCancel, onToggleMute });
+
+  const turns = useChatStore((s) => s.turns);
+  const nextKey = useRef(0);
+  const onSubmitText = useCallback(
+    (text: string) => {
+      const chat = useChatStore.getState();
+      const key = `turn-${++nextKey.current}`;
+      chat.start(key, text);
+      setCommandError(null);
+      transport
+        .submitText(text, (event) => useChatStore.getState().apply(key, event))
+        .then((requestId) =>
+          useChatStore.getState().setRequestId(key, requestId),
+        )
+        .catch((e: unknown) => {
+          useChatStore.getState().fail(key);
+          setCommandError(String(e));
+        });
+    },
+    [transport],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +94,11 @@ export default function App({ transport }: { transport: Transport }) {
             snapshot={snapshot}
             onCancel={onCancel}
             onToggleMute={onToggleMute}
+          />
+          <Chat
+            turns={turns}
+            busy={snapshot.activeRequestId !== null}
+            onSubmit={onSubmitText}
           />
         </>
       )}

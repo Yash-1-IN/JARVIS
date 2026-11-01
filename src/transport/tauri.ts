@@ -1,7 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { PingResponse } from "../types/generated/PingResponse";
 import type { Snapshot } from "../types/generated/Snapshot";
-import type { SnapshotListener, Transport } from "./index";
+import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
+import type { SnapshotListener, Transport, TurnListener } from "./index";
 
 export class TauriTransport implements Transport {
   readonly isMock = false;
@@ -25,6 +26,12 @@ export class TauriTransport implements Transport {
   // Rust in M2; until then these reject and the UI shows the error.
   cancel(requestId: string): Promise<void> {
     return invoke("cancel", { requestId });
+  }
+
+  submitText(text: string, onEvent: TurnListener): Promise<string> {
+    const channel = new Channel<TurnStreamEvent>();
+    channel.onmessage = onEvent;
+    return invoke<string>("submit_text", { text, onEvent: channel });
   }
 
   setMute(muted: boolean): Promise<void> {
