@@ -15,7 +15,7 @@ Tauri 2 and Rust on the backend, React and TypeScript on the front.
 - Settings for the model, caps, allowed folders and allowed apps.
 - Tools the model can ask for, all gated by a permission layer in Rust: `time.now`, `files.search`,
   `files.read_text`, `files.move` and `files.rename`. Anything that changes or reads your files needs your
-  approval first (the backend is done; the on-screen approval card is still being built); approvals are single-use and expire after 60 seconds.
+  approval first, on an approval card; approvals are single-use and expire after 60 seconds.
 
 ## What does not work yet
 
