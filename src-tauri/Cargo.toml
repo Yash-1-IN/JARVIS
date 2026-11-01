@@ -37,6 +37,15 @@ keyring = "4.2.0"
 zeroize = "1.9.1"
 
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Info.plist (binary or XML) for app bundle ids, platform/apps.rs.
+plist = "1.10.3"
+
+[target.'cfg(windows)'.dependencies]
+# Start-menu shortcuts to their .exe targets, platform/apps.rs.
+lnk = "0.6.4"
+
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1

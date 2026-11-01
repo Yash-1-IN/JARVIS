@@ -11,7 +11,7 @@ use intelligence::pricing::PriceTable;
 use intelligence::spend::{Caps, Day, SpendMeter};
 use orchestrator::turn::TurnRunner;
 use platform::keychain::ApiKeyVault;
-use services::{NoApps, Services};
+use services::Services;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
@@ -50,7 +50,7 @@ pub fn run() {
                 )),
                 api_base_url: ANTHROPIC_API.into(),
                 // TODO(Dev B, platform/): the per-OS installed-apps list; until then no app can be allowed.
-                installed: Arc::new(NoApps),
+                installed: Arc::new(platform::apps::PlatformApps::new()),
             });
             svc.apply_saved_caps();
 
