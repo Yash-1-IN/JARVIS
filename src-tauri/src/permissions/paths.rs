@@ -46,6 +46,24 @@ impl PathScope {
         Self { roots }
     }
 
+    /// The canonical allowed roots.
+    pub fn roots(&self) -> Vec<PathBuf> {
+        self.roots.iter().map(|(r, _)| r.clone()).collect()
+    }
+
+    /// True if `p` (canonical) is one of the allowed roots itself. A root may be read from
+    /// and moved into, but never moved or renamed.
+    pub fn is_root(&self, p: &Path) -> bool {
+        self.roots
+            .iter()
+            .any(|(r, ci)| within(r, p, *ci) && within(p, r, *ci))
+    }
+
+    /// A single file name that is valid for this OS (see `valid_leaf_name`).
+    pub fn leaf_ok(name: &str) -> bool {
+        valid_leaf_name(name, cfg!(windows))
+    }
+
     /// An existing file or folder inside the roots. Returns its canonical path.
     pub fn check_existing(&self, raw: &str) -> Result<PathBuf, PathError> {
         let p = pre_check(raw)?;
