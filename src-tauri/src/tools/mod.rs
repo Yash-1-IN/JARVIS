@@ -8,7 +8,12 @@
 // Wired into the turn runner by the next M4 PR.
 #![allow(dead_code)]
 
+pub mod adapters;
+pub mod apps;
 pub mod files;
+pub mod memory;
+pub mod ports;
+pub mod status;
 pub mod timenow;
 
 use crate::intelligence::provider::ToolSpec;
@@ -76,6 +81,9 @@ pub struct ToolOutput {
 pub struct ToolContext {
     pub scope: PathScope,
     pub now_secs: Arc<dyn Fn() -> u64 + Send + Sync>,
+    /// The apps the user allowed in settings (ids come from the platform's installed list).
+    pub apps: Vec<crate::ipc::types::AllowedApp>,
+    pub ports: Arc<ports::Ports>,
 }
 
 #[async_trait]
@@ -146,18 +154,16 @@ impl Registry {
         r.register(Arc::new(files::FilesReadText));
         r.register(Arc::new(files::FilesMove));
         r.register(Arc::new(files::FilesRename));
+        r.register(Arc::new(apps::AppsListAllowed));
+        r.register(Arc::new(apps::AppsLaunch));
+        r.register(Arc::new(status::SystemStatusTool));
+        r.register(Arc::new(memory::MemoryPropose));
         r
     }
 
     /// Every tool implemented so far (tests, and the future full set).
     pub fn alpha() -> Self {
-        let mut r = Self::new();
-        r.register(Arc::new(timenow::TimeNow));
-        r.register(Arc::new(files::FilesSearch));
-        r.register(Arc::new(files::FilesReadText));
-        r.register(Arc::new(files::FilesMove));
-        r.register(Arc::new(files::FilesRename));
-        r
+        Self::wired()
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {

@@ -634,6 +634,8 @@ fn tooled(
         context: Box::new(move || ToolContext {
             scope: PathScope::new(&roots),
             now_secs: Arc::new(|| NOW),
+            apps: vec![],
+            ports: Arc::new(crate::tools::ports::Ports::placeholders()),
         }),
     }));
     (

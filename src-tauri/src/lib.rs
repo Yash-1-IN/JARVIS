@@ -63,6 +63,7 @@ pub fn run() {
                 Box::new(|| now_secs() * 1000),
                 activity.clone(),
             ));
+            let ports = Arc::new(tools::adapters::platform_ports());
             let for_tools = svc.clone();
             let for_gateway = gateway.clone();
             let tools = orchestrator::turn::ToolWiring {
@@ -77,6 +78,8 @@ pub fn run() {
                     tools::ToolContext {
                         scope: permissions::paths::PathScope::new(&s.allowed_folders),
                         now_secs: Arc::new(now_secs),
+                        apps: s.allowed_apps,
+                        ports: ports.clone(),
                     }
                 }),
             };

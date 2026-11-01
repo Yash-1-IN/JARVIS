@@ -23,6 +23,8 @@ fn ctx_for(roots: &[&Path]) -> ToolContext {
     ToolContext {
         scope: PathScope::new(&roots),
         now_secs: Arc::new(|| 1_793_491_200),
+        apps: vec![],
+        ports: Arc::new(ports::Ports::placeholders()),
     }
 }
 
@@ -409,10 +411,14 @@ fn registry_only_holds_tools_the_gateway_knows_and_schemas_are_strict() {
     assert_eq!(
         reg.names(),
         [
+            "apps.launch",
+            "apps.list_allowed",
             "files.move",
             "files.read_text",
             "files.rename",
             "files.search",
+            "memory.propose",
+            "system.status",
             "time.now"
         ]
     );
@@ -709,16 +715,276 @@ async fn a_timeout_cancels_the_token_the_tool_was_given() {
 }
 
 #[test]
-fn the_wired_set_is_the_five_implemented_tools() {
-    let names = Registry::wired().names();
-    assert_eq!(
-        names,
-        vec![
-            "files.move",
-            "files.read_text",
-            "files.rename",
-            "files.search",
-            "time.now"
-        ]
+fn the_wired_set_is_every_tool_the_gateway_knows() {
+    let mut known: Vec<&str> = crate::permissions::gateway::ALPHA_TOOLS.to_vec();
+    known.sort_unstable();
+    assert_eq!(Registry::wired().names(), known);
+}
+
+// ----------------------------------------------------------------------------- apps, status, memory
+
+use super::ports::{AppLauncher, MemoryInbox, MemoryProposals, Ports, StatusSource, SystemStatus};
+use crate::ipc::types::AllowedApp;
+use std::sync::Mutex as StdMutex;
+
+struct FakeLauncher(StdMutex<Vec<String>>);
+impl AppLauncher for FakeLauncher {
+    fn launch(&self, id: &str) -> std::io::Result<()> {
+        self.0.lock().unwrap().push(id.to_owned());
+        Ok(())
+    }
+}
+struct Status(Option<SystemStatus>);
+impl StatusSource for Status {
+    fn sample(&self) -> Option<SystemStatus> {
+        self.0.clone()
+    }
+}
+
+fn app(id: &str, name: &str) -> AllowedApp {
+    AllowedApp {
+        id: id.into(),
+        name: name.into(),
+    }
+}
+
+fn ctx_with(apps: Vec<AllowedApp>, ports: Ports) -> ToolContext {
+    ToolContext {
+        apps,
+        ports: Arc::new(ports),
+        ..ctx_for(&[])
+    }
+}
+
+fn ports(l: Arc<FakeLauncher>) -> Ports {
+    Ports {
+        launcher: l,
+        ..Ports::placeholders()
+    }
+}
+
+#[tokio::test]
+async fn list_allowed_shows_names_with_ids_and_takes_no_arguments() {
+    let ctx = ctx_with(
+        vec![app("com.spotify.client", "Spotify")],
+        Ports::placeholders(),
     );
+    let out = run(&apps::AppsListAllowed, json!({}), &ctx).await.unwrap();
+    assert!(out.text.contains("Spotify") && out.text.contains("com.spotify.client"));
+    assert!(!out.external_content);
+    assert!(matches!(
+        run(&apps::AppsListAllowed, json!({"x": 1}), &ctx).await,
+        Err(ToolError::Invalid(_))
+    ));
+    let empty = run(&apps::AppsListAllowed, json!({}), &ctx_for(&[]))
+        .await
+        .unwrap();
+    assert!(empty.text.contains("No apps are allowed"));
+}
+
+#[tokio::test]
+async fn launch_opens_only_an_allowed_app_by_exact_id() {
+    let l = Arc::new(FakeLauncher(StdMutex::new(vec![])));
+    let ctx = ctx_with(vec![app("com.spotify.client", "Spotify")], ports(l.clone()));
+    let p = apps::AppsLaunch
+        .prepare(&json!({"id": "com.spotify.client"}), &ctx)
+        .unwrap();
+    assert_eq!(p.targets, vec!["com.spotify.client"]);
+    assert!(p.summary.contains("Spotify"));
+    let out = run(&apps::AppsLaunch, json!({"id": "com.spotify.client"}), &ctx)
+        .await
+        .unwrap();
+    assert!(out.text.contains("Opened Spotify"));
+    assert_eq!(*l.0.lock().unwrap(), vec!["com.spotify.client"]);
+}
+
+#[tokio::test]
+async fn launch_refuses_names_unknown_ids_and_extra_arguments() {
+    let l = Arc::new(FakeLauncher(StdMutex::new(vec![])));
+    let ctx = ctx_with(vec![app("com.spotify.client", "Spotify")], ports(l.clone()));
+    // A display name is never an id; a near miss is not a match either.
+    for id in [
+        "Spotify",
+        "com.spotify.client ",
+        "COM.SPOTIFY.CLIENT",
+        "/bin/sh",
+    ] {
+        assert!(matches!(
+            apps::AppsLaunch.prepare(&json!({"id": id}), &ctx),
+            Err(ToolError::NotAllowed(_))
+        ));
+        assert!(matches!(
+            run(&apps::AppsLaunch, json!({"id": id}), &ctx).await,
+            Err(ToolError::NotAllowed(_))
+        ));
+    }
+    assert!(matches!(
+        apps::AppsLaunch.prepare(
+            &json!({"id": "com.spotify.client", "args": ["--evil"]}),
+            &ctx
+        ),
+        Err(ToolError::Invalid(_))
+    ));
+    assert!(matches!(
+        apps::AppsLaunch.prepare(&json!({}), &ctx),
+        Err(ToolError::Invalid(_))
+    ));
+    assert!(l.0.lock().unwrap().is_empty(), "nothing was launched");
+}
+
+#[tokio::test]
+async fn launch_rechecks_the_allow_list_when_it_runs() {
+    let l = Arc::new(FakeLauncher(StdMutex::new(vec![])));
+    // Proposed while allowed, executed after the user removed it in settings.
+    let before = ctx_with(vec![app("a", "A")], ports(l.clone()));
+    assert!(
+        apps::AppsLaunch
+            .prepare(&json!({"id": "a"}), &before)
+            .is_ok()
+    );
+    let after = ctx_with(vec![], ports(l.clone()));
+    assert!(matches!(
+        run(&apps::AppsLaunch, json!({"id": "a"}), &after).await,
+        Err(ToolError::NotAllowed(_))
+    ));
+    assert!(l.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn launch_says_so_when_this_build_cannot_open_apps() {
+    let ctx = ctx_with(vec![app("a", "A")], Ports::placeholders());
+    assert!(matches!(
+        run(&apps::AppsLaunch, json!({"id": "a"}), &ctx).await,
+        Err(ToolError::Unavailable(_))
+    ));
+}
+
+#[tokio::test]
+async fn launch_honours_cancellation() {
+    let ctx = ctx_with(vec![app("a", "A")], Ports::placeholders());
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    assert_eq!(
+        execute(&apps::AppsLaunch, &json!({"id": "a"}), &ctx, &cancel)
+            .await
+            .unwrap_err(),
+        ToolError::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn status_reports_what_the_platform_gives_and_nothing_else() {
+    let s = SystemStatus {
+        cpu_percent: Some(12.4),
+        memory_used_mb: Some(6000),
+        memory_total_mb: Some(16000),
+        battery_percent: Some(81),
+        charging: Some(true),
+        online: Some(true),
+    };
+    let ctx = ctx_with(
+        vec![],
+        Ports {
+            status: Arc::new(Status(Some(s))),
+            ..Ports::placeholders()
+        },
+    );
+    let out = run(&status::SystemStatusTool, json!({}), &ctx)
+        .await
+        .unwrap();
+    assert!(out.text.contains("CPU: 12% busy"));
+    assert!(out.text.contains("Memory: 6000 MB used of 16000 MB"));
+    assert!(out.text.contains("Battery: 81%, charging"));
+    assert!(out.text.contains("Network: online"));
+    assert!(!out.external_content);
+    // A desktop with no battery simply omits the line.
+    let d = status::describe(&SystemStatus {
+        cpu_percent: Some(1.0),
+        ..Default::default()
+    });
+    assert!(!d.contains("Battery"));
+    assert!(matches!(
+        run(&status::SystemStatusTool, json!({"a": 1}), &ctx).await,
+        Err(ToolError::Invalid(_))
+    ));
+}
+
+#[tokio::test]
+async fn status_is_unavailable_until_the_platform_adapter_exists() {
+    let ctx = ctx_with(vec![], Ports::placeholders());
+    assert!(matches!(
+        run(&status::SystemStatusTool, json!({}), &ctx).await,
+        Err(ToolError::Unavailable(_))
+    ));
+}
+
+#[tokio::test]
+async fn status_honours_cancellation() {
+    let ctx = ctx_with(vec![], Ports::placeholders());
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    assert_eq!(
+        execute(&status::SystemStatusTool, &json!({}), &ctx, &cancel)
+            .await
+            .unwrap_err(),
+        ToolError::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn memory_propose_stores_a_cleaned_proposal_and_never_echoes_it() {
+    let inbox = Arc::new(MemoryProposals::new(2));
+    let ctx = ctx_with(
+        vec![],
+        Ports {
+            memory: inbox.clone(),
+            ..Ports::placeholders()
+        },
+    );
+    let a = json!({"text": "  Prefers\n dark   mode\u{7} "});
+    let p = memory::MemoryPropose.prepare(&a, &ctx).unwrap();
+    assert!(!p.summary.to_lowercase().contains("dark"));
+    run(&memory::MemoryPropose, a, &ctx).await.unwrap();
+    assert_eq!(inbox.list()[0].1, "Prefers dark mode");
+    // The same text twice is one proposal.
+    run(
+        &memory::MemoryPropose,
+        json!({"text": "Prefers dark mode"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(inbox.list().len(), 1);
+}
+
+#[tokio::test]
+async fn memory_propose_rejects_empty_long_unknown_fields_and_a_full_inbox() {
+    let inbox = Arc::new(MemoryProposals::new(1));
+    let ctx = ctx_with(
+        vec![],
+        Ports {
+            memory: inbox.clone(),
+            ..Ports::placeholders()
+        },
+    );
+    for bad in [
+        json!({"text": "   "}),
+        json!({"text": "x".repeat(501)}),
+        json!({"text": "a", "k": 1}),
+        json!({}),
+    ] {
+        assert!(matches!(
+            memory::MemoryPropose.prepare(&bad, &ctx),
+            Err(ToolError::Invalid(_))
+        ));
+    }
+    run(&memory::MemoryPropose, json!({"text": "one"}), &ctx)
+        .await
+        .unwrap();
+    assert!(matches!(
+        run(&memory::MemoryPropose, json!({"text": "two"}), &ctx).await,
+        Err(ToolError::Failed(_))
+    ));
+    assert_eq!(inbox.list().len(), 1);
+    let _: &dyn MemoryInbox = inbox.as_ref();
 }
