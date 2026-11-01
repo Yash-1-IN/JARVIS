@@ -28,6 +28,8 @@ pub fn run() {
         orch.clone(),
         spend,
         Box::new(|| None),
+        // TODO(#11 wiring): replace with `settings_get().model` and the price from
+        // `resources/pricing.json` when the API key is wired (D-16). Never ship hard-coded.
         TurnConfig {
             model: "claude-haiku-5-5".into(),
             price: Price {

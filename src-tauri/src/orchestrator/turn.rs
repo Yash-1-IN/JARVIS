@@ -262,7 +262,10 @@ impl TurnRunner {
         let input_chars: usize = req.messages.iter().map(|m| m.content.len()).sum();
         let mut stream = match provider.stream_turn(req, cancel.clone()).await {
             Ok(s) => s,
-            Err(e) => return self.provider_failed(id, &e, sink),
+            Err(e) => {
+                self.drop_dangling_user();
+                return self.provider_failed(id, &e, sink);
+            }
         };
         let mut reply = String::new();
         let mut reported: Option<Usage> = None;
@@ -276,6 +279,7 @@ impl TurnRunner {
                 Ok(TurnEvent::Done { usage: u, .. }) => reported = Some(u),
                 Err(e) => {
                     self.record(reported, input_chars, reply.len());
+                    self.drop_dangling_user();
                     return self.provider_failed(id, &e, sink);
                 }
             }
@@ -287,6 +291,15 @@ impl TurnRunner {
         });
         *lock(&self.last_reply) = Some(reply);
         self.finish(id, StopReason::End, sink);
+    }
+
+    /// A failed or cancelled turn has no reply, so its user message is removed again:
+    /// history stays alternating, and a Retry that resends the text does not duplicate it.
+    fn drop_dangling_user(&self) {
+        let mut h = lock(&self.history);
+        if h.last().is_some_and(|m| m.role == Role::User) {
+            h.pop();
+        }
     }
 
     /// Records spend. A cancelled or failed stream never reports usage, so it is

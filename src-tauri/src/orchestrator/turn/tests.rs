@@ -181,6 +181,46 @@ async fn history_is_sent_on_the_next_turn() {
 }
 
 #[tokio::test]
+async fn failed_turn_leaves_no_dangling_user_message() {
+    // First turn fails; the retry of the same text must be sent once, not twice.
+    let fail = Fake::new(Script::FailAfterText(ProviderError::Offline));
+    let (r, _, _) = runner(Some(fail.clone()), Caps::default());
+    let a = Arc::new(Rec::default());
+    r.start("same question".into(), a.clone()).unwrap();
+    a.wait_done().await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(
+        lock(&r.history).is_empty(),
+        "history: {:?}",
+        lock(&r.history)
+    );
+    let b = Arc::new(Rec::default());
+    r.start("same question".into(), b.clone()).unwrap();
+    b.wait_done().await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let seen = lock(&fail.seen);
+    assert_eq!(seen[1].messages.len(), 1);
+    assert_eq!(seen[1].messages[0].content, "same question");
+}
+
+#[tokio::test]
+async fn cancelled_turn_leaves_no_dangling_user_message() {
+    let (r, _, _) = runner(Some(Fake::new(Script::HangAfterText)), Caps::default());
+    let a = Arc::new(Rec::default());
+    r.start("long answer please".into(), a.clone()).unwrap();
+    for _ in 0..100 {
+        if a.text() == "Hi" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    r.start("stop".into(), Arc::new(Rec::default())).unwrap();
+    a.wait_done().await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(lock(&r.history).is_empty());
+}
+
+#[tokio::test]
 async fn local_intent_never_calls_the_provider() {
     let fake = Fake::new(Script::Ok(vec!["cloud"], Usage::default()));
     let (r, _, _) = runner(Some(fake.clone()), Caps::default());

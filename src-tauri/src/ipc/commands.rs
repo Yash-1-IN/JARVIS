@@ -90,8 +90,10 @@ pub fn cancel(
 
 /// Starts a text turn and returns its request id at once; events stream on `on_event`
 /// and always end with exactly one `done`.
+// `async` so Tauri runs it on its Tokio runtime: a plain `fn` command runs on the main
+// thread, which has no runtime, and `TurnRunner::start` spawns a task.
 #[tauri::command]
-pub fn submit_text(
+pub async fn submit_text(
     app: tauri::AppHandle,
     runner: tauri::State<'_, Arc<TurnRunner>>,
     text: String,
