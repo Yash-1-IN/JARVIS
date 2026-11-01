@@ -59,6 +59,8 @@ fn no_folders(ctx: &ToolContext) -> Result<(), ToolError> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SearchArgs {
+    /// Empty (or left out) lists the top level of the folder instead of searching.
+    #[serde(default)]
     query: String,
     #[serde(default)]
     folder: Option<String>,
@@ -72,9 +74,9 @@ fn search_inputs(
 ) -> Result<(String, Vec<PathBuf>, usize), ToolError> {
     no_folders(ctx)?;
     let q = a.query.trim();
-    if q.is_empty() || q.chars().count() > MAX_QUERY_CHARS || q.chars().any(char::is_control) {
+    if q.chars().count() > MAX_QUERY_CHARS || q.chars().any(char::is_control) {
         return Err(ToolError::Invalid(
-            "The search text must be 1 to 100 printable characters.".into(),
+            "The search text must be at most 100 printable characters.".into(),
         ));
     }
     let roots = match &a.folder {
@@ -92,7 +94,8 @@ fn search_inputs(
 }
 
 /// Name search below the roots. Symlinks are skipped (never followed) and the walk is
-/// bounded in depth and in entries visited.
+/// bounded in depth and in entries visited. An empty `needle` lists only the top level of
+/// each root, without going into sub-folders.
 fn search(
     roots: Vec<PathBuf>,
     needle: &str,
@@ -100,6 +103,7 @@ fn search(
     cancel: &CancellationToken,
 ) -> Result<(Vec<(bool, PathBuf)>, bool), ToolError> {
     let mut found = Vec::new();
+    let list_only = needle.is_empty();
     let (mut visited, mut truncated) = (0usize, false);
     let mut stack: Vec<(PathBuf, usize)> = roots.into_iter().map(|r| (r, 0)).collect();
     while let Some((dir, depth)) = stack.pop() {
@@ -130,7 +134,7 @@ fn search(
                 }
                 found.push((is_dir, e.path()));
             }
-            if is_dir && depth < MAX_SEARCH_DEPTH {
+            if is_dir && !list_only && depth < MAX_SEARCH_DEPTH {
                 stack.push((e.path(), depth + 1));
             }
         }
@@ -146,17 +150,16 @@ impl Tool for FilesSearch {
         "files.search"
     }
     fn description(&self) -> &'static str {
-        "Find files and folders by part of their name inside the folders the user allowed. Names only, never contents."
+        "Find files and folders by part of their name inside the folders the user allowed, or list what is in a folder by leaving the query empty. Names only, never contents."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "query": { "type": "string", "description": "Part of the name to look for (1 to 100 characters)." },
+                "query": { "type": "string", "description": "Part of the name to look for (up to 100 characters). Leave empty to list the top level of the folder." },
                 "folder": { "type": "string", "description": "Optional absolute path of an allowed folder to search; default is all allowed folders." },
                 "max_results": { "type": "integer", "minimum": 1, "maximum": 50 }
             },
-            "required": ["query"],
             "additionalProperties": false
         })
     }
@@ -172,10 +175,14 @@ impl Tool for FilesSearch {
         Ok(Prepared {
             arg_risk: None,
             targets: roots.iter().map(|r| display_path(r)).collect(),
-            summary: format!(
-                "Search for files named \"{}\"",
-                clean_for_summary(a.query.trim())
-            ),
+            summary: if a.query.trim().is_empty() {
+                "List what is in the allowed folder".to_owned()
+            } else {
+                format!(
+                    "Search for files named \"{}\"",
+                    clean_for_summary(a.query.trim())
+                )
+            },
         })
     }
     async fn run(
