@@ -1521,3 +1521,26 @@ async fn cancel_active_stops_the_running_turn_and_says_so_only_once() {
         "nothing left to cancel"
     );
 }
+
+#[tokio::test]
+async fn the_persona_describes_the_tools_and_how_to_handle_remember_requests() {
+    let fake = Fake::new(Script::Ok(vec!["Hi."], Usage::default()));
+    let (r, _, _) = runner(Some(fake.clone()), Caps::default());
+    let sink = Arc::new(Rec::default());
+    r.start("hello".into(), sink.clone()).unwrap();
+    sink.wait_done().await;
+    let system = lock(&fake.seen)[0].system.clone();
+    assert!(system.contains("memory.propose"), "{system}");
+    assert!(system.contains("do not refuse"), "{system}");
+    // The character: dry and short, not a corporate assistant.
+    assert!(system.contains("dry-witted"), "{system}");
+    assert!(system.contains("Never open with \"Certainly\""), "{system}");
+    assert!(system.contains("Never lecture, moralise"), "{system}");
+    assert!(
+        system.contains("Do not suggest memories on your own"),
+        "{system}"
+    );
+    // The old line that said it could only chat is gone.
+    assert!(!system.contains("only chat"), "{system}");
+    assert!(!system.contains("cannot yet open apps"), "{system}");
+}
