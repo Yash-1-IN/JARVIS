@@ -8,19 +8,26 @@ export function formatUsd(micro: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-/** Cap as typed in the form: empty means "no cap". */
+/**
+ * Cap as typed in the form: empty means "no cap". Keeps every significant
+ * decimal (down to micro-dollars) so a sub-cent cap is not shown as 0.00.
+ */
 export function capToInput(micro: number | null): string {
-  return micro === null ? "" : (micro / MICRO).toFixed(2);
+  if (micro === null) return "";
+  const s = (micro / MICRO).toFixed(6).replace(/0+$/, "");
+  const [whole, frac = ""] = s.split(".");
+  return `${whole}.${frac.padEnd(2, "0")}`;
 }
 
 /**
- * Parses a dollar amount typed by the user. Returns null for "no cap", a
- * micro-dollar integer, or "invalid".
+ * Parses a dollar amount typed by the user, up to 6 decimals (micro-dollars,
+ * the contract's unit). Returns null for "no cap", a micro-dollar integer, or
+ * "invalid".
  */
 export function parseCapInput(raw: string): number | null | "invalid" {
   const s = raw.trim().replace(/^\$/, "");
   if (s === "") return null;
-  if (!/^\d+(\.\d{1,2})?$/.test(s)) return "invalid";
+  if (!/^\d+(\.\d{1,6})?$/.test(s)) return "invalid";
   const micro = Math.round(Number(s) * MICRO);
   return Number.isSafeInteger(micro) ? micro : "invalid";
 }
