@@ -1,4 +1,5 @@
 import { z } from "zod";
+import approvalHigh from "./scripts/approval-high.json";
 import approval from "./scripts/approval.json";
 import error from "./scripts/error.json";
 import interrupt from "./scripts/interrupt.json";
@@ -89,4 +90,5 @@ export const MOCK_SCRIPTS: readonly MockScript[] = [
   error,
   offline,
   approval,
+  approvalHigh,
 ].map((s) => mockScript.parse(s));

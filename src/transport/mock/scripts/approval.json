@@ -1,6 +1,6 @@
 {
   "name": "approval",
-  "description": "A medium-risk tool call waits for approval, then runs.",
+  "description": "A medium-risk tool call waits for your decision on the approval card.",
   "steps": [
     {
       "delayMs": 0,
@@ -34,9 +34,6 @@
           }
         ]
       }
-    },
-    { "delayMs": 4000, "patch": { "phase": "acting", "pendingApprovals": [] } },
-    { "delayMs": 1500, "patch": { "phase": "thinking" } },
-    { "delayMs": 1000, "patch": { "phase": "idle", "activeRequestId": null } }
+    }
   ]
 }
