@@ -13,7 +13,7 @@ Spec: `docs/spec.md` §5.
 | `submit_text` | `text: string`, `onEvent: Channel<TurnStreamEvent>` | `requestId: string` | M2 |
 | `cancel` | `requestId: string` | `void` | M2 |
 | `set_mute` | `muted: boolean` | `void` | M2 |
-| `resolve_approval` | `ApprovalDecision` | `void` | M4 |
+| `resolve_approval` | `decision: ApprovalDecision` (call `invoke("resolve_approval", { decision })`) | `void` | M4 |
 | `api_key_set` | `key: string` | `ApiKeyStatus` | M2 |
 | `api_key_clear` | none | `ApiKeyStatus` | M2 |
 | `settings_get` | none | `Settings` | M2 |
