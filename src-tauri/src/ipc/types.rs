@@ -147,8 +147,167 @@ pub struct Envelope<P> {
     /// Unix milliseconds.
     #[ts(type = "number")]
     pub ts: u64,
-    pub kind: String,
+    pub kind: EventKind,
     pub payload: P,
+}
+
+/// Closed set of broadcast event kinds, so the frontend can switch exhaustively.
+/// The wire value is the dotted name; the Tauri event name replaces `.` with `_`
+/// because Tauri event names cannot contain a dot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum EventKind {
+    #[serde(rename = "state.snapshot")]
+    #[ts(rename = "state.snapshot")]
+    StateSnapshot,
+    #[serde(rename = "activity.appended")]
+    #[ts(rename = "activity.appended")]
+    ActivityAppended,
+    #[serde(rename = "approval.requested")]
+    #[ts(rename = "approval.requested")]
+    ApprovalRequested,
+    #[serde(rename = "error.raised")]
+    #[ts(rename = "error.raised")]
+    ErrorRaised,
+    #[serde(rename = "turn.interrupted")]
+    #[ts(rename = "turn.interrupted")]
+    TurnInterrupted,
+    #[serde(rename = "usage.updated")]
+    #[ts(rename = "usage.updated")]
+    UsageUpdated,
+}
+
+impl EventKind {
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::StateSnapshot => "state.snapshot",
+            Self::ActivityAppended => "activity.appended",
+            Self::ApprovalRequested => "approval.requested",
+            Self::ErrorRaised => "error.raised",
+            Self::TurnInterrupted => "turn.interrupted",
+            Self::UsageUpdated => "usage.updated",
+        }
+    }
+
+    /// The name to pass to Tauri's `emit` and `listen`, e.g. `state_snapshot`.
+    pub fn tauri_event_name(self) -> String {
+        self.wire_name().replace('.', "_")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum InterruptReason {
+    UserCancel,
+    Hotkey,
+    WakeWord,
+    Error,
+}
+
+/// Payload of `turn.interrupted`. After it, the phase is `listening` for a
+/// wake-word interrupt and `idle` otherwise; the turn channel still ends with
+/// `done { stopReason: "cancelled" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TurnInterrupted {
+    pub request_id: String,
+    pub reason: InterruptReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum KeyStorage {
+    Keychain,
+    /// OS credential store unavailable: the key lives in memory until the app quits.
+    SessionOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ApiKeyStatus {
+    pub is_set: bool,
+    /// `null` when no key is set.
+    pub storage: Option<KeyStorage>,
+    /// Last 4 characters, e.g. "…a1b2", only for keys of 16+ characters. The only
+    /// key-derived data that ever leaves the backend.
+    pub hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Settings {
+    pub schema_version: u32,
+    pub api_key: ApiKeyStatus,
+    /// Must be one of `available_models`.
+    pub model: String,
+    /// Model ids that have a price in `resources/pricing.json`.
+    pub available_models: Vec<String>,
+    /// Micro-dollars (1e-6 USD). `null` means no cap.
+    #[ts(type = "number | null")]
+    pub daily_cap_micro_usd: Option<u64>,
+    #[ts(type = "number | null")]
+    pub monthly_cap_micro_usd: Option<u64>,
+}
+
+/// Partial update. For the caps: omit the field to leave it unchanged, send `null`
+/// to clear the cap, send a number to set it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SettingsPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    #[serde(default)]
+    #[serde(deserialize_with = "tri_state")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number | null")]
+    pub daily_cap_micro_usd: Option<Option<u64>>,
+    #[serde(default)]
+    #[serde(deserialize_with = "tri_state")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number | null")]
+    pub monthly_cap_micro_usd: Option<Option<u64>>,
+}
+
+/// Distinguishes a missing field (`None`) from an explicit `null` (`Some(None)`).
+fn tri_state<'de, D>(d: D) -> Result<Option<Option<u64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<u64>::deserialize(d).map(Some)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UsageSummary {
+    #[ts(type = "number")]
+    pub today_micro_usd: u64,
+    #[ts(type = "number")]
+    pub month_micro_usd: u64,
+    #[ts(type = "number")]
+    pub today_input_tokens: u64,
+    #[ts(type = "number")]
+    pub today_output_tokens: u64,
+    #[ts(type = "number")]
+    pub month_input_tokens: u64,
+    #[ts(type = "number")]
+    pub month_output_tokens: u64,
+    #[ts(type = "number | null")]
+    pub daily_cap_micro_usd: Option<u64>,
+    #[ts(type = "number | null")]
+    pub monthly_cap_micro_usd: Option<u64>,
+    /// Unix ms of the next UTC midnight / first of the month (D-15).
+    #[ts(type = "number")]
+    pub day_resets_at: u64,
+    #[ts(type = "number")]
+    pub month_resets_at: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -239,5 +398,59 @@ mod tests {
             serde_json::from_str(r#"{"approvalId":"a","argsDigest":"d","decision":"approve"}"#)
                 .unwrap();
         assert_eq!(d.decision, Decision::Approve);
+    }
+
+    #[test]
+    fn event_kinds_keep_their_dotted_wire_names() {
+        for (k, name) in [
+            (EventKind::StateSnapshot, "state.snapshot"),
+            (EventKind::ActivityAppended, "activity.appended"),
+            (EventKind::ApprovalRequested, "approval.requested"),
+            (EventKind::ErrorRaised, "error.raised"),
+            (EventKind::TurnInterrupted, "turn.interrupted"),
+            (EventKind::UsageUpdated, "usage.updated"),
+        ] {
+            assert_eq!(serde_json::to_value(k).unwrap(), name);
+            assert_eq!(k.wire_name(), name);
+            assert!(!k.tauri_event_name().contains('.'));
+        }
+        assert_eq!(
+            EventKind::StateSnapshot.tauri_event_name(),
+            "state_snapshot"
+        );
+    }
+
+    #[test]
+    fn settings_patch_tells_missing_from_null() {
+        let p: SettingsPatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(p, SettingsPatch::default());
+        let p: SettingsPatch = serde_json::from_str(r#"{"dailyCapMicroUsd":null}"#).unwrap();
+        assert_eq!(p.daily_cap_micro_usd, Some(None));
+        assert_eq!(p.monthly_cap_micro_usd, None);
+        let p: SettingsPatch =
+            serde_json::from_str(r#"{"monthlyCapMicroUsd":5000000,"model":"m"}"#).unwrap();
+        assert_eq!(p.monthly_cap_micro_usd, Some(Some(5_000_000)));
+        assert_eq!(p.model.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn api_key_status_and_interrupt_wire_shape() {
+        let v = serde_json::to_value(ApiKeyStatus {
+            is_set: true,
+            storage: Some(KeyStorage::SessionOnly),
+            hint: Some("…a1b2".into()),
+        })
+        .unwrap();
+        assert_eq!(v["isSet"], true);
+        assert_eq!(v["storage"], "session_only");
+        let v = serde_json::to_value(TurnInterrupted {
+            request_id: "r".into(),
+            reason: InterruptReason::WakeWord,
+        })
+        .unwrap();
+        assert_eq!(
+            (v["requestId"].as_str(), v["reason"].as_str()),
+            (Some("r"), Some("wake_word"))
+        );
     }
 }

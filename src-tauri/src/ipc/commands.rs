@@ -17,7 +17,7 @@ pub fn snapshot_envelope(s: Snapshot) -> Envelope<Snapshot> {
         seq: s.seq,
         id: uuid::Uuid::now_v7().to_string(),
         ts: now_ms(),
-        kind: "state.snapshot".into(),
+        kind: EventKind::StateSnapshot,
         payload: s,
     }
 }
@@ -25,7 +25,7 @@ pub fn snapshot_envelope(s: Snapshot) -> Envelope<Snapshot> {
 /// Tauri event names cannot contain '.', so `state.snapshot` is emitted as `state_snapshot`.
 pub fn publish(app: &tauri::AppHandle, s: Snapshot) {
     let env = snapshot_envelope(s);
-    if let Err(e) = app.emit(&env.kind.replace('.', "_"), &env) {
+    if let Err(e) = app.emit(&env.kind.tauri_event_name(), &env) {
         tracing::warn!(error = %e, "failed to emit state.snapshot");
     }
 }
@@ -78,8 +78,8 @@ mod tests {
         let o = Orchestrator::default();
         let e = snapshot_envelope(o.set_mute(true));
         assert_eq!(
-            (e.kind.as_str(), e.seq, e.v),
-            ("state.snapshot", 1, PROTOCOL_VERSION)
+            (e.kind, e.seq, e.v),
+            (EventKind::StateSnapshot, 1, PROTOCOL_VERSION)
         );
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["payload"]["mic"], "muted");
