@@ -10,6 +10,7 @@ struct Rec {
     events: Mutex<Vec<TurnStreamEvent>>,
     snaps: Mutex<Vec<Snapshot>>,
     usages: Mutex<Vec<UsageSummary>>,
+    interrupts: Mutex<Vec<TurnInterrupted>>,
 }
 impl TurnSink for Rec {
     fn event(&self, e: TurnStreamEvent) {
@@ -20,6 +21,9 @@ impl TurnSink for Rec {
     }
     fn usage(&self, u: UsageSummary) {
         lock(&self.usages).push(u);
+    }
+    fn interrupted(&self, i: TurnInterrupted) {
+        lock(&self.interrupts).push(i);
     }
 }
 impl Rec {
@@ -353,6 +357,16 @@ async fn stop_cancels_the_running_turn() {
     r.start("stop".into(), b.clone()).unwrap();
     a.wait_done().await;
     assert_eq!(b.text(), "Stopped.");
+    // The stop command cut the turn short: one turn.interrupted with its request id.
+    let i = lock(&b.interrupts).clone();
+    assert_eq!(i.len(), 1);
+    assert_eq!(i[0].reason, InterruptReason::UserCancel);
+    assert_eq!(
+        Some(i[0].request_id.clone()),
+        lock(&a.snaps)
+            .iter()
+            .find_map(|s| s.active_request_id.clone())
+    );
     assert_eq!(a.dones(), vec![StopReason::Cancelled]);
     assert_eq!(orch.snapshot().phase, AssistantPhase::Idle);
     assert_eq!(orch.snapshot().active_request_id, None);
@@ -393,7 +407,12 @@ fn usage_estimate_rounds_input_up_and_floors_output() {
 #[tokio::test]
 async fn cancel_is_idempotent() {
     let (r, _, _) = runner(None, Caps::default());
-    assert!(!r.cancel("no-such-request", &Rec::default()));
+    let sink = Rec::default();
+    assert!(!r.cancel("no-such-request", InterruptReason::UserCancel, &sink));
+    assert!(
+        lock(&sink.interrupts).is_empty(),
+        "nothing was running, so nothing was interrupted"
+    );
 }
 
 #[tokio::test]
@@ -517,4 +536,29 @@ fn history_trimming_keeps_budget_and_starts_on_a_user_turn() {
     trim_history(&mut h);
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].content, "latest");
+}
+
+#[tokio::test]
+async fn cancel_command_reports_the_reason_once_and_a_second_cancel_is_silent() {
+    let (r, orch, _) = runner(Some(Fake::new(Script::HangAfterText)), Caps::default());
+    let a = Arc::new(Rec::default());
+    let id = r.start("long answer please".into(), a.clone()).unwrap();
+    for _ in 0..100 {
+        if a.text() == "Hi" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let s = Rec::default();
+    assert!(r.cancel(&id, InterruptReason::Hotkey, &s));
+    // A second cancel for the same turn must not interrupt again.
+    let _ = r.cancel(&id, InterruptReason::Hotkey, &s);
+    a.wait_done().await;
+    let i = lock(&s.interrupts).clone();
+    assert_eq!(i.len(), 1, "only the first cancel interrupts");
+    assert_eq!(
+        (i[0].request_id.as_str(), i[0].reason),
+        (id.as_str(), InterruptReason::Hotkey)
+    );
+    assert_eq!(orch.snapshot().phase, AssistantPhase::Idle);
 }

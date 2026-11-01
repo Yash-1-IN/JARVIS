@@ -13,7 +13,8 @@ use crate::intelligence::provider::{
 };
 use crate::intelligence::spend::{CapKind, Day, Price, SpendMeter};
 use crate::ipc::types::{
-    AssistantPhase, ErrorCode, JarvisError, Snapshot, StopReason, TurnStreamEvent, UsageSummary,
+    AssistantPhase, ErrorCode, InterruptReason, JarvisError, Snapshot, StopReason, TurnInterrupted,
+    TurnStreamEvent, UsageSummary,
 };
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -33,6 +34,8 @@ pub trait TurnSink: Send + Sync {
     fn snapshot(&self, s: Snapshot);
     /// Called after spend is recorded (the `usage.updated` event).
     fn usage(&self, _u: UsageSummary) {}
+    /// Called when a running turn is cut short (the `turn.interrupted` event).
+    fn interrupted(&self, _i: TurnInterrupted) {}
 }
 
 type ProviderFactory = dyn Fn() -> Option<Arc<dyn ModelProvider>> + Send + Sync;
@@ -126,7 +129,8 @@ impl TurnRunner {
     }
 
     /// Cancels a turn's whole tree. Returns false if it is not active (idempotent).
-    pub fn cancel(&self, request_id: &str, sink: &dyn TurnSink) -> bool {
+    /// Emits `turn.interrupted` only when a running turn was actually cut short.
+    pub fn cancel(&self, request_id: &str, reason: InterruptReason, sink: &dyn TurnSink) -> bool {
         let token = lock(&self.tokens).get(request_id).cloned();
         if let Some(t) = &token {
             t.cancel();
@@ -134,6 +138,10 @@ impl TurnRunner {
         match self.orch.cancel(request_id) {
             Ok(s) => {
                 sink.snapshot(s);
+                sink.interrupted(TurnInterrupted {
+                    request_id: request_id.to_owned(),
+                    reason,
+                });
                 true
             }
             Err(_) => token.is_some(),
@@ -197,7 +205,7 @@ impl TurnRunner {
                 let active = self.orch.snapshot().active_request_id;
                 match active {
                     Some(a) => {
-                        self.cancel(&a, sink);
+                        self.cancel(&a, InterruptReason::UserCancel, sink);
                         "Stopped."
                     }
                     None => "Nothing to stop.",

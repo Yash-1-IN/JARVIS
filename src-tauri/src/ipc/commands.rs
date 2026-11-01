@@ -39,19 +39,28 @@ pub fn publish(app: &tauri::AppHandle, s: Snapshot) {
 /// Sequence for events that are not snapshots (snapshots carry their own `seq`).
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Emits `usage.updated` (Tauri event `usage_updated`).
-pub fn publish_usage(app: &tauri::AppHandle, u: UsageSummary) {
+/// Emits a non-snapshot event as an `Envelope` on its Tauri event name.
+pub fn publish_event<P: serde::Serialize + Clone>(
+    app: &tauri::AppHandle,
+    kind: EventKind,
+    payload: P,
+) {
     let env = Envelope {
         v: PROTOCOL_VERSION,
         seq: EVENT_SEQ.fetch_add(1, Ordering::Relaxed) + 1,
         id: uuid::Uuid::now_v7().to_string(),
         ts: now_ms(),
-        kind: EventKind::UsageUpdated,
-        payload: u,
+        kind,
+        payload,
     };
-    if let Err(e) = app.emit(&env.kind.tauri_event_name(), &env) {
-        tracing::warn!(error = %e, "failed to emit usage.updated");
+    if let Err(e) = app.emit(&kind.tauri_event_name(), &env) {
+        tracing::warn!(error = %e, event = kind.wire_name(), "failed to emit event");
     }
+}
+
+/// Emits `usage.updated` (Tauri event `usage_updated`).
+pub fn publish_usage(app: &tauri::AppHandle, u: UsageSummary) {
+    publish_event(app, EventKind::UsageUpdated, u);
 }
 
 fn today() -> Day {
@@ -101,6 +110,9 @@ impl TurnSink for AppSink {
     fn usage(&self, u: UsageSummary) {
         publish_usage(&self.app, u);
     }
+    fn interrupted(&self, i: TurnInterrupted) {
+        publish_event(&self.app, EventKind::TurnInterrupted, i);
+    }
 }
 
 #[tauri::command]
@@ -111,7 +123,7 @@ pub fn cancel(
 ) {
     // Idempotent: Esc pressed just as a turn finishes is a no-op, not an error.
     let sink = AppSink { app, channel: None };
-    if !runner.cancel(&request_id, &sink) {
+    if !runner.cancel(&request_id, InterruptReason::UserCancel, &sink) {
         tracing::debug!(request_id, "cancel for a turn that is not active");
     }
 }
