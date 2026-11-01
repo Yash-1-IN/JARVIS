@@ -3,6 +3,7 @@ mod intelligence;
 mod ipc;
 mod logging;
 mod orchestrator;
+mod permissions;
 mod platform;
 mod services;
 
