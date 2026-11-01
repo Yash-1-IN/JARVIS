@@ -22,6 +22,9 @@ const MAX_DEPTH: usize = 3;
 const MAX_NAME_CHARS: usize = 100;
 /// `.desktop` files are tiny; anything larger is not one we trust.
 const MAX_DESKTOP_BYTES: u64 = 64 * 1024;
+/// Real shortcuts are a few KB; larger `.lnk` files are not parsed at all.
+#[cfg_attr(not(windows), allow(dead_code))]
+const MAX_LNK_BYTES: u64 = 64 * 1024;
 
 type Scanner = Box<dyn Fn() -> Vec<AllowedApp> + Send + Sync>;
 
@@ -273,8 +276,21 @@ fn windows_shortcut(link: &Path) -> Option<AllowedApp> {
     if name.to_lowercase().contains("uninstall") {
         return None;
     }
-    // `lnk` 0.6 panics on some malformed links instead of returning an error, and the
-    // Start menu can contain anything, so one bad file must not take the scan down.
+    // Defence in depth against a hostile shortcut (any program can write the Start
+    // menu): size and header first, then `lnk` under catch_unwind, because 0.6 panics
+    // on some malformed links. The release profile unwinds so the catch works there.
+    if std::fs::metadata(link).map_or(true, |m| m.len() > MAX_LNK_BYTES) {
+        return None;
+    }
+    let mut head = [0u8; 20];
+    {
+        use std::io::Read;
+        let mut f = std::fs::File::open(link).ok()?;
+        f.read_exact(&mut head).ok()?;
+    }
+    if !looks_like_shell_link(&head) {
+        return None;
+    }
     let target = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         lnk::ShellLink::open(link, lnk::encoding::WINDOWS_1252)
             .ok()
@@ -292,6 +308,18 @@ fn windows_shortcut(link: &Path) -> Option<AllowedApp> {
         id: plain_windows_path(&canon),
         name,
     })
+}
+
+/// The fixed start of every shell link (MS-SHLLINK 2.1): header size 0x4C, then
+/// CLSID 00021401-0000-0000-C000-000000000046 in little-endian layout. Checked before
+/// the parser sees the file, so most junk never reaches `lnk` at all.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn looks_like_shell_link(head: &[u8]) -> bool {
+    const MAGIC: [u8; 20] = [
+        0x4C, 0x00, 0x00, 0x00, 0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x46,
+    ];
+    head.len() >= MAGIC.len() && head[..MAGIC.len()] == MAGIC
 }
 
 /// `canonicalize` gives `\\?\C:\...`; ids use the plain drive form. Other `\\?\` forms

@@ -133,3 +133,33 @@ fn this_os_scan_never_panics() {
     let n = PlatformApps::new().list().len();
     assert!(n <= MAX_APPS);
 }
+
+#[test]
+fn only_real_shell_link_headers_reach_the_parser() {
+    let mut real = vec![
+        0x4C, 0x00, 0x00, 0x00, 0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x46,
+    ];
+    real.extend_from_slice(&[0xAA; 60]);
+    assert!(looks_like_shell_link(&real));
+    assert!(!looks_like_shell_link(&real[..19]), "too short");
+    assert!(!looks_like_shell_link(b"[Desktop Entry]\nName=not a link"));
+    assert!(!looks_like_shell_link(&[0u8; 80]));
+    let mut wrong_clsid = real.clone();
+    wrong_clsid[4] = 0x02;
+    assert!(!looks_like_shell_link(&wrong_clsid));
+}
+
+/// The release profile must unwind, or catch_unwind around the shortcut parser is a
+/// no-op and one malformed .lnk aborts the app (#21 review).
+#[test]
+fn release_profile_unwinds() {
+    let toml = include_str!("../../../Cargo.toml");
+    let release = toml
+        .split("[profile.release]")
+        .nth(1)
+        .expect("release profile");
+    let release = release.split("\n[").next().unwrap();
+    assert!(release.contains("panic = \"unwind\""), "{release}");
+    assert!(!release.contains("panic = \"abort\""));
+}

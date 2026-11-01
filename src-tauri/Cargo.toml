@@ -52,5 +52,8 @@ lnk = "0.6.4"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Unwind, not abort: platform/apps.rs relies on catch_unwind to survive a parser
+# panic on a malformed Start-menu shortcut (any program can write one), and the
+# voice worker will need the same so an audio failure cannot crash the app (#21).
+panic = "unwind"
 strip = true
