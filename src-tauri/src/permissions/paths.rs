@@ -327,6 +327,173 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------ Windows only
+    // Spec §13 M4: junctions, UNC paths, short names and reserved names. They run on the
+    // `windows-latest` CI job; the Unix symlink tests above cover the same ideas elsewhere.
+
+    /// Makes `link` a junction to `target` (`mklink /J` needs no administrator rights).
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        let out = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(plain(link))
+            .arg(plain(target))
+            .output()
+            .expect("cmd runs");
+        assert!(
+            out.status.success(),
+            "mklink failed: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_out_of_the_root_is_rejected() {
+        let root = dir("junction-root");
+        let outside = dir("junction-outside");
+        std::fs::write(outside.join("secret.txt"), "x").unwrap();
+        junction(&root.join("escape"), &outside);
+        let s = scope(&root);
+        let via = root.join("escape").join("secret.txt");
+        assert_eq!(s.check_existing(&plain(&via)), Err(PathError::OutsideRoots));
+        // The junction folder itself is also outside: it is the outside folder.
+        assert_eq!(
+            s.check_existing(&plain(&root.join("escape"))),
+            Err(PathError::OutsideRoots)
+        );
+        // A new name under the junction would be created outside the root.
+        assert_eq!(
+            s.check_new(&plain(&root.join("escape").join("new.txt"))),
+            Err(PathError::OutsideRoots)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_that_stays_inside_the_root_is_fine() {
+        let root = dir("junction-inside");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::write(root.join("real").join("a.txt"), "x").unwrap();
+        junction(&root.join("alias"), &root.join("real"));
+        let s = scope(&root);
+        let got = s
+            .check_existing(&plain(&root.join("alias").join("a.txt")))
+            .unwrap();
+        // It resolves to the real place, which is inside the root.
+        assert_eq!(got, root.join("real").join("a.txt"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_swapped_for_a_junction_after_approval_fails_the_recheck() {
+        let root = dir("junction-swap-root");
+        let outside = dir("junction-swap-outside");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs").join("a.txt"), "x").unwrap();
+        std::fs::write(outside.join("a.txt"), "secret").unwrap();
+        let s = scope(&root);
+        let target = plain(&root.join("docs").join("a.txt"));
+        // Approved while it is a normal folder.
+        assert!(s.check_existing(&target).is_ok());
+        // Before execution the folder becomes a junction to a place outside the root.
+        std::fs::remove_dir_all(root.join("docs")).unwrap();
+        junction(&root.join("docs"), &outside);
+        assert_eq!(s.check_existing(&target), Err(PathError::OutsideRoots));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drive_letter_case_and_forward_slashes_resolve_to_the_same_place() {
+        let root = dir("Slashes");
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+        let s = scope(&root);
+        let plain_path = plain(&root.join("a.txt"));
+        let want = root.join("a.txt");
+        assert_eq!(s.check_existing(&plain_path.to_lowercase()).unwrap(), want);
+        assert_eq!(
+            s.check_existing(&plain_path.replace('\\', "/")).unwrap(),
+            want
+        );
+        // A mixed-case drive letter is the same drive.
+        let mut flipped = plain_path.clone();
+        let first = flipped.remove(0);
+        flipped.insert(0, first.to_ascii_lowercase());
+        assert_eq!(s.check_existing(&flipped).unwrap(), want);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_short_8_3_name_resolves_to_the_real_folder_and_cannot_hide_an_escape() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+        let root = dir("Long Folder Name For Short Paths");
+        std::fs::write(root.join("A Long File Name.txt"), "x").unwrap();
+        let long = plain(&root.join("A Long File Name.txt"));
+        let wide: Vec<u16> = std::ffi::OsStr::new(&long)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut buf = vec![0u16; 1024];
+        // SAFETY: `wide` is NUL-terminated and `buf` is a valid writable buffer of the given size.
+        let n = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        let s = scope(&root);
+        if n == 0 || n as usize >= buf.len() {
+            return; // short names are switched off on this volume: nothing to test
+        }
+        let short = std::ffi::OsString::from_wide(&buf[..n as usize])
+            .to_string_lossy()
+            .into_owned();
+        if short.eq_ignore_ascii_case(&long) {
+            return; // this volume made no short name
+        }
+        let got = s.check_existing(&plain(Path::new(&short))).unwrap();
+        assert_eq!(got, root.join("A Long File Name.txt"));
+        // A short name for a folder outside the root is still outside.
+        let outside = dir("Another Long Outside Folder");
+        let wide: Vec<u16> = std::ffi::OsStr::new(&plain(&outside))
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let n = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        if n != 0 && (n as usize) < buf.len() {
+            let short_out = std::ffi::OsString::from_wide(&buf[..n as usize])
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(
+                s.check_existing(&plain(Path::new(&short_out))),
+                Err(PathError::OutsideRoots)
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_new_names_that_windows_would_rewrite_or_redirect_are_refused() {
+        let root = dir("win-names");
+        let s = scope(&root);
+        for bad in [
+            "CON",
+            "con.txt",
+            "Nul",
+            "aux.log",
+            "COM1",
+            "lpt9.txt",
+            "report.txt.",
+            "report ",
+            "a:b.txt",
+            "file.txt:hidden",
+            "bad<name>.txt",
+            "what?.txt",
+        ] {
+            let p = plain(&root.join(bad));
+            assert_eq!(s.check_new(&p), Err(PathError::Invalid), "{bad:?}");
+        }
+        assert!(s.check_new(&plain(&root.join("report.txt"))).is_ok());
+        assert!(s.check_new(&plain(&root.join("COM10.txt"))).is_ok());
+    }
+
     #[test]
     fn case_variants_match_only_on_case_insensitive_systems() {
         let root = dir("Case");
