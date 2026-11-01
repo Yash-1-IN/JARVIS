@@ -18,7 +18,7 @@ Source: `cargo metadata --all-features` for `src-tauri` (all target platforms).
 ## Frontend dependencies (shipped in the app)
 Source: `pnpm licenses list --prod`.
 
-- **89** production packages: 87 MIT, 1 ISC, 1 `Apache-2.0 OR MIT`. All allowed.
+- **89** production packages on 2026-11-01: 87 MIT, 1 ISC, 1 `Apache-2.0 OR MIT`. All allowed. The exact numbers move whenever a package is added (the 3D hologram work adds two MIT packages and one BSD-3-Clause); re-run the command below after such a change.
 
 ## Development-only packages (not shipped)
 307 packages in total, 218 of them used only to build and test. Besides the licences above they include
@@ -31,7 +31,7 @@ these need their own decision.
   checked before it is added (the spec flags Piper, espeak-ng and openWakeWord pretrained models).
 - **Artwork and fonts**: the app uses Tauri's default icons and the system fonts. Replace the icons before a
   public release.
-- **The name "JARVIS"** is a Marvel trademark; D-13 says to revisit it before any public release.
+- **The name "JARVIS"** is a Marvel trademark. Fine for a private project; D-19 (proposed) records that a release name must be chosen before any public or paid release, and that the persona file's reference to the film character goes with it.
 
 ## How to repeat it
 ```bash
