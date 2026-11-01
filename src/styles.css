@@ -1,3 +1,250 @@
+/* ---- Base look (issue #37). Light and dark follow the OS setting. ---- */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1f2328;
+  --muted: #59636e;
+  --border: #d1d9e0;
+  --accent: #2563eb;
+  --accent-text: #ffffff;
+  --user-bubble: #dbeafe;
+  --danger: #b91c1c;
+  --radius: 0.6rem;
+  font:
+    15px/1.5 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1419;
+    --surface: #171d24;
+    --text: #e6edf3;
+    --muted: #9198a1;
+    --border: #30363d;
+    --accent: #4c8dff;
+    --accent-text: #0b1220;
+    --user-bubble: #1e3a5f;
+    --danger: #f87171;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+}
+
+h3 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1rem;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+input,
+select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--surface);
+}
+
+/* ---- Layout: header, approvals, conversation, one side panel. ---- */
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  /* Leaves room for the fixed MOCK badge. */
+  padding-right: 6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  letter-spacing: 0.12em;
+}
+
+.app-nav {
+  display: flex;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+/* The open panel's button looks pressed, not only announced as pressed. */
+.app-nav button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.approvals {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 0.5rem 1rem 0;
+  background: var(--bg);
+}
+
+.app-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.app.has-panel .app-body {
+  grid-template-columns: minmax(0, 1fr) minmax(20rem, 30rem);
+}
+
+.assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.assistant-status {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.assistant-status p {
+  margin: 0.2rem 0;
+}
+
+.side-panel {
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  max-height: calc(100vh - 3.5rem);
+  position: sticky;
+  top: 0;
+}
+
+.side-panel-header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.side-panel-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.side-panel-body {
+  padding: 0.5rem 1rem 1.5rem;
+}
+
+/* Narrow windows: the panel takes the whole width; Close returns to the chat. */
+@media (max-width: 760px) {
+  .app.has-panel .app-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app.has-panel .assistant {
+    display: none;
+  }
+
+  .side-panel {
+    border-left: none;
+    max-height: none;
+    position: static;
+  }
+}
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.5rem 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs [role="tab"] {
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: none;
+  padding: 0.4rem 0.6rem;
+  color: var(--muted);
+}
+
+.tabs [role="tab"][aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.mock-footer {
+  padding: 0.5rem 1rem;
+  border-top: 2px dashed #b45309;
+  font-size: 0.85em;
+}
+
+.mock-footer section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
 .mock-badge {
   position: fixed;
   top: 0.5rem;
@@ -40,18 +287,60 @@ kbd {
   white-space: nowrap;
 }
 
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+}
+
 .chat-log {
   list-style: none;
   padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
 
+.chat-log > li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* You on the right, JARVIS on the left, so the two are told apart at a glance. */
 .chat-user {
-  font-weight: 600;
+  align-self: flex-end;
+  max-width: 80%;
+  margin: 0;
+  padding: 0.5rem 0.8rem;
+  border-radius: var(--radius) var(--radius) 0.15rem var(--radius);
+  background: var(--user-bubble);
+  white-space: pre-wrap;
+}
+
+.chat-reply {
+  align-self: flex-start;
+  max-width: 90%;
+  padding: 0.1rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) var(--radius) 0.15rem;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.chat-stop {
+  color: var(--muted);
 }
 
 .chat-form {
+  position: sticky;
+  bottom: 0;
   display: flex;
   gap: 0.5rem;
+  padding: 0.5rem 0;
+  background: var(--bg);
 }
 
 .chat-form input {
@@ -65,7 +354,7 @@ kbd {
 
 .hint {
   font-size: 0.85em;
-  opacity: 0.8;
+  color: var(--muted);
 }
 
 .usage dt {
@@ -73,10 +362,13 @@ kbd {
 }
 
 .approval-card {
-  border: 2px solid currentColor;
-  border-radius: 0.5rem;
+  max-width: 52rem;
+  margin: 0 auto 0.5rem;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
   padding: 0.75rem 1rem;
-  margin: 0.75rem 0;
+  background: var(--surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
 }
 
 .approval-card.risk-high {
@@ -100,7 +392,7 @@ kbd {
 /* ---- 2D orb (ADR-015). Static when idle; every animation off for reduced motion. ---- */
 .orb {
   display: inline-block;
-  color: #2563eb;
+  color: var(--accent);
 }
 
 .orb svg {
@@ -130,7 +422,7 @@ kbd {
 }
 
 .orb-phase-error {
-  color: #b91c1c;
+  color: var(--danger);
 }
 
 .orb-muted .orb-core {

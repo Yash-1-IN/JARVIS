@@ -5,6 +5,7 @@ import { SettingsPanel } from "./SettingsPanel";
 
 async function open(t = new MockTransport()) {
   render(<SettingsPanel transport={t} />);
+  fireEvent.click(await screen.findByRole("tab", { name: "Permissions" }));
   await screen.findByRole("list", { name: "Installed apps" });
   return t;
 }
@@ -90,6 +91,7 @@ describe("Policy settings (allowed folders, apps, auto-allow)", () => {
     });
     vi.spyOn(t, "appsInstalled").mockResolvedValue([]);
     render(<SettingsPanel transport={t} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Permissions" }));
     const orphans = await screen.findByRole("list", {
       name: "Allowed apps not installed",
     });

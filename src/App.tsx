@@ -7,6 +7,7 @@ import { MockBadge } from "./components/MockBadge";
 import { Orb2D } from "./components/Orb2D";
 import { MockControls } from "./components/MockControls";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { SidePanel } from "./components/SidePanel";
 import { StatusPanel } from "./components/StatusPanel";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { PROTOCOL_VERSION } from "./protocol";
@@ -20,13 +21,29 @@ function isMock(t: Transport): t is MockTransport {
   return t.isMock;
 }
 
+/** The panels that open beside the conversation; one at a time (issue #37). */
+const PANELS = {
+  settings: "Settings",
+  activity: "Activity",
+} as const;
+type PanelId = keyof typeof PANELS;
+
 export default function App({ transport }: { transport: Transport }) {
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const receive = useSnapshotStore((s) => s.receive);
   const [error, setError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showActivity, setShowActivity] = useState(false);
+  const [panel, setPanel] = useState<PanelId | null>(null);
+  const navButtons = useRef<Partial<Record<PanelId, HTMLButtonElement | null>>>(
+    {},
+  );
+  const togglePanel = (id: PanelId) =>
+    setPanel((open) => (open === id ? null : id));
+  // Closing returns focus to the button that opened the panel.
+  const closePanel = () => {
+    if (panel) navButtons.current[panel]?.focus();
+    setPanel(null);
+  };
 
   // Read the store at call time so the shortcut listener is bound once.
   const run = useCallback((p: Promise<void>) => {
@@ -103,40 +120,30 @@ export default function App({ transport }: { transport: Transport }) {
   }, [transport, receive]);
 
   return (
-    <main>
+    <div className={`app${panel ? " has-panel" : ""}`}>
       {transport.isMock && <MockBadge />}
-      <h1>JARVIS</h1>
-      <button
-        type="button"
-        aria-expanded={showSettings}
-        aria-controls="settings-panel"
-        onClick={() => setShowSettings((v) => !v)}
-      >
-        Settings
-      </button>
-      {showSettings && (
-        <div id="settings-panel">
-          <SettingsPanel transport={transport} />
-        </div>
-      )}
-      <button
-        type="button"
-        aria-expanded={showActivity}
-        aria-controls="activity-panel"
-        onClick={() => setShowActivity((v) => !v)}
-      >
-        Activity
-      </button>
-      {showActivity && (
-        <div id="activity-panel">
-          <ActivityLog transport={transport} />
-        </div>
-      )}
-      {error && <p role="alert">{error}</p>}
-      {!error && snapshot && (
-        <>
-          <Orb2D phase={snapshot.phase} mic={snapshot.mic} />
-          <StatusPanel snapshot={snapshot} onRetry={retryTurn} />
+      <header className="app-header">
+        <h1>JARVIS</h1>
+        <nav aria-label="Panels" className="app-nav">
+          {(Object.keys(PANELS) as PanelId[]).map((id) => (
+            <button
+              key={id}
+              type="button"
+              ref={(el) => {
+                navButtons.current[id] = el;
+              }}
+              aria-pressed={panel === id}
+              aria-controls={panel === id ? `${id}-panel` : undefined}
+              onClick={() => togglePanel(id)}
+            >
+              {PANELS[id]}
+            </button>
+          ))}
+        </nav>
+      </header>
+      {/* Approval cards sit above everything else, so an open panel never hides them. */}
+      {snapshot && snapshot.pendingApprovals.length > 0 && (
+        <div className="approvals">
           {snapshot.pendingApprovals.map((r) => (
             <ApprovalCard
               key={r.approvalId}
@@ -150,20 +157,52 @@ export default function App({ transport }: { transport: Transport }) {
               }
             />
           ))}
-          <Controls
-            snapshot={snapshot}
-            onCancel={onCancel}
-            onToggleMute={onToggleMute}
-          />
-          <Chat
-            turns={turns}
-            busy={snapshot.activeRequestId !== null}
-            onSubmit={onSubmitText}
-          />
-        </>
+        </div>
       )}
-      {commandError && <p role="alert">{commandError}</p>}
-      {isMock(transport) && <MockControls transport={transport} />}
-    </main>
+      <div className="app-body">
+        <main className="assistant">
+          {error && <p role="alert">{error}</p>}
+          {!error && snapshot && (
+            <>
+              <div className="assistant-status">
+                <Orb2D phase={snapshot.phase} mic={snapshot.mic} />
+                <div>
+                  <StatusPanel snapshot={snapshot} onRetry={retryTurn} />
+                  <Controls
+                    snapshot={snapshot}
+                    onCancel={onCancel}
+                    onToggleMute={onToggleMute}
+                  />
+                </div>
+              </div>
+              <Chat
+                turns={turns}
+                busy={snapshot.activeRequestId !== null}
+                onSubmit={onSubmitText}
+              />
+            </>
+          )}
+          {commandError && <p role="alert">{commandError}</p>}
+        </main>
+        {panel && (
+          <SidePanel
+            id={`${panel}-panel`}
+            title={PANELS[panel]}
+            onClose={closePanel}
+          >
+            {panel === "settings" ? (
+              <SettingsPanel transport={transport} />
+            ) : (
+              <ActivityLog transport={transport} />
+            )}
+          </SidePanel>
+        )}
+      </div>
+      {isMock(transport) && (
+        <footer className="mock-footer">
+          <MockControls transport={transport} />
+        </footer>
+      )}
+    </div>
   );
 }

@@ -1,4 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { describeError } from "../state/errors";
 import { PolicySettings } from "./PolicySettings";
 import {
@@ -57,7 +64,87 @@ function UsageView({ usage }: { usage: UsageSummary }) {
   );
 }
 
-/** Settings: API key, model, spend caps, usage (contract #11). */
+const TABS = {
+  account: "Key and model",
+  spending: "Spending",
+  permissions: "Permissions",
+} as const;
+type TabId = keyof typeof TABS;
+const TAB_IDS = Object.keys(TABS) as TabId[];
+
+/**
+ * Settings grouped into tabs (issue #37), following the WAI-ARIA tabs pattern:
+ * arrow keys, Home and End move between tabs. Every tab stays mounted (hidden)
+ * so a half-typed field survives switching tabs.
+ */
+function SettingsTabs({ children }: { children: Record<TabId, ReactNode> }) {
+  const [current, setCurrent] = useState<TabId>("account");
+  const tabs = useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({});
+  const select = (id: TabId) => {
+    setCurrent(id);
+    tabs.current[id]?.focus();
+  };
+  const onKeyDown = (e: KeyboardEvent) => {
+    const i = TAB_IDS.indexOf(current);
+    const n = TAB_IDS.length;
+    const next =
+      e.key === "ArrowRight"
+        ? TAB_IDS[(i + 1) % n]
+        : e.key === "ArrowLeft"
+          ? TAB_IDS[(i - 1 + n) % n]
+          : e.key === "Home"
+            ? TAB_IDS[0]
+            : e.key === "End"
+              ? TAB_IDS[n - 1]
+              : null;
+    if (next) {
+      e.preventDefault();
+      select(next);
+    }
+  };
+  return (
+    <>
+      <div
+        role="tablist"
+        aria-label="Settings sections"
+        className="tabs"
+        onKeyDown={onKeyDown}
+      >
+        {TAB_IDS.map((id) => (
+          <button
+            key={id}
+            id={`settings-tab-${id}`}
+            ref={(el) => {
+              tabs.current[id] = el;
+            }}
+            type="button"
+            role="tab"
+            aria-selected={current === id}
+            aria-controls={`settings-section-${id}`}
+            tabIndex={current === id ? 0 : -1}
+            onClick={() => setCurrent(id)}
+          >
+            {TABS[id]}
+          </button>
+        ))}
+      </div>
+      {TAB_IDS.map((id) => (
+        <div
+          key={id}
+          id={`settings-section-${id}`}
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${id}`}
+          hidden={current !== id}
+          className="tab-panel"
+        >
+          {children[id]}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Settings: API key, model, spend caps, usage, permissions (contract #11). */
 export function SettingsPanel({ transport }: { transport: Transport }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
@@ -160,90 +247,101 @@ export function SettingsPanel({ transport }: { transport: Transport }) {
   };
 
   return (
-    <section aria-label="Settings" className="settings">
-      <h2>Settings</h2>
+    <div className="settings">
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {!settings ? (
         !error && <p>Loading settings…</p>
       ) : (
-        <>
-          <h3>Anthropic API key</h3>
-          <KeyStatus status={settings.apiKey} />
-          <form onSubmit={saveKey} autoComplete="off">
-            <label htmlFor="api-key">
-              {settings.apiKey.isSet ? "Replace key" : "API key"}
-            </label>{" "}
-            <input
-              id="api-key"
-              name="apiKey"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-            />{" "}
-            <button type="submit" disabled={busy}>
-              Save key
-            </button>{" "}
-            {settings.apiKey.isSet && (
-              <button type="button" disabled={busy} onClick={clearKey}>
-                Remove key
-              </button>
-            )}
-          </form>
-          <p className="hint">
-            The key is checked with the provider, then kept in your system
-            keychain. JARVIS never shows it again.
-          </p>
-          <h3>Model</h3>
-          <label htmlFor="model">Model</label>{" "}
-          <select
-            id="model"
-            value={settings.model}
-            disabled={busy}
-            onChange={(e) => void saveModel(e.target.value)}
-          >
-            {settings.availableModels.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-          <h3>Spend caps</h3>
-          <form onSubmit={saveCaps}>
-            <label htmlFor="cap-daily">Daily cap (USD)</label>{" "}
-            <input
-              id="cap-daily"
-              inputMode="decimal"
-              placeholder="No cap"
-              value={daily}
-              onChange={(e) => setDaily(e.target.value)}
-            />{" "}
-            <label htmlFor="cap-monthly">Monthly cap (USD)</label>{" "}
-            <input
-              id="cap-monthly"
-              inputMode="decimal"
-              placeholder="No cap"
-              value={monthly}
-              onChange={(e) => setMonthly(e.target.value)}
-            />{" "}
-            <button type="submit" disabled={busy}>
-              Save caps
-            </button>
-          </form>
-          <p className="hint">
-            A cap stops new cloud requests once reached; one long reply can go
-            slightly over. Local commands keep working.
-          </p>
-          <PolicySettings
-            transport={transport}
-            settings={settings}
-            save={savePatch}
-            busy={busy}
-          />
-          <h3>Usage</h3>
-          {usage && <UsageView usage={usage} />}
-        </>
+        <SettingsTabs>
+          {{
+            account: (
+              <>
+                <h3>Anthropic API key</h3>
+                <KeyStatus status={settings.apiKey} />
+                <form onSubmit={saveKey} autoComplete="off">
+                  <label htmlFor="api-key">
+                    {settings.apiKey.isSet ? "Replace key" : "API key"}
+                  </label>{" "}
+                  <input
+                    id="api-key"
+                    name="apiKey"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />{" "}
+                  <button type="submit" disabled={busy}>
+                    Save key
+                  </button>{" "}
+                  {settings.apiKey.isSet && (
+                    <button type="button" disabled={busy} onClick={clearKey}>
+                      Remove key
+                    </button>
+                  )}
+                </form>
+                <p className="hint">
+                  The key is checked with the provider, then kept in your system
+                  keychain. JARVIS never shows it again.
+                </p>
+                <h3>Model</h3>
+                <label htmlFor="model">Model</label>{" "}
+                <select
+                  id="model"
+                  value={settings.model}
+                  disabled={busy}
+                  onChange={(e) => void saveModel(e.target.value)}
+                >
+                  {settings.availableModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </>
+            ),
+            spending: (
+              <>
+                <h3>Spend caps</h3>
+                <form onSubmit={saveCaps}>
+                  <label htmlFor="cap-daily">Daily cap (USD)</label>{" "}
+                  <input
+                    id="cap-daily"
+                    inputMode="decimal"
+                    placeholder="No cap"
+                    value={daily}
+                    onChange={(e) => setDaily(e.target.value)}
+                  />{" "}
+                  <label htmlFor="cap-monthly">Monthly cap (USD)</label>{" "}
+                  <input
+                    id="cap-monthly"
+                    inputMode="decimal"
+                    placeholder="No cap"
+                    value={monthly}
+                    onChange={(e) => setMonthly(e.target.value)}
+                  />{" "}
+                  <button type="submit" disabled={busy}>
+                    Save caps
+                  </button>
+                </form>
+                <p className="hint">
+                  A cap stops new cloud requests once reached; one long reply
+                  can go slightly over. Local commands keep working.
+                </p>
+                <h3>Usage</h3>
+                {usage && <UsageView usage={usage} />}
+              </>
+            ),
+            permissions: (
+              <PolicySettings
+                transport={transport}
+                settings={settings}
+                save={savePatch}
+                busy={busy}
+              />
+            ),
+          }}
+        </SettingsTabs>
       )}
-    </section>
+    </div>
   );
 }

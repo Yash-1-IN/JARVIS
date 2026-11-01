@@ -62,6 +62,7 @@ describe("SettingsPanel", () => {
     const t = new MockTransport();
     await t.updateSettings({ monthlyCapMicroUsd: 20_000_000 });
     await open(t);
+    fireEvent.click(screen.getByRole("tab", { name: "Spending" }));
     const spy = vi.spyOn(t, "updateSettings");
 
     fireEvent.change(screen.getByLabelText("Daily cap (USD)"), {
@@ -84,6 +85,7 @@ describe("SettingsPanel", () => {
 
   it("rejects malformed caps without calling the backend", async () => {
     const t = await open();
+    fireEvent.click(screen.getByRole("tab", { name: "Spending" }));
     const spy = vi.spyOn(t, "updateSettings");
     fireEvent.change(screen.getByLabelText("Daily cap (USD)"), {
       target: { value: "-3" },
@@ -121,5 +123,47 @@ describe("SettingsPanel", () => {
     });
     expect(screen.getByTestId("usage")).toHaveTextContent("$0.0015 (no cap)");
     vi.useRealTimers();
+  });
+
+  it("groups settings into tabs that work with the keyboard", async () => {
+    await open();
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      "Key and model",
+      "Spending",
+      "Permissions",
+    ]);
+    expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+    // Only the selected tab is reachable with Tab; the others are hidden.
+    expect(tabs[1]).toHaveAttribute("tabindex", "-1");
+    expect(screen.queryByRole("button", { name: "Save caps" })).toBeNull();
+
+    tabs[0].focus();
+    fireEvent.keyDown(tabs[0], { key: "ArrowRight" });
+    expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+    expect(tabs[1]).toHaveFocus();
+    expect(screen.getByRole("tabpanel")).toHaveAttribute(
+      "aria-labelledby",
+      tabs[1].id,
+    );
+    expect(screen.getByRole("button", { name: "Save caps" })).toBeVisible();
+
+    fireEvent.keyDown(tabs[1], { key: "End" });
+    expect(tabs[2]).toHaveFocus();
+    fireEvent.keyDown(tabs[2], { key: "ArrowRight" });
+    expect(tabs[0]).toHaveFocus();
+  });
+
+  it("keeps a half-typed field when switching tabs", async () => {
+    await open();
+    fireEvent.click(screen.getByRole("tab", { name: "Spending" }));
+    fireEvent.change(screen.getByLabelText("Daily cap (USD)"), {
+      target: { value: "4" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Permissions" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Spending" }));
+    expect(
+      (screen.getByLabelText("Daily cap (USD)") as HTMLInputElement).value,
+    ).toBe("4");
   });
 });

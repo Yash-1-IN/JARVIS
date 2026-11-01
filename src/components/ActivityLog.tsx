@@ -84,8 +84,7 @@ export function ActivityLog({ transport }: { transport: Transport }) {
   };
 
   return (
-    <section aria-label="Activity" className="activity">
-      <h2>Activity</h2>
+    <div className="activity">
       <p className="hint">
         Everything JARVIS did or tried to do on your computer.
       </p>
@@ -130,6 +129,6 @@ export function ActivityLog({ transport }: { transport: Transport }) {
           Show older
         </button>
       )}
-    </section>
+    </div>
   );
 }
