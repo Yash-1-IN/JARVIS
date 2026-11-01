@@ -15,8 +15,8 @@ The full specification is `docs/spec.md`; decisions are in `docs/decisions.md` a
 - Do not edit the other developer's modules unless the task says so.
 
 ## Workflow between the two developers
-- One session = one GitHub issue = one branch = one PR into `develop`. Branch names: `a/<issue>-<slug>` or `b/<issue>-<slug>`.
-- Start from the latest `develop`. A cloud session clones GitHub, so anything not pushed does not exist for it.
+- One session = one GitHub issue = one branch = one PR into `main`. Branch names: `a/<issue>-<slug>` or `b/<issue>-<slug>`.
+- Start from the latest `main`. A cloud session clones GitHub, so anything not pushed does not exist for it.
 - Shared contract changes (`ipc/`, generated types, `docs/contracts.md`) go in their own contract PR first. Never mix a contract change into a feature PR.
 - Regenerate `src/types/generated/` only in a PR that changes Rust contract types.
 - Record any decision in `docs/decisions.md` in the same PR.
