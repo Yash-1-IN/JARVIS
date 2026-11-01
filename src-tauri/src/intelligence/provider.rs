@@ -27,19 +27,16 @@ pub struct ToolSpec {
 }
 
 /// How hard the model thinks. Short spoken replies use `Low`: lower latency and cost.
+/// More levels are added when something needs them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effort {
     Low,
-    Medium,
-    High,
 }
 
 impl Effort {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
         }
     }
 }
