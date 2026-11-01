@@ -278,9 +278,14 @@ pub fn history_get(
 /// Deletes all history for good. Memories and settings stay.
 #[tauri::command]
 pub fn history_delete_all(
+    app: tauri::AppHandle,
     store: tauri::State<'_, Arc<MemoryStore>>,
     runner: tauri::State<'_, Arc<TurnRunner>>,
 ) -> Result<(), JarvisError> {
+    // A reply being written may rest on content that was just deleted, or on untrusted
+    // content whose warning flag is about to be cleared: stop it first.
+    let sink = AppSink { app, channel: None };
+    runner.cancel_active(InterruptReason::UserCancel, &sink);
     store.delete_all_history().map_err(store_error)?;
     // What the next model call is sent comes from memory too; it goes as well.
     runner.forget_conversation();

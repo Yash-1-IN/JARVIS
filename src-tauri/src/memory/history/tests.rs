@@ -9,7 +9,7 @@ fn store() -> MemoryStore {
 }
 
 fn say(s: &MemoryStore, role: HistoryRole, text: &str, at: u64) {
-    assert!(s.record_message(role, text, None, at).unwrap());
+    assert!(s.record_message(role, text, None, at).unwrap().stored);
 }
 
 #[test]
@@ -104,6 +104,7 @@ fn off_stores_nothing_and_empty_or_secret_text_is_handled() {
     assert!(
         !s.record_message(HistoryRole::User, "private", None, 2)
             .unwrap()
+            .stored
     );
     assert!(s.list_conversations(5, None).unwrap().is_empty());
     s.set_history_retention(HistoryRetention::Forever, 3)
@@ -111,6 +112,7 @@ fn off_stores_nothing_and_empty_or_secret_text_is_handled() {
     assert!(
         !s.record_message(HistoryRole::User, "  \n ", None, 4)
             .unwrap()
+            .stored
     );
     say(
         &s,
@@ -235,4 +237,21 @@ fn the_export_has_memories_and_history_and_no_keys() {
     assert_eq!(doc["history"][0]["messages"][0]["role"], "user");
     let text = doc.to_string();
     assert!(!text.contains("sk-") && !text.to_lowercase().contains("apikey"));
+}
+
+#[test]
+fn recording_says_when_a_new_conversation_began() {
+    let s = store();
+    let first = s
+        .record_message(HistoryRole::User, "one", None, 10)
+        .unwrap();
+    assert_eq!((first.stored, first.new_conversation), (true, true));
+    let same = s
+        .record_message(HistoryRole::Assistant, "two", None, 10 + MIN)
+        .unwrap();
+    assert_eq!((same.stored, same.new_conversation), (true, false));
+    let later = s
+        .record_message(HistoryRole::User, "three", None, 10 + 12 * MIN)
+        .unwrap();
+    assert!(later.new_conversation, "after ten idle minutes");
 }

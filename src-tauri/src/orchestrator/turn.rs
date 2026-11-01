@@ -210,6 +210,14 @@ impl TurnRunner {
         }
     }
 
+    /// Cancels the running turn, if there is one. Returns whether there was one.
+    pub fn cancel_active(&self, reason: InterruptReason, sink: &dyn TurnSink) -> bool {
+        match self.orch.snapshot().active_request_id {
+            Some(id) => self.cancel(&id, reason, sink),
+            None => false,
+        }
+    }
+
     /// Validates and starts a turn, then streams on `tokio::spawn`. Returns the request id
     /// at once; events follow on the sink and always end with exactly one `done`.
     pub fn start(
@@ -566,8 +574,15 @@ impl TurnRunner {
         let Some(store) = self.memory.as_ref() else {
             return;
         };
-        if let Err(e) = store.record_message(role, text, None, (self.now_secs)() * 1000) {
-            tracing::warn!(error = %e, "could not write history");
+        match store.record_message(role, text, None, (self.now_secs)() * 1000) {
+            // A new conversation starts the model's context fresh too, so what it answers
+            // from matches what History shows and the user can delete. (Only at the start
+            // of a user turn: nothing else is running then.)
+            Ok(r) if r.new_conversation && role == crate::ipc::types::HistoryRole::User => {
+                self.forget_conversation();
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "could not write history"),
         }
     }
 
