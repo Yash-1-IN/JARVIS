@@ -98,7 +98,10 @@ impl SpendMeter {
 
     fn state(&self, now: Day) -> MutexGuard<'_, State> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if now != s.day {
+        // Roll over only forward in time. If the clock moves backwards (manual change,
+        // VM resume, NTP correction) the current period stays, so a cap cannot be reset
+        // by setting the clock back.
+        if now > s.day {
             if (now.year, now.month) != (s.day.year, s.day.month) {
                 s.totals.this_month = 0;
             }
@@ -275,6 +278,30 @@ mod tests {
             monthly: None,
         });
         assert!(m.check(D1).is_ok());
+    }
+
+    #[test]
+    fn clock_going_backwards_does_not_reset_totals() {
+        let m = SpendMeter::new(
+            Caps {
+                daily: Some(1_000),
+                monthly: Some(5_000),
+            },
+            D1,
+        );
+        m.record(D2, use_(1_000, 0), PRICE); // rolls forward to D2 and spends the cap
+        assert!(m.check(D2).is_err());
+        assert!(
+            m.check(D1).is_err(),
+            "an earlier clock must still see the cap"
+        );
+        assert_eq!(m.totals(D1).today, 1_000);
+        m.record(D1, use_(1, 0), PRICE);
+        assert_eq!(
+            m.totals(D2).today,
+            1_001,
+            "spend on an earlier clock lands in the current day"
+        );
     }
 
     #[test]
