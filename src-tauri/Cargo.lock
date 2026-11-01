@@ -2039,6 +2039,7 @@ dependencies = [
  "async-trait",
  "futures",
  "keyring",
+ "libc",
  "lnk",
  "plist",
  "regex",
@@ -2056,6 +2057,7 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "uuid",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

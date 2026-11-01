@@ -42,7 +42,13 @@ zeroize = "1.9.1"
 # Info.plist (binary or XML) for app bundle ids, platform/apps.rs.
 plist = "1.10.3"
 
+[target.'cfg(unix)'.dependencies]
+# renameat2 (Linux) / renamex_np (macOS) for no-overwrite moves, platform/fs.rs.
+libc = "0.2.191"
+
 [target.'cfg(windows)'.dependencies]
+# MoveFileExW without REPLACE_EXISTING for no-overwrite moves, platform/fs.rs.
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 # Start-menu shortcuts to their .exe targets, platform/apps.rs.
 lnk = "0.6.4"
 
