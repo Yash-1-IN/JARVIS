@@ -481,7 +481,6 @@ mod tests {
             "COM1",
             "lpt9.txt",
             "report.txt.",
-            "report ",
             "a:b.txt",
             "file.txt:hidden",
             "bad<name>.txt",
@@ -492,6 +491,12 @@ mod tests {
         }
         assert!(s.check_new(&plain(&root.join("report.txt"))).is_ok());
         assert!(s.check_new(&plain(&root.join("COM10.txt"))).is_ok());
+        // Trailing blanks on the whole input are trimmed before the name check, so the name
+        // that is approved and used is `report`, never one Windows would silently rewrite.
+        let trimmed = s
+            .check_new(&format!("{} ", plain(&root.join("report"))))
+            .unwrap();
+        assert_eq!(trimmed.file_name().unwrap(), "report");
     }
 
     #[test]
