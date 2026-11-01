@@ -18,6 +18,13 @@ export function MockControls({ transport }: { transport: MockTransport }) {
       ))}
       <button
         type="button"
+        title="Log a refused tool call, as when the model reaches for a tool that does not exist"
+        onClick={() => transport.simulateRefusedCall()}
+      >
+        activity: refused call
+      </button>
+      <button
+        type="button"
         title="Interrupt the running reply as if the wake word was heard"
         onClick={() => transport.interrupt("wake_word")}
       >

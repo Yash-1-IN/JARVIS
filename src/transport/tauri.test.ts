@@ -122,4 +122,28 @@ describe("TauriTransport", () => {
     await new TauriTransport().resolveApproval(d);
     expect(invoke).toHaveBeenCalledWith("resolve_approval", { decision: d });
   });
+
+  it("maps the activity log to activity_list and activity_appended", async () => {
+    invoke.mockResolvedValue([]);
+    const t = new TauriTransport();
+    await t.listActivity(50, "abc");
+    expect(invoke).toHaveBeenLastCalledWith("activity_list", {
+      limit: 50,
+      before: "abc",
+    });
+    const got: unknown[] = [];
+    t.onActivity((e) => got.push(e));
+    await Promise.resolve();
+    handlers.get("activity_appended")!({
+      payload: {
+        v: PROTOCOL_VERSION,
+        seq: 3,
+        id: "x",
+        ts: 0,
+        kind: "activity.appended",
+        payload: { id: "a1" },
+      },
+    });
+    expect(got).toEqual([{ id: "a1" }]);
+  });
 });
