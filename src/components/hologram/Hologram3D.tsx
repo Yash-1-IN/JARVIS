@@ -13,6 +13,7 @@ import {
 import type { AssistantPhase } from "../../types/generated/AssistantPhase";
 import type { MicState } from "../../types/generated/MicState";
 import type { OrbMotion } from "../Orb2D";
+import { contextLostHandler } from "./renderer";
 
 /**
  * Hologram colours; error is the only warm one, and shape and motion carry the
@@ -185,10 +186,10 @@ export default function Hologram3D({
         camera={{ position: [0, 0, 5.2], fov: 45 }}
         gl={{ alpha: true, antialias: true, powerPreference: "low-power" }}
         onCreated={({ gl }) => {
-          gl.domElement.addEventListener("webglcontextlost", (e) => {
-            e.preventDefault();
-            onLost();
-          });
+          gl.domElement.addEventListener(
+            "webglcontextlost",
+            contextLostHandler(gl.domElement, onLost),
+          );
         }}
       >
         <Scene

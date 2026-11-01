@@ -53,11 +53,15 @@ export function Hologram({
   mic: MicState;
 }) {
   const pref = useHologramPref((s) => s.pref);
+  const choice = useHologramPref((s) => s.choice);
   const hidden = useDocumentHidden();
   const reduced = useReducedMotion();
   const dark = useDarkScheme();
-  // Set when the 3D view failed this session; 2D from then on.
-  const [broken, setBroken] = useState(false);
+  // The choice during which 3D failed: 2D until the user chooses again, then
+  // 3D gets a fresh try.
+  const [failedAt, setFailedAt] = useState<number | null>(null);
+  const broken = failedAt === choice;
+  const fail = () => setFailedAt(choice);
   const renderer = broken
     ? "2d"
     : chooseRenderer(pref, { webgl: webglAvailable(), linux: isLinux() });
@@ -66,7 +70,7 @@ export function Hologram({
   if (renderer === "2d") return flat;
   const motion = orbMotion(phase, mic);
   return (
-    <Fallback fallback={flat} onError={() => setBroken(true)}>
+    <Fallback key={choice} fallback={flat} onError={fail}>
       <Suspense fallback={flat}>
         <Hologram3D
           phase={phase}
@@ -75,7 +79,7 @@ export function Hologram({
           frameloop={frameloopFor(motion, hidden, reduced)}
           still={reduced}
           dark={dark}
-          onLost={() => setBroken(true)}
+          onLost={fail}
         />
       </Suspense>
     </Fallback>
