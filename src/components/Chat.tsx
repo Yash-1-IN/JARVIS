@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { ChatTurn } from "../state/chatStore";
+import { Markdown } from "./Markdown";
 
 const STOP_NOTES: Partial<Record<NonNullable<ChatTurn["stopReason"]>, string>> =
   {
@@ -34,18 +35,19 @@ export function Chat({ turns, busy, onSubmit }: Props) {
               {t.user}
             </p>
             {/* Polite live region: replies are read once they settle, not per token. */}
-            <p
+            <div
               className="chat-reply"
               aria-live="polite"
               aria-busy={t.stopReason === null}
             >
               <span className="visually-hidden">JARVIS: </span>
-              {/* Plain text for now; markdown rendering (raw HTML off) is a follow-up. */}
-              {t.reply}
+              <Markdown text={t.reply} />
               {t.stopReason && STOP_NOTES[t.stopReason] && (
-                <em className="chat-stop"> [{STOP_NOTES[t.stopReason]}]</em>
+                <p>
+                  <em className="chat-stop">[{STOP_NOTES[t.stopReason]}]</em>
+                </p>
               )}
-            </p>
+            </div>
           </li>
         ))}
       </ol>
