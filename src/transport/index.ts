@@ -2,6 +2,8 @@ import type { ActivityEntry } from "../types/generated/ActivityEntry";
 import type { AllowedApp } from "../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
+import type { Memory } from "../types/generated/Memory";
+import type { MemoryStatus } from "../types/generated/MemoryStatus";
 import type { PingResponse } from "../types/generated/PingResponse";
 import type { Settings } from "../types/generated/Settings";
 import type { SettingsPatch } from "../types/generated/SettingsPatch";
@@ -15,6 +17,7 @@ export type TurnListener = (event: TurnStreamEvent) => void;
 export type UsageListener = (usage: UsageSummary) => void;
 export type InterruptListener = (e: TurnInterrupted) => void;
 export type ActivityListener = (e: ActivityEntry) => void;
+export type MemoryListener = (m: Memory) => void;
 
 /** One interface, two implementations: TauriTransport and MockTransport. */
 export interface Transport {
@@ -70,4 +73,16 @@ export interface Transport {
   onActivity(listener: ActivityListener): () => void;
   /** `usage.updated` broadcasts. Returns an unsubscribe function. */
   onUsage(listener: UsageListener): () => void;
+
+  // Memory (M5, docs/contracts.md "Memory and history").
+  /** Contract `memory_list`: newest change first, optionally one status only. */
+  listMemories(status?: MemoryStatus): Promise<Memory[]>;
+  /** Contract `memory_accept`: a proposed memory becomes active. */
+  acceptMemory(id: string): Promise<Memory>;
+  /** Contract `memory_edit`: 1 to 500 code points; the status is kept. */
+  editMemory(id: string, content: string): Promise<Memory>;
+  /** Contract `memory_delete`: hard delete. Denying a proposal is this call. */
+  deleteMemory(id: string): Promise<void>;
+  /** `memory.proposed`: show the confirmation card with the exact text. */
+  onMemoryProposed(listener: MemoryListener): () => void;
 }

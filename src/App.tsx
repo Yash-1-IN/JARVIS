@@ -3,12 +3,15 @@ import { ActivityLog } from "./components/ActivityLog";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
 import { Controls } from "./components/Controls";
+import { MemoryPanel } from "./components/MemoryPanel";
+import { MemoryProposalCard } from "./components/MemoryProposalCard";
 import { MockBadge } from "./components/MockBadge";
 import { Orb2D } from "./components/Orb2D";
 import { MockControls } from "./components/MockControls";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SidePanel } from "./components/SidePanel";
 import { StatusPanel } from "./components/StatusPanel";
+import { useMemories } from "./hooks/useMemories";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { PROTOCOL_VERSION } from "./protocol";
 import { useChatStore } from "./state/chatStore";
@@ -23,8 +26,9 @@ function isMock(t: Transport): t is MockTransport {
 
 /** The panels that open beside the conversation; one at a time (issue #37). */
 const PANELS = {
-  settings: "Settings",
+  memory: "Memory",
   activity: "Activity",
+  settings: "Settings",
 } as const;
 type PanelId = keyof typeof PANELS;
 
@@ -34,6 +38,10 @@ export default function App({ transport }: { transport: Transport }) {
   const [error, setError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [panel, setPanel] = useState<PanelId | null>(null);
+  const memories = useMemories(transport);
+  const proposals = (memories.memories ?? []).filter(
+    (m) => m.status === "proposed",
+  );
   const navButtons = useRef<Partial<Record<PanelId, HTMLButtonElement | null>>>(
     {},
   );
@@ -141,10 +149,11 @@ export default function App({ transport }: { transport: Transport }) {
           ))}
         </nav>
       </header>
-      {/* Approval cards sit above everything else, so an open panel never hides them. */}
-      {snapshot && snapshot.pendingApprovals.length > 0 && (
+      {/* Approval and memory cards sit above everything else, so an open panel never hides them. */}
+      {((snapshot && snapshot.pendingApprovals.length > 0) ||
+        proposals.length > 0) && (
         <div className="approvals">
-          {snapshot.pendingApprovals.map((r) => (
+          {snapshot?.pendingApprovals.map((r) => (
             <ApprovalCard
               key={r.approvalId}
               request={r}
@@ -156,6 +165,9 @@ export default function App({ transport }: { transport: Transport }) {
                 })
               }
             />
+          ))}
+          {proposals.map((m) => (
+            <MemoryProposalCard key={m.id} memory={m} actions={memories} />
           ))}
         </div>
       )}
@@ -190,11 +202,9 @@ export default function App({ transport }: { transport: Transport }) {
             title={PANELS[panel]}
             onClose={closePanel}
           >
-            {panel === "settings" ? (
-              <SettingsPanel transport={transport} />
-            ) : (
-              <ActivityLog transport={transport} />
-            )}
+            {panel === "settings" && <SettingsPanel transport={transport} />}
+            {panel === "activity" && <ActivityLog transport={transport} />}
+            {panel === "memory" && <MemoryPanel data={memories} />}
           </SidePanel>
         )}
       </div>
