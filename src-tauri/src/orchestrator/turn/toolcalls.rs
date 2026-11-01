@@ -89,9 +89,26 @@ impl TurnRunner {
         sink: &dyn TurnSink,
     ) -> Option<CallResult> {
         let ctx = (w.context)();
+        if w.registry.get(name).is_none() {
+            // The model reached for a tool that does not exist (an injected `shell.*`).
+            w.gateway
+                .record_refused(request_id, name, "not a known tool");
+            self.emit_latest_activity(w, sink);
+            return Some(CallResult::err("That is not a known tool."));
+        }
         let proposal = match w.registry.propose(request_id, name, args.clone(), &ctx) {
             Ok(p) => p,
-            Err(e) => return Some(CallResult::err(e.to_string())),
+            Err(e) => {
+                if matches!(e, tools::ToolError::NotAllowed(_)) {
+                    w.gateway.record_refused(
+                        request_id,
+                        name,
+                        "outside the allowed folders and apps",
+                    );
+                    self.emit_latest_activity(w, sink);
+                }
+                return Some(CallResult::err(e.to_string()));
+            }
         };
         let ticket = match w.gateway.evaluate(proposal) {
             Verdict::Deny(why) => {
@@ -120,6 +137,12 @@ impl TurnRunner {
                     r = tokio::time::timeout(APPROVAL_WAIT, rx) => Some(r),
                 };
                 lock(&self.waiters).remove(&approval_id);
+                // Whatever ended the wait, the card must leave the snapshot (this also
+                // runs the gateway's expiry, so a timed-out request is dropped).
+                sink.snapshot(
+                    self.orch
+                        .set_pending_approvals(w.gateway.pending_requests()),
+                );
                 match answer {
                     None => return None,
                     Some(Ok(Ok(Resolved::Approved(t)))) => t,
@@ -155,7 +178,9 @@ impl TurnRunner {
             self.emit_latest_activity(w, sink);
             return Some(CallResult::err("The arguments changed; nothing was run."));
         }
-        let Some(tool) = w.registry.get(name) else {
+        // The ticket names the tool that was approved; the lookup follows it.
+        debug_assert_eq!(name, ticket.tool);
+        let Some(tool) = w.registry.get(&ticket.tool) else {
             w.gateway.finish(ticket, ToolOutcome::NotRun);
             self.emit_latest_activity(w, sink);
             return Some(CallResult::err("That is not a known tool."));

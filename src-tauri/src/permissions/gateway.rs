@@ -252,6 +252,27 @@ impl Gateway {
         });
     }
 
+    /// Logs a call that never became a proposal (an unknown tool, or arguments outside the
+    /// allowed folders and apps) as `Prohibited` / `NotRun`. Nothing the model supplied is
+    /// stored except the tool name, cleaned and cut; targets stay empty (spec §9.3).
+    pub fn record_refused(&self, request_id: &str, tool_name: &str, why: &str) {
+        let name: String = tool_name
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(64)
+            .collect();
+        let p = Proposal {
+            request_id: request_id.to_owned(),
+            tool: name,
+            base_risk: ToolRisk::High,
+            arg_risk: None,
+            targets: Vec::new(),
+            summary: format!("Refused: {why}"),
+            args: Value::Null,
+        };
+        self.refuse(&p, ToolRisk::High, ToolDecision::Prohibited, why);
+    }
+
     fn refuse(&self, p: &Proposal, risk: ToolRisk, decision: ToolDecision, why: &str) -> Verdict {
         let now = (self.now_ms)();
         self.record(

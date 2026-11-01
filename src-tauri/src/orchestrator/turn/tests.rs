@@ -605,6 +605,8 @@ struct Tooled {
     gateway: Arc<Gateway>,
     sink: Arc<Rec>,
     root: std::path::PathBuf,
+    /// Milliseconds added to the gateway's clock.
+    skew: Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn tooled(
@@ -616,7 +618,12 @@ fn tooled(
     let root = std::fs::canonicalize(root).unwrap();
     let fake = fake(&root);
     let log = Arc::new(ActivityLog::new(100));
-    let gateway = Arc::new(Gateway::new(Box::new(|| NOW * 1000), log.clone()));
+    let skew = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let clock = skew.clone();
+    let gateway = Arc::new(Gateway::new(
+        Box::new(move || NOW * 1000 + clock.load(std::sync::atomic::Ordering::SeqCst)),
+        log.clone(),
+    ));
     gateway.set_auto_allow_medium(auto_medium);
     let roots = vec![crate::config::display_path(&root)];
     let (r, _, _) = runner(Some(fake.clone()), Caps::default());
@@ -635,6 +642,7 @@ fn tooled(
             gateway,
             sink: Arc::new(Rec::default()),
             root,
+            skew,
         },
         fake,
     )
@@ -839,7 +847,7 @@ async fn at_most_five_tool_calls_per_turn() {
 }
 
 #[tokio::test]
-async fn unknown_tool_is_refused_without_running_anything() {
+async fn unknown_tool_is_refused_and_logged_as_prohibited() {
     let (t, fake) = tooled(
         |_| {
             rounds(vec![
@@ -857,4 +865,55 @@ async fn unknown_tool_is_refused_without_running_anything() {
     let res = results_in(&lock(&fake.seen)[1]);
     assert!(res[0].1);
     assert!(lock(&t.sink.approvals).is_empty());
+    let a = lock(&t.sink.activity);
+    assert_eq!(a.len(), 1);
+    assert_eq!(
+        (a[0].tool.as_str(), a[0].decision, a[0].outcome),
+        ("shell.run", ToolDecision::Prohibited, ToolOutcome::NotRun)
+    );
+    assert!(a[0].targets.is_empty() && !a[0].summary.contains("ls"));
+}
+
+#[tokio::test]
+async fn a_path_outside_the_allowed_folders_is_logged_without_the_path() {
+    let outside = std::env::temp_dir().join(format!("jarvis-outside-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&outside).unwrap();
+    let secret = outside.join("ssh-key.txt");
+    std::fs::write(&secret, "secret").unwrap();
+    let args = json!({"path": crate::config::display_path(&secret)});
+    let (t, _) = tooled(
+        move |_| {
+            rounds(vec![
+                vec![
+                    call("t1", "files.read_text", args),
+                    done(ProviderStop::ToolUse),
+                ],
+                vec![say("No."), done(ProviderStop::EndTurn)],
+            ])
+        },
+        true,
+    );
+    t.r.start("read my key".into(), t.sink.clone()).unwrap();
+    t.sink.wait_done().await;
+    let a = lock(&t.sink.activity);
+    assert_eq!(a.len(), 1);
+    assert_eq!(a[0].decision, ToolDecision::Prohibited);
+    assert!(a[0].targets.is_empty() && !a[0].summary.contains("ssh"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_approval_expires_and_leaves_the_snapshot() {
+    let (t, fake) = tooled(rename_script, false);
+    std::fs::write(t.root.join("a.txt"), "x").unwrap();
+    t.r.start("rename a to b".into(), t.sink.clone()).unwrap();
+    let _ = wait_approval(&t.sink).await;
+    // Nobody answers: the gateway's 60 s expiry passes, then the turn's own wait ends.
+    t.skew.store(61_000, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(70)).await;
+    t.sink.wait_done().await;
+    let last = lock(&t.sink.snaps).last().cloned().unwrap();
+    assert!(last.pending_approvals.is_empty());
+    assert!(t.root.join("a.txt").exists());
+    let res = results_in(&lock(&fake.seen)[1]);
+    assert!(res[0].1 && res[0].0.contains("expired"));
 }
