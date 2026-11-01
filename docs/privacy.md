@@ -31,6 +31,7 @@ time, system status, open-an-app and find-a-file questions are also answered on 
 | **Settings** (model, spend caps, allowed folders and apps) | `settings.json` in the app config folder | Until you change it | OS file permissions |
 | **Conversation history** (what you said, JARVIS's replies, one-line summaries of actions) | `jarvis.db` in the app data folder | **30 days by default**; you can choose off, 7 days, 1 year or forever | The OS disk encryption (see below) |
 | **Memories** you kept, and ones waiting for your answer | `jarvis.db` | Until you delete them | The OS disk encryption |
+| **Display preference** (3D hologram, 2D orb or automatic) | The window's local storage, inside the app data folder | Until you change it or clear the app's data | OS file permissions |
 | **Exported file** (when you press Export) | A plain-text `jarvis-export-<date>.json` in your Downloads folder, saved by the window's own download | Until you delete it. It is **your file** after that: it is not covered by retention, "Delete all history" or Delete on a memory. | Whatever protects your Downloads folder |
 | **Activity log** (every action JARVIS tried, who decided, how it ended; never file contents) | In memory only for now | Until the app closes | n/a |
 | **Logs** (events and errors, with key-shaped text masked; not your messages) | The app log folder | Rotated daily | OS file permissions |

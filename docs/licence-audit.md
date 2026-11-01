@@ -18,10 +18,10 @@ Source: `cargo metadata --all-features` for `src-tauri` (all target platforms).
 ## Frontend dependencies (shipped in the app)
 Source: `pnpm licenses list --prod`.
 
-- **89** production packages on 2026-11-01: 87 MIT, 1 ISC, 1 `Apache-2.0 OR MIT`. All allowed. The exact numbers move whenever a package is added (the 3D hologram work adds two MIT packages and one BSD-3-Clause); re-run the command below after such a change.
+- **101** production packages on 2026-11-01 (after the 3D hologram, #48, added `three`, `@react-three/fiber` and a few small helpers): 98 MIT, 1 ISC, 1 BSD-3-Clause, 1 `Apache-2.0 OR MIT`. All allowed. The numbers move whenever a package is added; re-run the command below after such a change.
 
 ## Development-only packages (not shipped)
-307 packages in total, 218 of them used only to build and test. Besides the licences above they include
+About two hundred further packages are used only to build and test (307 in total on 2026-11-01, before the hologram work). Besides the licences above they include
 `MIT-0` (2), `MPL-2.0` (3), `BlueOak-1.0.0` (2), `CC0-1.0` (1) and `CC-BY-4.0` (1, browser-compatibility
 data). None of them is included in the installers. If the project ever redistributes its build tooling,
 these need their own decision.
