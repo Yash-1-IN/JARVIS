@@ -1,5 +1,9 @@
 import { PROTOCOL_VERSION } from "../../protocol";
+import type { ActivityEntry } from "../../types/generated/ActivityEntry";
 import type { AllowedApp } from "../../types/generated/AllowedApp";
+import type { ApprovalRequest } from "../../types/generated/ApprovalRequest";
+import type { ToolDecision } from "../../types/generated/ToolDecision";
+import type { ToolOutcome } from "../../types/generated/ToolOutcome";
 import type { ApiKeyStatus } from "../../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../../types/generated/ApprovalDecision";
 import type { ErrorCode } from "../../types/generated/ErrorCode";
@@ -89,6 +93,10 @@ export class MockTransport implements Transport {
   private usageListeners = new Set<UsageListener>();
   /** Approval ids already decided: a decision is single-use. */
   private decided = new Set<string>();
+  /** Oldest first, like the backend's log; `listActivity` returns newest first. */
+  private activity: ActivityEntry[] = [];
+  private activityListeners = new Set<(e: ActivityEntry) => void>();
+  private activityCount = 0;
   private interruptListeners = new Set<(e: TurnInterrupted) => void>();
   private settings: Settings = {
     schemaVersion: 1,
@@ -275,6 +283,11 @@ export class MockTransport implements Transport {
       );
     }
     this.decided.add(d.approvalId);
+    this.logActivity(
+      req,
+      d.decision === "approve" ? "approved" : "denied",
+      d.decision === "approve" ? "ok" : "not_run",
+    );
     const rest = this.snapshot.pendingApprovals.filter(
       (a) => a.approvalId !== d.approvalId,
     );
@@ -300,6 +313,62 @@ export class MockTransport implements Transport {
     }
   }
 
+  async listActivity(limit: number, before?: string): Promise<ActivityEntry[]> {
+    const n = Math.min(200, Math.max(1, Math.floor(limit)));
+    let end = this.activity.length;
+    if (before !== undefined) {
+      end = this.activity.findIndex((e) => e.id === before);
+      if (end < 0) return [];
+    }
+    return this.activity.slice(Math.max(0, end - n), end).reverse();
+  }
+
+  onActivity(listener: (e: ActivityEntry) => void): () => void {
+    this.activityListeners.add(listener);
+    return () => this.activityListeners.delete(listener);
+  }
+
+  /** Dev helper: the model reached for a tool that does not exist (logged, never run). */
+  simulateRefusedCall(): void {
+    this.pushActivity({
+      requestId: this.snapshot.activeRequestId ?? "mock-req-none",
+      tool: "shell.run",
+      risk: "high",
+      summary: "Refused: not a known tool",
+      targets: [],
+      decision: "prohibited",
+      outcome: "not_run",
+      durationMs: 0,
+    });
+  }
+
+  private logActivity(
+    req: ApprovalRequest,
+    decision: ToolDecision,
+    outcome: ToolOutcome,
+  ): void {
+    this.pushActivity({
+      requestId: req.requestId,
+      tool: req.tool,
+      risk: req.risk,
+      summary: req.summary,
+      targets: req.targets,
+      decision,
+      outcome,
+      durationMs: outcome === "ok" ? 1500 : 0,
+    });
+  }
+
+  private pushActivity(e: Omit<ActivityEntry, "id" | "ts">): void {
+    const entry: ActivityEntry = {
+      ...e,
+      id: `mock-act-${String(++this.activityCount).padStart(6, "0")}`,
+      ts: Date.now(),
+    };
+    this.activity.push(entry);
+    for (const l of this.activityListeners) l(entry);
+  }
+
   /** An unanswered approval lapses: nothing runs and the turn ends. */
   private expire(approvalId: string): void {
     if (
@@ -307,6 +376,10 @@ export class MockTransport implements Transport {
     )
       return;
     this.decided.add(approvalId);
+    const req = this.snapshot.pendingApprovals.find(
+      (a) => a.approvalId === approvalId,
+    );
+    if (req) this.logActivity(req, "expired", "not_run");
     const rest = this.snapshot.pendingApprovals.filter(
       (a) => a.approvalId !== approvalId,
     );

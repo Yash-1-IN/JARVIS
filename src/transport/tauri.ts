@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { PROTOCOL_VERSION } from "../protocol";
 import type { Envelope } from "../types/generated/Envelope";
 import type { EventKind } from "../types/generated/EventKind";
+import type { ActivityEntry } from "../types/generated/ActivityEntry";
 import type { AllowedApp } from "../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
@@ -19,11 +20,13 @@ import type {
   TurnListener,
   UsageListener,
   InterruptListener,
+  ActivityListener,
 } from "./index";
 
 export const SNAPSHOT_EVENT = "state_snapshot";
 export const USAGE_EVENT = "usage_updated";
 export const INTERRUPT_EVENT = "turn_interrupted";
+export const ACTIVITY_EVENT = "activity_appended";
 
 export class TauriTransport implements Transport {
   readonly isMock = false;
@@ -74,6 +77,18 @@ export class TauriTransport implements Transport {
 
   clearApiKey(): Promise<ApiKeyStatus> {
     return invoke<ApiKeyStatus>("api_key_clear");
+  }
+
+  listActivity(limit: number, before?: string): Promise<ActivityEntry[]> {
+    return invoke<ActivityEntry[]>("activity_list", { limit, before });
+  }
+
+  onActivity(listener: ActivityListener): () => void {
+    return subscribe<ActivityEntry>(
+      ACTIVITY_EVENT,
+      "activity.appended",
+      listener,
+    );
   }
 
   appsInstalled(): Promise<AllowedApp[]> {
