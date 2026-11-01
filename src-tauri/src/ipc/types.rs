@@ -257,7 +257,7 @@ pub struct Settings {
 /// Partial update. For the caps: omit the field to leave it unchanged, send `null`
 /// to clear the cap, send a number to set it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct SettingsPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]

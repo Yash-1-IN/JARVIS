@@ -3,6 +3,7 @@
 //! there is no float rounding. Time is injected, so the meter is deterministic to test.
 
 use super::provider::Usage;
+use crate::ipc::types::UsageSummary;
 use std::sync::{Mutex, MutexGuard};
 
 pub type Micros = u64;
@@ -66,11 +67,46 @@ impl Day {
     }
 }
 
+impl Day {
+    /// Days since 1970-01-01 (Hinnant's days-from-civil).
+    fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+        let y = i64::from(year) - i64::from(month <= 2);
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let m = i64::from(month);
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(day) - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
+    }
+
+    fn start_ms(year: i32, month: u32, day: u32) -> u64 {
+        (Self::days_from_civil(year, month, day).max(0) as u64) * 86_400_000
+    }
+
+    /// Unix ms of the next UTC midnight (D-15).
+    pub fn next_day_start_ms(self) -> u64 {
+        Self::start_ms(self.year, self.month, self.day) + 86_400_000
+    }
+
+    /// Unix ms of 00:00 UTC on the first of next month (D-15).
+    pub fn next_month_start_ms(self) -> u64 {
+        if self.month == 12 {
+            Self::start_ms(self.year + 1, 1, 1)
+        } else {
+            Self::start_ms(self.year, self.month + 1, 1)
+        }
+    }
+}
+
 /// What the settings page shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SpendTotals {
     pub today: Micros,
     pub this_month: Micros,
+    pub today_input_tokens: u64,
+    pub today_output_tokens: u64,
+    pub month_input_tokens: u64,
+    pub month_output_tokens: u64,
 }
 
 struct State {
@@ -104,8 +140,12 @@ impl SpendMeter {
         if now > s.day {
             if (now.year, now.month) != (s.day.year, s.day.month) {
                 s.totals.this_month = 0;
+                s.totals.month_input_tokens = 0;
+                s.totals.month_output_tokens = 0;
             }
             s.totals.today = 0;
+            s.totals.today_input_tokens = 0;
+            s.totals.today_output_tokens = 0;
             s.day = now;
         }
         s
@@ -113,6 +153,28 @@ impl SpendMeter {
 
     pub fn set_caps(&self, caps: Caps) {
         *self.caps.lock().unwrap_or_else(|e| e.into_inner()) = caps;
+    }
+
+    pub fn caps(&self) -> Caps {
+        *self.caps.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The `usage_get` / `usage.updated` payload.
+    pub fn summary(&self, now: Day) -> UsageSummary {
+        let t = self.totals(now);
+        let c = self.caps();
+        UsageSummary {
+            today_micro_usd: t.today,
+            month_micro_usd: t.this_month,
+            today_input_tokens: t.today_input_tokens,
+            today_output_tokens: t.today_output_tokens,
+            month_input_tokens: t.month_input_tokens,
+            month_output_tokens: t.month_output_tokens,
+            daily_cap_micro_usd: c.daily,
+            monthly_cap_micro_usd: c.monthly,
+            day_resets_at: now.next_day_start_ms(),
+            month_resets_at: now.next_month_start_ms(),
+        }
     }
 
     pub fn totals(&self, now: Day) -> SpendTotals {
@@ -150,6 +212,14 @@ impl SpendMeter {
         let mut s = self.state(now);
         s.totals.today = s.totals.today.saturating_add(cost);
         s.totals.this_month = s.totals.this_month.saturating_add(cost);
+        let (i, o) = (
+            u64::from(usage.input_tokens),
+            u64::from(usage.output_tokens),
+        );
+        s.totals.today_input_tokens = s.totals.today_input_tokens.saturating_add(i);
+        s.totals.today_output_tokens = s.totals.today_output_tokens.saturating_add(o);
+        s.totals.month_input_tokens = s.totals.month_input_tokens.saturating_add(i);
+        s.totals.month_output_tokens = s.totals.month_output_tokens.saturating_add(o);
         cost
     }
 }
@@ -236,13 +306,9 @@ mod tests {
         assert_eq!(m.check(D2).unwrap_err().kind, CapKind::Daily);
         m.record(D3, use_(2_000, 0), PRICE); // new day: daily reset, month total 7_000
         assert!(m.check(D3).is_ok());
-        assert_eq!(
-            m.totals(D3),
-            SpendTotals {
-                today: 2_000,
-                this_month: 7_000
-            }
-        );
+        let t = m.totals(D3);
+        assert_eq!((t.today, t.this_month), (2_000, 7_000));
+        assert_eq!((t.today_input_tokens, t.month_input_tokens), (2_000, 7_000));
         m.record(D3, use_(1_000, 0), PRICE);
         assert_eq!(m.check(D3).unwrap_err().kind, CapKind::Monthly);
     }
@@ -315,9 +381,56 @@ mod tests {
             SpendTotals {
                 today: 500,
                 this_month: 900,
+                ..Default::default()
             },
         );
         assert!(m.check(D1).is_err());
+    }
+
+    #[test]
+    fn tokens_are_counted_and_reset_with_their_period() {
+        let m = SpendMeter::new(Caps::default(), D1);
+        m.record(D1, use_(1_000, 200), PRICE);
+        m.record(D1, use_(50, 5), PRICE);
+        let t = m.totals(D1);
+        assert_eq!((t.today_input_tokens, t.today_output_tokens), (1_050, 205));
+        let t = m.totals(D2); // next day and next month
+        assert_eq!(t, SpendTotals::default());
+    }
+
+    #[test]
+    fn summary_reports_caps_and_utc_reset_times() {
+        let m = SpendMeter::new(
+            Caps {
+                daily: Some(10),
+                monthly: None,
+            },
+            D1,
+        );
+        let s = m.summary(D1);
+        assert_eq!(
+            (s.daily_cap_micro_usd, s.monthly_cap_micro_usd),
+            (Some(10), None)
+        );
+        // 2026-10-31: both the next UTC midnight and the next month start are 2026-11-01.
+        assert_eq!(
+            (s.day_resets_at, s.month_resets_at),
+            (1_793_491_200_000, 1_793_491_200_000)
+        );
+        let mid = Day {
+            year: 2026,
+            month: 11,
+            day: 15,
+        };
+        assert_eq!(mid.next_day_start_ms(), 1_793_491_200_000 + 15 * 86_400_000);
+        assert_eq!(mid.next_month_start_ms(), 1_796_083_200_000); // 2026-12-01
+        let dec = Day {
+            year: 2026,
+            month: 12,
+            day: 31,
+        };
+        assert_eq!(dec.next_month_start_ms(), Day::start_ms(2027, 1, 1));
+        assert_eq!(Day::start_ms(2027, 1, 1), 1_798_761_600_000);
     }
 
     #[test]

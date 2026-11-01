@@ -26,6 +26,21 @@ pub struct ToolSpec {
     pub input_schema: serde_json::Value,
 }
 
+/// How hard the model thinks. Short spoken replies use `Low`: lower latency and cost.
+/// More levels are added when something needs them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effort {
+    Low,
+}
+
+impl Effort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TurnRequest {
     /// From config, never hard-coded.
@@ -33,7 +48,9 @@ pub struct TurnRequest {
     pub system: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSpec>,
+    /// Thinking tokens count toward this limit, so keep it generous.
     pub max_output_tokens: u32,
+    pub effort: Effort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -47,6 +64,8 @@ pub enum StopReason {
     EndTurn,
     ToolUse,
     MaxTokens,
+    /// The provider declined the request.
+    Refusal,
     Other,
 }
 
@@ -78,12 +97,6 @@ pub enum ProviderError {
     Cancelled,
     #[error("malformed provider response: {0}")]
     Protocol(String),
-}
-
-impl ProviderError {
-    pub fn retryable(&self) -> bool {
-        matches!(self, Self::RateLimit | Self::Unavailable(_) | Self::Offline)
-    }
 }
 
 #[async_trait]
