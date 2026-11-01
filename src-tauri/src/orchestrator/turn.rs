@@ -154,7 +154,14 @@ impl TurnRunner {
     /// They are the user's own notes shown as quoted data: never instructions, and never a
     /// reason to use a tool.
     fn memory_block(&self, question: &str) -> Option<String> {
-        let found = self.memory.as_ref()?.retrieve(question, 5).ok()?;
+        let found = match self.memory.as_ref()?.retrieve(question, 5) {
+            Ok(f) => f,
+            Err(e) => {
+                // The turn goes ahead without memories; the log says why.
+                tracing::warn!(error = %e, "could not read memories for the prompt");
+                return None;
+            }
+        };
         if found.is_empty() {
             return None;
         }
@@ -273,6 +280,7 @@ impl TurnRunner {
     }
 
     async fn run(&self, id: &str, text: String, cancel: CancellationToken, sink: &dyn TurnSink) {
+        self.log_history(crate::ipc::types::HistoryRole::User, &text);
         // Local intents never pay cloud latency or cost (spec §3.3). Only the ones that can
         // be answered here are; time, status, app and file requests go to the model, which
         // now has the tools for them and whose calls go through the permission gateway.
@@ -329,7 +337,7 @@ impl TurnRunner {
                 sink,
             );
         };
-        let question: Option<String> = Some(text.clone());
+        let question = text.clone();
         {
             let mut h = lock(&self.history);
             h.push(Message::text(Role::User, text));
@@ -340,7 +348,7 @@ impl TurnRunner {
         let mut calls_made = 0usize;
         sink.snapshot(self.orch.set_cloud_in_use(true));
         let cfg = (self.config)();
-        let system = match question.as_deref().and_then(|q| self.memory_block(q)) {
+        let system = match self.memory_block(&question) {
             Some(block) => format!("{PERSONA}\n\n{block}"),
             None => PERSONA.to_owned(),
         };
@@ -431,6 +439,7 @@ impl TurnRunner {
                 _ => {}
             }
             let Some(w) = self.tools.as_ref().filter(|_| !calls.is_empty()) else {
+                self.log_history(crate::ipc::types::HistoryRole::Assistant, &reply);
                 lock(&self.history).push(Message::text(Role::Assistant, reply.clone()));
                 *lock(&self.last_reply) = Some(reply);
                 return self.finish(id, StopReason::End, sink);
@@ -533,7 +542,19 @@ impl TurnRunner {
         }
     }
 
+    /// Writes one message to the conversation history (nothing when history is off or the
+    /// database is unavailable; a failure is logged and never stops the turn).
+    pub(super) fn log_history(&self, role: crate::ipc::types::HistoryRole, text: &str) {
+        let Some(store) = self.memory.as_ref() else {
+            return;
+        };
+        if let Err(e) = store.record_message(role, text, None, (self.now_secs)() * 1000) {
+            tracing::warn!(error = %e, "could not write history");
+        }
+    }
+
     fn finish_text(&self, id: &str, reply: &str, sink: &dyn TurnSink) {
+        self.log_history(crate::ipc::types::HistoryRole::Assistant, reply);
         sink.event(TurnStreamEvent::TextDelta { text: reply.into() });
         *lock(&self.last_reply) = Some(reply.to_owned());
         self.finish(id, StopReason::End, sink);

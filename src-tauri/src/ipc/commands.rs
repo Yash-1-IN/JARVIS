@@ -246,6 +246,62 @@ fn store_error(e: StoreError) -> JarvisError {
     }
 }
 
+/// Everything the app keeps about the user as one JSON document (memories and history).
+/// The webview saves it as a file; the backend never writes it anywhere.
+#[tauri::command]
+pub fn memory_export(store: tauri::State<'_, Arc<MemoryStore>>) -> Result<String, JarvisError> {
+    store.export_json(now_ms()).map_err(store_error)
+}
+
+/// Conversations, newest first; `before` is a conversation id.
+#[tauri::command]
+pub fn history_list(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+    limit: usize,
+    before: Option<String>,
+) -> Result<Vec<ConversationSummary>, JarvisError> {
+    store
+        .list_conversations(limit, before.as_deref())
+        .map_err(store_error)
+}
+
+#[tauri::command]
+pub fn history_get(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+    conversation_id: String,
+) -> Result<Vec<HistoryMessage>, JarvisError> {
+    store
+        .get_conversation(&conversation_id)
+        .map_err(store_error)
+}
+
+/// Deletes all history for good. Memories and settings stay.
+#[tauri::command]
+pub fn history_delete_all(store: tauri::State<'_, Arc<MemoryStore>>) -> Result<(), JarvisError> {
+    store.delete_all_history().map_err(store_error)
+}
+
+#[tauri::command]
+pub fn history_settings_get(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+) -> Result<HistorySettings, JarvisError> {
+    Ok(HistorySettings {
+        retention: store.history_retention().map_err(store_error)?,
+    })
+}
+
+/// Saves the retention choice; a shorter period removes older history at once.
+#[tauri::command]
+pub fn history_settings_set(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+    settings: HistorySettings,
+) -> Result<HistorySettings, JarvisError> {
+    store
+        .set_history_retention(settings.retention, now_ms())
+        .map_err(store_error)?;
+    Ok(settings)
+}
+
 /// Memories, newest change first; optionally only one status.
 #[tauri::command]
 pub fn memory_list(

@@ -1252,3 +1252,87 @@ async fn only_confirmed_memories_reach_the_prompt_and_as_quoted_data() {
     s2.wait_done().await;
     assert!(!lock(&fake2.seen)[0].system.contains("green tea"));
 }
+
+// ------------------------------------------------------------------------ history
+
+fn conversation_texts(
+    store: &crate::memory::store::MemoryStore,
+) -> Vec<(crate::ipc::types::HistoryRole, String)> {
+    let list = store.list_conversations(10, None).unwrap();
+    assert_eq!(list.len(), 1, "one conversation: {list:?}");
+    store
+        .get_conversation(&list[0].id)
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.role, m.content))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_cloud_turn_and_a_local_answer_are_written_to_history() {
+    use crate::ipc::types::HistoryRole::{Assistant, User};
+    let fake = Fake::new(Script::Ok(vec!["Hello ", "there."], Usage::default()));
+    let (r, store) = with_memory_store(fake, &[]);
+    let s1 = Arc::new(Rec::default());
+    r.start("hello".into(), s1.clone()).unwrap();
+    s1.wait_done().await;
+    let s2 = Arc::new(Rec::default());
+    r.start("what can you do".into(), s2.clone()).unwrap();
+    s2.wait_done().await;
+    let got = conversation_texts(&store);
+    assert_eq!(got[0], (User, "hello".to_string()));
+    assert_eq!(got[1], (Assistant, "Hello there.".to_string()));
+    assert_eq!(got[2], (User, "what can you do".to_string()));
+    assert_eq!(got[3].0, Assistant);
+    assert_eq!(got.len(), 4);
+}
+
+#[tokio::test]
+async fn history_off_stores_nothing_and_a_failed_turn_leaves_only_what_was_said() {
+    use crate::ipc::types::HistoryRetention;
+    let fake = Fake::new(Script::Ok(vec!["x"], Usage::default()));
+    let (r, store) = with_memory_store(fake, &[]);
+    store
+        .set_history_retention(HistoryRetention::Off, 1)
+        .unwrap();
+    let s = Arc::new(Rec::default());
+    r.start("secret question".into(), s.clone()).unwrap();
+    s.wait_done().await;
+    assert!(store.list_conversations(10, None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn tool_calls_are_recorded_as_one_line_summaries_never_file_contents() {
+    use crate::ipc::types::HistoryRole::Tool;
+    let (t, _) = tooled(
+        |root| {
+            let args = json!({"path": crate::config::display_path(&root.join("n.txt"))});
+            rounds(vec![
+                vec![
+                    call("t1", "files.read_text", args),
+                    done(ProviderStop::ToolUse),
+                ],
+                vec![say("It says hello."), done(ProviderStop::EndTurn)],
+            ])
+        },
+        true,
+    );
+    // The same runner also gets a store, as in the app.
+    let store = Arc::new(crate::memory::store::MemoryStore::new(
+        crate::memory::db::open_in_memory().unwrap(),
+    ));
+    let r = Arc::new(Arc::into_inner(t.r).unwrap().with_memory(store.clone()));
+    std::fs::write(t.root.join("n.txt"), "CONTENTS-THAT-MUST-NOT-BE-STORED").unwrap();
+    let sink = Arc::new(Rec::default());
+    r.start("read n.txt".into(), sink.clone()).unwrap();
+    sink.wait_done().await;
+    let got = conversation_texts(&store);
+    let tool_lines: Vec<_> = got.iter().filter(|(role, _)| *role == Tool).collect();
+    assert_eq!(tool_lines.len(), 1);
+    assert!(tool_lines[0].1.contains("n.txt"));
+    assert!(
+        got.iter()
+            .all(|(_, text)| !text.contains("CONTENTS-THAT-MUST")),
+        "file contents never reach history"
+    );
+}
