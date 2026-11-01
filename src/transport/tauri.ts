@@ -1,8 +1,13 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { PROTOCOL_VERSION } from "../protocol";
+import type { Envelope } from "../types/generated/Envelope";
 import type { PingResponse } from "../types/generated/PingResponse";
 import type { Snapshot } from "../types/generated/Snapshot";
 import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
 import type { SnapshotListener, Transport, TurnListener } from "./index";
+
+export const SNAPSHOT_EVENT = "state_snapshot";
 
 export class TauriTransport implements Transport {
   readonly isMock = false;
@@ -15,15 +20,28 @@ export class TauriTransport implements Transport {
     return invoke<Snapshot>("get_snapshot");
   }
 
-  // The backend does not publish `state.snapshot` events yet; that needs the
-  // Envelope contract (spec §5.3), which goes in its own contract PR.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  onSnapshot(_listener: SnapshotListener): () => void {
-    return () => {};
+  /**
+   * The backend broadcasts `Envelope<Snapshot>` with kind `state.snapshot` on
+   * the Tauri event `state_snapshot` (event names cannot contain '.').
+   * Envelopes from another protocol version are dropped; the startup `ping`
+   * check already blocks the UI on a mismatch.
+   */
+  onSnapshot(listener: SnapshotListener): () => void {
+    let stopped = false;
+    const unlisten = listen<Envelope<Snapshot>>(SNAPSHOT_EVENT, (e) => {
+      const env = e.payload;
+      if (env.v !== PROTOCOL_VERSION || env.kind !== "state.snapshot") return;
+      listener(env.payload);
+    });
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      void unlisten.then((fn) => fn());
+    };
   }
 
-  // `cancel` and `set_mute` are agreed in docs/contracts.md and implemented in
-  // Rust in M2; until then these reject and the UI shows the error.
+  // `submit_text` is implemented in Rust later in M2; until then it rejects
+  // and the UI shows the error.
   cancel(requestId: string): Promise<void> {
     return invoke("cancel", { requestId });
   }
