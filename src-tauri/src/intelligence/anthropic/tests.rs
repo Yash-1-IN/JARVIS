@@ -130,6 +130,7 @@ fn req() -> TurnRequest {
         }],
         tools: vec![],
         max_output_tokens: 256,
+        effort: Effort::Low,
     }
 }
 
@@ -166,6 +167,10 @@ async fn streams_text_deltas_and_usage() {
     assert!(sent.contains("x-api-key: sk-ant-fakekey-for-tests"));
     assert!(sent.contains("anthropic-version: 2023-06-01"));
     assert!(sent.contains("\"stream\":true") && sent.contains("\"model\":\"test-model\""));
+    assert!(
+        sent.contains("\"output_config\":{\"effort\":\"low\"}"),
+        "{sent}"
+    );
 }
 
 #[tokio::test]
@@ -395,4 +400,32 @@ async fn key_with_invalid_header_characters_is_rejected_without_a_request() {
         check_key("http://127.0.0.1:1", "bad\nkey", Duration::from_secs(1)).await,
         Err(ProviderError::Auth)
     );
+}
+
+#[tokio::test]
+async fn refusal_and_max_tokens_stop_reasons_are_mapped() {
+    for (reason, expected) in [
+        ("refusal", StopReason::Refusal),
+        ("max_tokens", StopReason::MaxTokens),
+    ] {
+        let body = sse(&[
+            (
+                "message_start",
+                r#"{"message":{"usage":{"input_tokens":1}}}"#,
+            ),
+            (
+                "message_delta",
+                &format!(
+                    r#"{{"delta":{{"stop_reason":"{reason}"}},"usage":{{"output_tokens":7}}}}"#
+                ),
+            ),
+            ("message_stop", "{}"),
+        ]);
+        let (url, _) = serve(vec![Reply::Full { status: 200, body }]).await;
+        let evs = collect(&provider(url)).await.unwrap();
+        assert!(
+            matches!(evs.last(), Some(TurnEvent::Done { stop, .. }) if *stop == expected),
+            "{reason}: {evs:?}"
+        );
+    }
 }

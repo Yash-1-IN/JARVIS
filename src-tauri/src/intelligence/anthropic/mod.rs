@@ -107,6 +107,7 @@ impl AnthropicProvider {
             "max_tokens": req.max_output_tokens,
             "system": req.system,
             "messages": req.messages,
+            "output_config": { "effort": req.effort.as_str() },
             "stream": true,
         });
         if !req.tools.is_empty() {
@@ -354,6 +355,7 @@ impl Accumulator {
                     Some("end_turn") => StopReason::EndTurn,
                     Some("tool_use") => StopReason::ToolUse,
                     Some("max_tokens") => StopReason::MaxTokens,
+                    Some("refusal") => StopReason::Refusal,
                     _ => StopReason::Other,
                 });
                 Ok(vec![])

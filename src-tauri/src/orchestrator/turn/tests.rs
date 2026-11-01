@@ -54,6 +54,7 @@ impl Rec {
 
 enum Script {
     Ok(Vec<&'static str>, Usage),
+    Stop(Vec<&'static str>, ProviderStop),
     FailAfterText(ProviderError),
     FailToStart(ProviderError),
     HangAfterText,
@@ -88,6 +89,17 @@ impl ModelProvider for Fake {
         let text = |t: &str| Ok(TurnEvent::TextDelta(t.to_owned()));
         match &self.script {
             Script::FailToStart(e) => Err(e.clone()),
+            Script::Stop(parts, why) => {
+                let mut items: Vec<_> = parts.iter().map(|p| text(p)).collect();
+                items.push(Ok(TurnEvent::Done {
+                    stop: *why,
+                    usage: Usage {
+                        input_tokens: 10,
+                        output_tokens: 20,
+                    },
+                }));
+                Ok(futures::stream::iter(items).boxed())
+            }
             Script::Ok(parts, usage) => {
                 let mut items: Vec<_> = parts.iter().map(|p| text(p)).collect();
                 items.push(Ok(TurnEvent::Done {
@@ -192,6 +204,61 @@ async fn history_is_sent_on_the_next_turn() {
         .map(|m| m.content.as_str())
         .collect();
     assert_eq!(second, vec!["first question", "Noted.", "second question"]);
+}
+
+#[tokio::test]
+async fn request_uses_low_effort_and_a_generous_token_limit() {
+    let fake = Fake::new(Script::Ok(vec!["Hi."], Usage::default()));
+    let (r, _, _) = runner(Some(fake.clone()), Caps::default());
+    let sink = Arc::new(Rec::default());
+    r.start("hello there".into(), sink.clone()).unwrap();
+    sink.wait_done().await;
+    let seen = lock(&fake.seen);
+    assert_eq!(seen[0].effort, Effort::Low);
+    assert!(seen[0].max_output_tokens >= 4096);
+}
+
+#[tokio::test]
+async fn refusal_gets_a_plain_message_and_is_not_kept_in_history() {
+    let fake = Fake::new(Script::Stop(vec![], ProviderStop::Refusal));
+    let (r, orch, _) = runner(Some(fake), Caps::default());
+    let sink = Arc::new(Rec::default());
+    r.start("something not allowed".into(), sink.clone())
+        .unwrap();
+    sink.wait_done().await;
+    assert_eq!(sink.text(), "I'm not able to help with that.");
+    assert_eq!(sink.dones(), vec![StopReason::End]);
+    assert_eq!(orch.snapshot().phase, AssistantPhase::Idle);
+    assert!(lock(&r.history).is_empty());
+}
+
+#[tokio::test]
+async fn running_out_of_tokens_with_no_text_is_a_retryable_error() {
+    let fake = Fake::new(Script::Stop(vec![], ProviderStop::MaxTokens));
+    let (r, orch, _) = runner(Some(fake), Caps::default());
+    let sink = Arc::new(Rec::default());
+    r.start("think hard".into(), sink.clone()).unwrap();
+    sink.wait_done().await;
+    assert_eq!(sink.dones(), vec![StopReason::Error]);
+    let e = orch.snapshot().last_error.unwrap();
+    assert_eq!(
+        (e.code, e.retryable),
+        (ErrorCode::ProviderUnavailable, true)
+    );
+    assert!(lock(&r.history).is_empty());
+}
+
+#[tokio::test]
+async fn max_tokens_with_partial_text_still_finishes_normally() {
+    let fake = Fake::new(Script::Stop(vec!["Half an answ"], ProviderStop::MaxTokens));
+    let (r, _, _) = runner(Some(fake), Caps::default());
+    let sink = Arc::new(Rec::default());
+    r.start("long question".into(), sink.clone()).unwrap();
+    sink.wait_done().await;
+    assert_eq!(
+        (sink.text().as_str(), sink.dones()),
+        ("Half an answ", vec![StopReason::End])
+    );
 }
 
 #[tokio::test]
@@ -305,26 +372,21 @@ async fn cancelled_turn_still_counts_estimated_spend() {
     r.start("stop".into(), Arc::new(Rec::default())).unwrap();
     a.wait_done().await;
     tokio::time::sleep(Duration::from_millis(30)).await;
-    // 18 input chars -> 5 tokens, 2 output chars -> 1 token: 5 + 5 micro-dollars.
-    assert_eq!(spend.totals(Day::from_unix_secs(NOW)).today, 10);
+    // 18 input chars -> 5 tokens; output is charged at the full 4096-token limit
+    // (hidden thinking is billed but never streamed): 5 + 20,480 micro-dollars.
+    assert_eq!(spend.totals(Day::from_unix_secs(NOW)).today, 5 + 20_480);
 }
 
 #[test]
-fn usage_estimate_rounds_up() {
-    assert_eq!(estimate_usage(0, 0), Usage::default());
+fn usage_estimate_rounds_input_up_and_floors_output() {
+    assert_eq!(estimate_usage(0, 0).input_tokens, 0);
+    assert_eq!(estimate_usage(1, 4).input_tokens, 1);
+    assert_eq!(estimate_usage(5, 9).input_tokens, 2);
+    // Output never drops below the limit, so thinking models are not undercounted.
+    assert_eq!(estimate_usage(0, 4).output_tokens, MAX_OUTPUT_TOKENS);
     assert_eq!(
-        estimate_usage(1, 4),
-        Usage {
-            input_tokens: 1,
-            output_tokens: 1
-        }
-    );
-    assert_eq!(
-        estimate_usage(5, 9),
-        Usage {
-            input_tokens: 2,
-            output_tokens: 3
-        }
+        estimate_usage(0, 4 * (MAX_OUTPUT_TOKENS as usize + 10)).output_tokens,
+        MAX_OUTPUT_TOKENS + 10
     );
 }
 
