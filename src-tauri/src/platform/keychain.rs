@@ -9,7 +9,9 @@
 //! The key never leaves this module except through `SecretString::expose`,
 //! which only the provider calls when building a request.
 
+pub use crate::ipc::types::KeyStorage;
 use std::sync::Mutex;
+use zeroize::{Zeroize, Zeroizing};
 
 const SERVICE: &str = "dev.jarvis.app";
 const ACCOUNT: &str = "anthropic-api-key";
@@ -19,8 +21,9 @@ const MAX_KEY_LEN: usize = 512;
 const MIN_LEN_FOR_HINT: usize = 16;
 
 /// A secret that cannot be printed by accident: no `Display`, and `Debug` is redacted.
+/// The buffer is wiped when the value is dropped.
 #[derive(Clone, PartialEq, Eq)]
-pub struct SecretString(String);
+pub struct SecretString(Zeroizing<String>);
 
 impl SecretString {
     /// Trims surrounding whitespace and rejects empty, oversized or
@@ -30,7 +33,7 @@ impl SecretString {
         if k.is_empty() || k.len() > MAX_KEY_LEN || k.chars().any(char::is_whitespace) {
             return Err(KeychainError::InvalidKey);
         }
-        Ok(Self(k.to_owned()))
+        Ok(Self(Zeroizing::new(k.to_owned())))
     }
 
     pub fn expose(&self) -> &str {
@@ -54,12 +57,6 @@ impl std::fmt::Debug for SecretString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SecretString(***)")
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyStorage {
-    Keychain,
-    SessionOnly,
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -115,7 +112,11 @@ fn map_keyring(e: keyring::Error) -> BackendError {
 impl SecretBackend for OsKeychain {
     fn get(&self) -> Result<Option<SecretString>, BackendError> {
         match Self::entry()?.get_password() {
-            Ok(s) => Ok(SecretString::parse(&s).ok()),
+            Ok(mut s) => {
+                let key = SecretString::parse(&s).ok();
+                s.zeroize(); // the store's copy, not just ours
+                Ok(key)
+            }
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(map_keyring(e)),
         }
@@ -318,6 +319,19 @@ mod tests {
         assert_eq!(v.storage(), KeyStorage::Keychain);
         assert_eq!(v.get(), Err(KeychainError::Store));
         assert_eq!(v.clear(), Err(KeychainError::Store));
+    }
+
+    #[test]
+    fn storage_is_the_contract_type_on_the_wire() {
+        // Same enum the settings commands return (ApiKeyStatus.storage, #11).
+        assert_eq!(
+            serde_json::to_value(KeyStorage::SessionOnly).unwrap(),
+            "session_only"
+        );
+        assert_eq!(
+            serde_json::to_value(KeyStorage::Keychain).unwrap(),
+            "keychain"
+        );
     }
 
     #[test]

@@ -1,0 +1,35 @@
+{
+  "name": "approval-high",
+  "description": "A high-risk, tainted request: on-screen approval only, never voice.",
+  "steps": [
+    {
+      "delayMs": 0,
+      "patch": {
+        "mic": "standby",
+        "phase": "thinking",
+        "network": "online",
+        "activeRequestId": "mock-req-6"
+      }
+    },
+    {
+      "delayMs": 1000,
+      "patch": {
+        "phase": "awaiting_approval",
+        "pendingApprovals": [
+          {
+            "approvalId": "mock-appr-2",
+            "requestId": "mock-req-6",
+            "tool": "files.move",
+            "risk": "high",
+            "summary": "Move 12 files from Documents/Tax to Downloads/old. This was suggested after reading a file you opened.",
+            "targets": ["~/Documents/Tax/", "~/Downloads/old/"],
+            "argsDigest": "mock-digest-0001",
+            "expiresAt": 0,
+            "allowVoice": false,
+            "tainted": true
+          }
+        ]
+      }
+    }
+  ]
+}

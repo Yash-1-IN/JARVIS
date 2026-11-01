@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useChatStore } from "./chatStore";
 
 describe("chatStore", () => {
-  beforeEach(() => useChatStore.setState({ turns: [] }));
+  beforeEach(() => useChatStore.setState({ turns: [], pendingInterrupts: {} }));
 
   it("accumulates text deltas and stops at done", () => {
     const s = useChatStore.getState();
@@ -38,5 +38,21 @@ describe("chatStore", () => {
     const [a, b] = useChatStore.getState().turns;
     expect(a.stopReason).toBe("error");
     expect(b.stopReason).toBe("end");
+  });
+
+  it("records why a turn was interrupted, even if the event beats the requestId", () => {
+    const s = useChatStore.getState();
+    s.start("a", "1");
+    s.setRequestId("a", "req-a");
+    s.markInterrupted("req-a", "hotkey");
+    s.start("b", "2");
+    s.markInterrupted("req-b", "wake_word"); // id not known yet
+    expect(useChatStore.getState().pendingInterrupts).toEqual({
+      "req-b": "wake_word",
+    });
+    s.setRequestId("b", "req-b");
+    const [a, b] = useChatStore.getState().turns;
+    expect([a.interruptedBy, b.interruptedBy]).toEqual(["hotkey", "wake_word"]);
+    expect(useChatStore.getState().pendingInterrupts).toEqual({});
   });
 });

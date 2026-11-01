@@ -58,4 +58,66 @@ describe("TauriTransport", () => {
     await Promise.resolve();
     expect(unlisten).toHaveBeenCalledOnce();
   });
+
+  it("maps settings methods to the contract command names", async () => {
+    const t = new TauriTransport();
+    invoke.mockResolvedValue({});
+    await t.getSettings();
+    await t.updateSettings({ dailyCapMicroUsd: null });
+    await t.setApiKey("k");
+    await t.clearApiKey();
+    await t.getUsage();
+    expect(invoke.mock.calls).toEqual([
+      ["settings_get"],
+      ["settings_set", { patch: { dailyCapMicroUsd: null } }],
+      ["api_key_set", { key: "k" }],
+      ["api_key_clear"],
+      ["usage_get"],
+    ]);
+  });
+
+  it("delivers usage_updated envelopes", async () => {
+    const got: unknown[] = [];
+    new TauriTransport().onUsage((u) => got.push(u));
+    await Promise.resolve();
+    handlers.get("usage_updated")!({
+      payload: {
+        v: PROTOCOL_VERSION,
+        seq: 1,
+        id: "x",
+        ts: 0,
+        kind: "usage.updated",
+        payload: { todayMicroUsd: 7 },
+      },
+    });
+    expect(got).toEqual([{ todayMicroUsd: 7 }]);
+  });
+
+  it("delivers turn_interrupted envelopes", async () => {
+    const got: unknown[] = [];
+    new TauriTransport().onInterrupted((e) => got.push(e));
+    await Promise.resolve();
+    handlers.get("turn_interrupted")!({
+      payload: {
+        v: PROTOCOL_VERSION,
+        seq: 2,
+        id: "x",
+        ts: 0,
+        kind: "turn.interrupted",
+        payload: { requestId: "r", reason: "hotkey" },
+      },
+    });
+    expect(got).toEqual([{ requestId: "r", reason: "hotkey" }]);
+  });
+
+  it("sends resolve_approval with the decision object", async () => {
+    invoke.mockResolvedValue(undefined);
+    const d = {
+      approvalId: "a",
+      argsDigest: "d",
+      decision: "approve" as const,
+    };
+    await new TauriTransport().resolveApproval(d);
+    expect(invoke).toHaveBeenCalledWith("resolve_approval", { decision: d });
+  });
 });

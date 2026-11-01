@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantPhase } from "../../types/generated/AssistantPhase";
 import type { Snapshot } from "../../types/generated/Snapshot";
+import type { TurnInterrupted } from "../../types/generated/TurnInterrupted";
 import type { TurnStreamEvent } from "../../types/generated/TurnStreamEvent";
 import { MOCK_FAULTS } from "./faults";
 import { MockTransport } from "./MockTransport";
@@ -27,6 +28,7 @@ describe("MockTransport", () => {
     expect(MOCK_SCRIPTS.map((s) => s.name).sort()).toEqual(
       [
         "approval",
+        "approval-high",
         "error",
         "interrupt",
         "offline",
@@ -226,5 +228,206 @@ describe("MockTransport fault injection", () => {
       stopReason: "end",
     });
     expect((await t.getSnapshot()).lastError).toBeNull();
+  });
+});
+
+describe("MockTransport settings", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("stores only a hint for a valid key, rejects bad keys and offline checks", async () => {
+    const t = new MockTransport();
+    const s = await t.setApiKey("  sk-ant-mock-0123456789abWXYZ \n");
+    expect(s).toEqual({ isSet: true, storage: "keychain", hint: "…WXYZ" });
+    expect(JSON.stringify(await t.getSettings())).not.toContain("sk-ant");
+    expect((await t.setApiKey("short-key-ok")).hint).toBeNull();
+
+    await expect(t.setApiKey("bad-key-0123456789")).rejects.toMatchObject({
+      code: "PROVIDER_AUTH",
+    });
+    await expect(t.setApiKey("has space")).rejects.toMatchObject({
+      code: "PROVIDER_AUTH",
+    });
+    t.runScript("offline");
+    vi.advanceTimersByTime(1000);
+    await expect(t.setApiKey("sk-ant-mock-0123456789")).rejects.toMatchObject({
+      code: "NETWORK_OFFLINE",
+    });
+    expect((await t.clearApiKey()).isSet).toBe(false);
+  });
+
+  it("applies a patch: omitted fields unchanged, null clears, unknown model rejected", async () => {
+    const t = new MockTransport();
+    let s = await t.updateSettings({
+      dailyCapMicroUsd: 2_000_000,
+      monthlyCapMicroUsd: 9_000_000,
+    });
+    expect([s.dailyCapMicroUsd, s.monthlyCapMicroUsd]).toEqual([
+      2_000_000, 9_000_000,
+    ]);
+    s = await t.updateSettings({ dailyCapMicroUsd: null });
+    expect([s.dailyCapMicroUsd, s.monthlyCapMicroUsd]).toEqual([
+      null,
+      9_000_000,
+    ]);
+    await expect(t.updateSettings({ model: "gpt-nope" })).rejects.toMatchObject(
+      { code: "INTERNAL" },
+    );
+    await expect(
+      t.updateSettings({ dailyCapMicroUsd: -1 }),
+    ).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+
+  it("records usage per reply, emits usage.updated, and blocks at the cap", async () => {
+    const t = new MockTransport();
+    const seen: number[] = [];
+    t.onUsage((u) => seen.push(u.todayMicroUsd));
+    await t.updateSettings({ dailyCapMicroUsd: 1_500 });
+    await t.submitText("one", () => {});
+    vi.advanceTimersByTime(60_000);
+    expect((await t.getUsage()).todayMicroUsd).toBe(1_500);
+    expect(seen[seen.length - 1]).toBe(1_500);
+
+    const events: TurnStreamEvent[] = [];
+    await t.submitText("two", (e) => events.push(e));
+    vi.advanceTimersByTime(60_000);
+    expect(events).toEqual([{ type: "done", stopReason: "spend_cap" }]);
+    expect((await t.getSnapshot()).lastError?.code).toBe("SPEND_CAP_REACHED");
+  });
+
+  it("reports the next UTC day and month boundaries", async () => {
+    vi.setSystemTime(Date.UTC(2026, 10, 15, 13, 0));
+    const u = await new MockTransport().getUsage();
+    expect(u.dayResetsAt).toBe(Date.UTC(2026, 10, 16));
+    expect(u.monthResetsAt).toBe(Date.UTC(2026, 11, 1));
+  });
+});
+
+describe("MockTransport interrupts", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("cancel broadcasts user_cancel; a wake word returns to listening", async () => {
+    const t = new MockTransport();
+    const seen: TurnInterrupted[] = [];
+    t.onInterrupted((e) => seen.push(e));
+    const events: TurnStreamEvent[] = [];
+
+    const a = await t.submitText("one", (e) => events.push(e));
+    vi.advanceTimersByTime(500);
+    await t.cancel(a);
+    expect(seen).toEqual([{ requestId: a, reason: "user_cancel" }]);
+    expect((await t.getSnapshot()).phase).toBe("idle");
+
+    const b = await t.submitText("two", (e) => events.push(e));
+    vi.advanceTimersByTime(500);
+    t.interrupt("wake_word");
+    expect(seen[1]).toEqual({ requestId: b, reason: "wake_word" });
+    expect(await t.getSnapshot()).toMatchObject({
+      phase: "listening",
+      mic: "capturing",
+    });
+    expect(events.filter((e) => e.type === "done")).toEqual([
+      { type: "done", stopReason: "cancelled" },
+      { type: "done", stopReason: "cancelled" },
+    ]);
+
+    t.interrupt("hotkey"); // nothing active: no event
+    expect(seen).toHaveLength(2);
+  });
+});
+
+describe("MockTransport approvals", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function pending(t: MockTransport, script = "approval") {
+    t.runScript(script);
+    vi.advanceTimersByTime(1000);
+    return (await t.getSnapshot()).pendingApprovals[0];
+  }
+
+  it("waits for a decision, then runs on approve", async () => {
+    const t = new MockTransport();
+    const a = await pending(t);
+    vi.advanceTimersByTime(10_000);
+    expect((await t.getSnapshot()).phase).toBe("awaiting_approval");
+    await t.resolveApproval({
+      approvalId: a.approvalId,
+      argsDigest: a.argsDigest,
+      decision: "approve",
+    });
+    expect(await t.getSnapshot()).toMatchObject({
+      phase: "acting",
+      pendingApprovals: [],
+    });
+    vi.advanceTimersByTime(5_000);
+    expect((await t.getSnapshot()).phase).toBe("idle");
+  });
+
+  it("rejects a wrong digest, a second decision and an expired approval", async () => {
+    const t = new MockTransport();
+    const a = await pending(t);
+    await expect(
+      t.resolveApproval({
+        approvalId: a.approvalId,
+        argsDigest: "tampered",
+        decision: "approve",
+      }),
+    ).rejects.toMatchObject({ code: "TOOL_DENIED" });
+    await t.resolveApproval({
+      approvalId: a.approvalId,
+      argsDigest: a.argsDigest,
+      decision: "deny",
+    });
+    await expect(
+      t.resolveApproval({
+        approvalId: a.approvalId,
+        argsDigest: a.argsDigest,
+        decision: "approve",
+      }),
+    ).rejects.toMatchObject({ code: "TOOL_DENIED" });
+
+    const b = await pending(t, "approval-high");
+    expect(b).toMatchObject({ risk: "high", allowVoice: false, tainted: true });
+    vi.advanceTimersByTime(60_000);
+    expect(await t.getSnapshot()).toMatchObject({
+      pendingApprovals: [],
+      phase: "idle",
+    });
+    await expect(
+      t.resolveApproval({
+        approvalId: b.approvalId,
+        argsDigest: b.argsDigest,
+        decision: "approve",
+      }),
+    ).rejects.toMatchObject({ code: "TOOL_DENIED" });
+  });
+});
+
+describe("MockTransport policy settings (contract #19)", () => {
+  it("accepts only installed app ids and takes the name from the installed list", async () => {
+    const t = new MockTransport();
+    const s = await t.updateSettings({
+      allowedApps: [{ id: "mock.app.music", name: "Totally Safe Bank" }],
+      allowedFolders: ["/home/u/Documents"],
+      autoAllowMedium: true,
+    });
+    expect(s.allowedApps).toEqual([
+      { id: "mock.app.music", name: "Mock Music" },
+    ]);
+    expect(s.allowedFolders).toEqual(["/home/u/Documents"]);
+    expect(s.autoAllowMedium).toBe(true);
+    await expect(
+      t.updateSettings({
+        allowedApps: [{ id: "evil.exe", name: "Mock Music" }],
+      }),
+    ).rejects.toMatchObject({ code: "INTERNAL" });
+    await expect(
+      t.updateSettings({ allowedFolders: ["relative/path"] }),
+    ).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    expect((await t.getSettings()).allowedApps).toHaveLength(1);
   });
 });

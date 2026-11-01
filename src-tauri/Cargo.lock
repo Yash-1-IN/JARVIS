@@ -1985,6 +1985,7 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

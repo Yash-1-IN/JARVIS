@@ -58,3 +58,23 @@ export const ERROR_INFO: Record<ErrorCode, ErrorInfo> = {
     hint: "Retry; if it keeps happening, check the logs.",
   },
 };
+
+function isJarvisError(e: unknown): e is { code: ErrorCode; message: string } {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    typeof (e as { code?: unknown }).code === "string" &&
+    (e as { code: string }).code in ERROR_INFO &&
+    typeof (e as { message?: unknown }).message === "string"
+  );
+}
+
+/**
+ * Tauri rejects a command with the serialised `JarvisError` object, not an
+ * `Error`, so `String(e)` would print "[object Object]".
+ */
+export function describeError(e: unknown): string {
+  if (isJarvisError(e)) return `${ERROR_INFO[e.code].title}: ${e.message}`;
+  if (e instanceof Error) return e.message;
+  return String(e);
+}

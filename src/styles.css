@@ -57,3 +57,127 @@ kbd {
 .chat-form input {
   flex: 1;
 }
+
+.warning {
+  border-left: 4px solid #b45309;
+  padding-left: 0.5rem;
+}
+
+.hint {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.usage dt {
+  font-weight: 600;
+}
+
+.approval-card {
+  border: 2px solid currentColor;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.approval-card.risk-high {
+  border-width: 3px;
+  border-style: double;
+}
+
+.approval-card .risk {
+  font-size: 0.8em;
+  font-weight: 700;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+}
+
+.approval-targets code {
+  word-break: break-all;
+}
+
+/* ---- 2D orb (ADR-015). Static when idle; every animation off for reduced motion. ---- */
+.orb {
+  display: inline-block;
+  color: #2563eb;
+}
+
+.orb svg {
+  overflow: visible;
+}
+
+.orb-core {
+  fill: currentColor;
+  opacity: 0.85;
+  transform-origin: 50px 50px;
+}
+
+.orb-ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-dasharray: 18 8;
+  opacity: 0.6;
+  transform-origin: 50px 50px;
+}
+
+.orb-mark {
+  stroke: #fff;
+  stroke-width: 6;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.orb-phase-error {
+  color: #b91c1c;
+}
+
+.orb-muted .orb-core {
+  opacity: 0.35;
+}
+
+.orb-pulse .orb-core {
+  animation: orb-pulse 1.2s ease-in-out infinite;
+}
+
+.orb-breathe .orb-core {
+  animation: orb-pulse 3s ease-in-out infinite;
+}
+
+.orb-spin .orb-ring {
+  animation: orb-spin 1.6s linear infinite;
+}
+
+.orb-wave .orb-ring {
+  animation: orb-wave 0.9s ease-in-out infinite;
+}
+
+.orb-paused * {
+  animation-play-state: paused !important;
+}
+
+@keyframes orb-pulse {
+  50% {
+    transform: scale(1.12);
+  }
+}
+
+@keyframes orb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orb-wave {
+  50% {
+    transform: scale(1.18);
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb * {
+    animation: none !important;
+  }
+}

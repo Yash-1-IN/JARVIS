@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
 import { Controls } from "./components/Controls";
 import { MockBadge } from "./components/MockBadge";
+import { Orb2D } from "./components/Orb2D";
 import { MockControls } from "./components/MockControls";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { StatusPanel } from "./components/StatusPanel";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { PROTOCOL_VERSION } from "./protocol";
 import { useChatStore } from "./state/chatStore";
+import { describeError } from "./state/errors";
 import { useSnapshotStore } from "./state/snapshotStore";
 import type { Transport } from "./transport";
 import type { MockTransport } from "./transport/mock/MockTransport";
@@ -20,11 +24,12 @@ export default function App({ transport }: { transport: Transport }) {
   const receive = useSnapshotStore((s) => s.receive);
   const [error, setError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Read the store at call time so the shortcut listener is bound once.
   const run = useCallback((p: Promise<void>) => {
     setCommandError(null);
-    p.catch((e: unknown) => setCommandError(String(e)));
+    p.catch((e: unknown) => setCommandError(describeError(e)));
   }, []);
   const onCancel = useCallback(() => {
     const id = useSnapshotStore.getState().snapshot?.activeRequestId;
@@ -51,7 +56,7 @@ export default function App({ transport }: { transport: Transport }) {
         )
         .catch((e: unknown) => {
           useChatStore.getState().fail(key);
-          setCommandError(String(e));
+          setCommandError(describeError(e));
         });
     },
     [transport],
@@ -71,6 +76,9 @@ export default function App({ transport }: { transport: Transport }) {
     // Subscribe before fetching so no update between the two is lost; the
     // store's seq check discards whichever arrives stale.
     const unsubscribe = transport.onSnapshot(receive);
+    const offInterrupt = transport.onInterrupted((e) =>
+      useChatStore.getState().markInterrupted(e.requestId, e.reason),
+    );
     (async () => {
       try {
         const pong = await transport.ping();
@@ -82,12 +90,13 @@ export default function App({ transport }: { transport: Transport }) {
         const initial = await transport.getSnapshot();
         if (!cancelled) receive(initial);
       } catch (e) {
-        if (!cancelled) setError(String(e));
+        if (!cancelled) setError(describeError(e));
       }
     })();
     return () => {
       cancelled = true;
       unsubscribe();
+      offInterrupt();
     };
   }, [transport, receive]);
 
@@ -95,10 +104,37 @@ export default function App({ transport }: { transport: Transport }) {
     <main>
       {transport.isMock && <MockBadge />}
       <h1>JARVIS</h1>
+      <button
+        type="button"
+        aria-expanded={showSettings}
+        aria-controls="settings-panel"
+        onClick={() => setShowSettings((v) => !v)}
+      >
+        Settings
+      </button>
+      {showSettings && (
+        <div id="settings-panel">
+          <SettingsPanel transport={transport} />
+        </div>
+      )}
       {error && <p role="alert">{error}</p>}
       {!error && snapshot && (
         <>
+          <Orb2D phase={snapshot.phase} mic={snapshot.mic} />
           <StatusPanel snapshot={snapshot} onRetry={retryTurn} />
+          {snapshot.pendingApprovals.map((r) => (
+            <ApprovalCard
+              key={r.approvalId}
+              request={r}
+              onDecide={(decision) =>
+                transport.resolveApproval({
+                  approvalId: r.approvalId,
+                  argsDigest: r.argsDigest,
+                  decision,
+                })
+              }
+            />
+          ))}
           <Controls
             snapshot={snapshot}
             onCancel={onCancel}
