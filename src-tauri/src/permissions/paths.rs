@@ -133,6 +133,12 @@ mod tests {
         std::fs::canonicalize(d).unwrap()
     }
 
+    /// The plain form of a path, as a tool would receive it. On Windows `canonicalize`
+    /// returns `\\?\C:\...`, which `check_*` rightly refuses as a device path.
+    fn plain(p: &Path) -> String {
+        crate::config::display_path(p)
+    }
+
     fn scope(root: &Path) -> PathScope {
         PathScope::new(&[root.to_string_lossy().into_owned()], false)
     }
@@ -145,7 +151,7 @@ mod tests {
         let s = scope(&root);
         let tricky = root.join("sub").join("..").join("sub").join("a.txt");
         assert_eq!(
-            s.check_existing(&tricky.to_string_lossy()).unwrap(),
+            s.check_existing(&plain(&tricky)).unwrap(),
             root.join("sub/a.txt")
         );
     }
@@ -160,21 +166,19 @@ mod tests {
             .join("..")
             .join(outside.file_name().unwrap())
             .join("secret.txt");
-        assert_eq!(
-            s.check_existing(&up.to_string_lossy()),
-            Err(PathError::OutsideRoots)
-        );
+        assert_eq!(s.check_existing(&plain(&up)), Err(PathError::OutsideRoots));
         // A sibling that merely starts with the root's name is not inside it.
         let evil = PathBuf::from(format!("{}-evil", root.display()));
         std::fs::create_dir_all(&evil).unwrap();
         assert_eq!(
-            s.check_existing(&evil.to_string_lossy()),
+            s.check_existing(&plain(&evil)),
             Err(PathError::OutsideRoots)
         );
-        let elsewhere = s.check_existing("/etc/hosts");
-        assert!(
-            matches!(elsewhere, Err(PathError::OutsideRoots | PathError::Missing)),
-            "{elsewhere:?}"
+        // An existing folder that is not the root (its parent) is outside it.
+        let parent = root.parent().unwrap();
+        assert_eq!(
+            s.check_existing(&plain(parent)),
+            Err(PathError::OutsideRoots)
         );
     }
 
@@ -207,7 +211,7 @@ mod tests {
         let s = scope(&root);
         let via_link = root.join("escape").join("secret.txt");
         assert_eq!(
-            s.check_existing(&via_link.to_string_lossy()),
+            s.check_existing(&plain(&via_link)),
             Err(PathError::OutsideRoots)
         );
     }
@@ -222,12 +226,12 @@ mod tests {
         std::fs::write(outside.join("secret.txt"), "x").unwrap();
         let s = scope(&root);
         // At approval time the file is fine.
-        assert!(s.check_existing(&target.to_string_lossy()).is_ok());
+        assert!(s.check_existing(&plain(&target)).is_ok());
         // Before execution it is replaced by a symlink to a file outside the root.
         std::fs::remove_file(&target).unwrap();
         std::os::unix::fs::symlink(outside.join("secret.txt"), &target).unwrap();
         assert_eq!(
-            s.check_existing(&target.to_string_lossy()),
+            s.check_existing(&plain(&target)),
             Err(PathError::OutsideRoots)
         );
     }
@@ -245,7 +249,7 @@ mod tests {
         // On a case-sensitive file system the upper-case path does not exist at all.
         #[cfg(target_os = "linux")]
         assert_eq!(
-            scope(&root).check_existing(&shouted.to_string_lossy()),
+            scope(&root).check_existing(&plain(&shouted)),
             Err(PathError::Missing)
         );
     }
@@ -257,29 +261,30 @@ mod tests {
         std::fs::create_dir_all(root.join("Archive")).unwrap();
         let s = scope(&root);
         let ok = root.join("Archive").join("moved.txt");
-        assert_eq!(s.check_new(&ok.to_string_lossy()).unwrap(), ok);
+        assert_eq!(s.check_new(&plain(&ok)).unwrap(), ok);
         assert_eq!(
-            s.check_new(&outside.join("x.txt").to_string_lossy()),
+            s.check_new(&plain(&outside.join("x.txt"))),
             Err(PathError::OutsideRoots)
         );
         assert_eq!(
-            s.check_new(&root.join("missing-dir").join("x.txt").to_string_lossy()),
+            s.check_new(&plain(&root.join("missing-dir").join("x.txt"))),
             Err(PathError::Missing)
         );
-        let dotdot = format!("{}/Archive/..", root.display());
+        let dotdot = format!("{}/Archive/..", plain(&root));
         assert_eq!(s.check_new(&dotdot), Err(PathError::Invalid));
     }
 
     #[test]
     fn missing_roots_allow_nothing() {
-        let s = PathScope::new(&["/definitely/not/here".into()], false);
+        let gone = std::env::temp_dir().join(format!("jarvis-gone-{}", uuid::Uuid::now_v7()));
+        let s = PathScope::new(&[plain(&gone)], false);
         assert_eq!(
-            s.check_existing("/definitely/not/here/x"),
+            s.check_existing(&plain(&gone.join("x"))),
             Err(PathError::Missing)
         );
         let empty = PathScope::new(&[], false);
         assert_eq!(
-            empty.check_existing(&std::env::temp_dir().to_string_lossy()),
+            empty.check_existing(&plain(&std::env::temp_dir())),
             Err(PathError::OutsideRoots)
         );
     }
