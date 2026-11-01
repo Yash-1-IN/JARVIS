@@ -26,6 +26,8 @@ const PERSONA: &str = include_str!("../../resources/prompts/persona.md");
 /// Thinking tokens count toward `max_tokens`, so this is generous; short spoken replies
 /// come from the persona prompt and low effort, not from a tight limit.
 const MAX_OUTPUT_TOKENS: u32 = 4096;
+/// What history keeps of a "remember that ..." request (the text itself lives only in Memory).
+const REMEMBER_IN_HISTORY: &str = "Asked JARVIS to remember something (see Memory).";
 /// Spec §7.2: at most five tool calls in one turn.
 const MAX_TOOL_CALLS: usize = 5;
 
@@ -280,7 +282,13 @@ impl TurnRunner {
     }
 
     async fn run(&self, id: &str, text: String, cancel: CancellationToken, sink: &dyn TurnSink) {
-        self.log_history(crate::ipc::types::HistoryRole::User, &text);
+        // "Remember that X" is stored once, as a memory the user can deny or delete. History
+        // gets a neutral line instead, so the text cannot outlive the memory it came from.
+        let for_history = match intents::route(&text) {
+            Some(Intent::Remember(_)) => REMEMBER_IN_HISTORY.to_owned(),
+            _ => text.clone(),
+        };
+        self.log_history(crate::ipc::types::HistoryRole::User, &for_history);
         // Local intents never pay cloud latency or cost (spec §3.3). Only the ones that can
         // be answered here are; time, status, app and file requests go to the model, which
         // now has the tools for them and whose calls go through the permission gateway.
@@ -539,6 +547,16 @@ impl TurnRunner {
                 .clone()
                 .unwrap_or_else(|| "I haven't said anything yet.".into()),
             _ => unreachable!("`answered_locally` filters the other intents out"),
+        }
+    }
+
+    /// After "delete all history": the next cloud turn must not send what was deleted, and
+    /// a clean slate also clears the taint left by untrusted content in that conversation.
+    pub fn forget_conversation(&self) {
+        lock(&self.history).clear();
+        *lock(&self.last_reply) = None;
+        if let Some(w) = self.tools.as_ref() {
+            w.gateway.reset_taint();
         }
     }
 

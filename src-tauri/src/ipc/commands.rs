@@ -277,8 +277,14 @@ pub fn history_get(
 
 /// Deletes all history for good. Memories and settings stay.
 #[tauri::command]
-pub fn history_delete_all(store: tauri::State<'_, Arc<MemoryStore>>) -> Result<(), JarvisError> {
-    store.delete_all_history().map_err(store_error)
+pub fn history_delete_all(
+    store: tauri::State<'_, Arc<MemoryStore>>,
+    runner: tauri::State<'_, Arc<TurnRunner>>,
+) -> Result<(), JarvisError> {
+    store.delete_all_history().map_err(store_error)?;
+    // What the next model call is sent comes from memory too; it goes as well.
+    runner.forget_conversation();
+    Ok(())
 }
 
 #[tauri::command]
