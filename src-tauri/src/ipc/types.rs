@@ -175,6 +175,9 @@ pub enum EventKind {
     #[serde(rename = "usage.updated")]
     #[ts(rename = "usage.updated")]
     UsageUpdated,
+    #[serde(rename = "memory.proposed")]
+    #[ts(rename = "memory.proposed")]
+    MemoryProposed,
 }
 
 impl EventKind {
@@ -186,6 +189,7 @@ impl EventKind {
             Self::ErrorRaised => "error.raised",
             Self::TurnInterrupted => "turn.interrupted",
             Self::UsageUpdated => "usage.updated",
+            Self::MemoryProposed => "memory.proposed",
         }
     }
 
@@ -455,6 +459,94 @@ pub struct ApprovalDecision {
     pub decision: Decision,
 }
 
+// ---------------------------------------------------------------------------- memory (M5)
+
+/// `proposed` rows are never retrieved into a prompt; only `active` ones are. Denying a
+/// proposal deletes it (nothing is stored). `archived` is kept for a later milestone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum MemoryStatus {
+    Proposed,
+    Active,
+    Archived,
+}
+
+/// One remembered fact. `content` is exactly the text the user saw and confirmed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Memory {
+    pub id: String,
+    pub content: String,
+    pub status: MemoryStatus,
+    #[ts(type = "number")]
+    pub created_at: u64,
+    #[ts(type = "number")]
+    pub updated_at: u64,
+}
+
+/// How long conversation history is kept. `Days30` is the default (spec §8.3, D-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum HistoryRetention {
+    Off,
+    Days7,
+    Days30,
+    Days365,
+    Forever,
+}
+
+/// Payload of `history_settings_get` and `history_settings_set`. Kept apart from `Settings`
+/// so adding it does not change the existing settings shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HistorySettings {
+    pub retention: HistoryRetention,
+}
+
+/// One row of the history list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ConversationSummary {
+    pub id: String,
+    #[ts(type = "number")]
+    pub started_at: u64,
+    /// Absent while the conversation is still open.
+    #[ts(type = "number | null")]
+    pub ended_at: Option<u64>,
+    pub title: Option<String>,
+    #[ts(type = "number")]
+    pub message_count: u64,
+}
+
+/// Who wrote a stored message. Closed so the history view cannot meet an unknown role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum HistoryRole {
+    User,
+    Assistant,
+    /// A tool call or result, stored as a one-line summary.
+    Tool,
+}
+
+/// One stored message. Tool results are stored as one-line summaries, never file contents
+/// (spec §8.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HistoryMessage {
+    pub id: String,
+    pub role: HistoryRole,
+    pub content: String,
+    #[ts(type = "number")]
+    pub ts: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +591,7 @@ mod tests {
             (EventKind::ErrorRaised, "error.raised"),
             (EventKind::TurnInterrupted, "turn.interrupted"),
             (EventKind::UsageUpdated, "usage.updated"),
+            (EventKind::MemoryProposed, "memory.proposed"),
         ] {
             assert_eq!(serde_json::to_value(k).unwrap(), name);
             assert_eq!(k.wire_name(), name);
@@ -582,5 +675,47 @@ mod tests {
         assert_eq!(p.auto_allow_medium, Some(true));
         // A misspelt policy field is an error, not a silent no-op.
         assert!(serde_json::from_str::<SettingsPatch>(r#"{"allowedFolder":["/a"]}"#).is_err());
+    }
+
+    #[test]
+    fn memory_and_history_wire_shapes() {
+        let m = serde_json::to_value(Memory {
+            id: "m1".into(),
+            content: "Prefers dark mode".into(),
+            status: MemoryStatus::Proposed,
+            created_at: 1,
+            updated_at: 2,
+        })
+        .unwrap();
+        assert_eq!(m["status"], "proposed");
+        assert_eq!(m["createdAt"], 1);
+        assert_eq!(
+            serde_json::to_value(HistoryRetention::Days30).unwrap(),
+            "days30"
+        );
+        assert_eq!(
+            serde_json::to_value(HistoryRetention::Forever).unwrap(),
+            "forever"
+        );
+        let c = serde_json::to_value(ConversationSummary {
+            id: "c1".into(),
+            started_at: 5,
+            ended_at: None,
+            title: None,
+            message_count: 3,
+        })
+        .unwrap();
+        assert_eq!(c["endedAt"], serde_json::Value::Null);
+        assert_eq!(c["messageCount"], 3);
+        let msg = serde_json::to_value(HistoryMessage {
+            id: "x".into(),
+            role: HistoryRole::Tool,
+            content: "Searched".into(),
+            ts: 9,
+        })
+        .unwrap();
+        assert_eq!(msg["role"], "tool");
+        let h: HistorySettings = serde_json::from_str(r#"{"retention":"off"}"#).unwrap();
+        assert_eq!(h.retention, HistoryRetention::Off);
     }
 }

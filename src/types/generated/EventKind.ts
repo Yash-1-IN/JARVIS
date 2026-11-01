@@ -5,4 +5,4 @@
  * The wire value is the dotted name; the Tauri event name replaces `.` with `_`
  * because Tauri event names cannot contain a dot.
  */
-export type EventKind = "state.snapshot" | "activity.appended" | "approval.requested" | "error.raised" | "turn.interrupted" | "usage.updated";
+export type EventKind = "state.snapshot" | "activity.appended" | "approval.requested" | "error.raised" | "turn.interrupted" | "usage.updated" | "memory.proposed";
