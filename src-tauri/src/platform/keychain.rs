@@ -42,14 +42,13 @@ impl SecretString {
 
     /// Last 4 characters, e.g. "…a1b2". The only key-derived data shown in the UI (#8).
     pub fn hint(&self) -> Option<String> {
-        let chars: Vec<char> = self.0.chars().collect();
-        if chars.len() < MIN_LEN_FOR_HINT {
+        // Index into the key instead of collecting it into a Vec<char>: a copy of the
+        // whole key would sit in memory unwiped (Dev A's review of #16).
+        if self.0.chars().count() < MIN_LEN_FOR_HINT {
             return None;
         }
-        Some(format!(
-            "…{}",
-            chars[chars.len() - 4..].iter().collect::<String>()
-        ))
+        let (start, _) = self.0.char_indices().rev().nth(3)?;
+        Some(format!("…{}", &self.0[start..]))
     }
 }
 
