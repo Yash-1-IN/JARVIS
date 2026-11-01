@@ -14,6 +14,8 @@ goes anywhere near the product (D-01).
 
 Easiest: open the **spike-voice** workflow run on the PR (or run it with "Run workflow"),
 download the artifact for your OS (`voice-cli-Windows`, `voice-cli-macOS`, `voice-cli-Linux`).
+On macOS and Linux the download loses the executable bit, so run `chmod +x voice-cli` first.
+On macOS also run `xattr -d com.apple.quarantine voice-cli`, or Gatekeeper blocks it.
 Or build it: `cd spikes/voice-cli && cargo build --release` (needs Rust; Linux also needs
 `libasound2-dev`).
 
@@ -59,7 +61,9 @@ Wake-word phrase file (`keywords.txt`, one line per phrase, tokens are the model
 
 1. Your laptop model, CPU, RAM, Windows version, microphone and speakers.
 2. `mic --seconds 5`: the "% of the expected count", stream errors and level lines. Peak 0 means
-   Windows privacy blocks the mic (Settings → Privacy → Microphone → desktop apps).
+   the OS blocks the mic. Windows: Settings → Privacy → Microphone → desktop apps. macOS: the
+   first `mic` or `listen` run asks the terminal app for microphone access; if it was denied,
+   allow it in System Settings → Privacy & Security → Microphone, then rerun.
 3. `listen` while you say 5 short requests: the STT time and "text ready … after end of speech".
 4. `wake` for 2 minutes **silent** (false triggers), then saying "Jarvis" / "hey Jarvis" 10 times
    at normal and far distance (hits out of 10). Note the "busy %" line and, in Task Manager, the
