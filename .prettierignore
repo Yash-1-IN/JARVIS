@@ -1,0 +1,7 @@
+dist
+src-tauri
+src/types/generated
+pnpm-lock.yaml
+docs
+.github
+CLAUDE.md
