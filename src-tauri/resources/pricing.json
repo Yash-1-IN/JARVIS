@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "currency": "USD",
+  "note": "Micro-dollars (1e-6 USD) per one million tokens. Anthropic first-party API list prices as listed in the Claude API reference on 2026-10-06; check against the live pricing page before a release. claude-haiku-5-5 is $0.50 / $2.50 for prompts over 100K tokens; JARVIS keeps prompts far below that.",
+  "models": {
+    "claude-haiku-5-5": { "inputPerMtok": 100000, "outputPerMtok": 500000 },
+    "claude-sonnet-5-5": { "inputPerMtok": 2000000, "outputPerMtok": 10000000 },
+    "claude-opus-5-5": { "inputPerMtok": 4000000, "outputPerMtok": 20000000 },
+    "claude-fable-5-1": { "inputPerMtok": 10000000, "outputPerMtok": 50000000 }
+  }
+}
