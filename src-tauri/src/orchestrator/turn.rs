@@ -12,7 +12,7 @@ use crate::intelligence::provider::{
 };
 use crate::intelligence::spend::{CapKind, Day, Price, SpendMeter};
 use crate::ipc::types::{
-    AssistantPhase, ErrorCode, JarvisError, Snapshot, StopReason, TurnStreamEvent,
+    AssistantPhase, ErrorCode, JarvisError, Snapshot, StopReason, TurnStreamEvent, UsageSummary,
 };
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -28,6 +28,8 @@ const HISTORY_CHAR_BUDGET: usize = 32_000;
 pub trait TurnSink: Send + Sync {
     fn event(&self, e: TurnStreamEvent);
     fn snapshot(&self, s: Snapshot);
+    /// Called after spend is recorded (the `usage.updated` event).
+    fn usage(&self, _u: UsageSummary) {}
 }
 
 type ProviderFactory = dyn Fn() -> Option<Arc<dyn ModelProvider>> + Send + Sync;
@@ -41,7 +43,7 @@ pub struct TurnRunner {
     orch: Arc<Orchestrator>,
     spend: Arc<SpendMeter>,
     provider: Box<ProviderFactory>,
-    cfg: TurnConfig,
+    config: Box<dyn Fn() -> TurnConfig + Send + Sync>,
     now_secs: Box<dyn Fn() -> u64 + Send + Sync>,
     history: Mutex<Vec<Message>>,
     last_reply: Mutex<Option<String>>,
@@ -101,14 +103,14 @@ impl TurnRunner {
         orch: Arc<Orchestrator>,
         spend: Arc<SpendMeter>,
         provider: Box<ProviderFactory>,
-        cfg: TurnConfig,
+        config: Box<dyn Fn() -> TurnConfig + Send + Sync>,
         now_secs: Box<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
         Self {
             orch,
             spend,
             provider,
-            cfg,
+            config,
             now_secs,
             history: Mutex::new(Vec::new()),
             last_reply: Mutex::new(None),
@@ -252,8 +254,10 @@ impl TurnRunner {
             h.clone()
         };
         sink.snapshot(self.orch.set_cloud_in_use(true));
+        let cfg = (self.config)();
+        tracing::debug!(provider = provider.id(), model = %cfg.model, "starting cloud turn");
         let req = TurnRequest {
-            model: self.cfg.model.clone(),
+            model: cfg.model.clone(),
             system: PERSONA.to_owned(),
             messages,
             tools: vec![],
@@ -278,13 +282,13 @@ impl TurnRunner {
                 Ok(TurnEvent::ToolCall { .. }) => {} // no tools are offered yet
                 Ok(TurnEvent::Done { usage: u, .. }) => reported = Some(u),
                 Err(e) => {
-                    self.record(reported, input_chars, reply.len());
+                    self.record(reported, input_chars, reply.len(), cfg.price, sink);
                     self.drop_dangling_user();
                     return self.provider_failed(id, &e, sink);
                 }
             }
         }
-        self.record(reported, input_chars, reply.len());
+        self.record(reported, input_chars, reply.len(), cfg.price, sink);
         lock(&self.history).push(Message {
             role: Role::Assistant,
             content: reply.clone(),
@@ -304,10 +308,18 @@ impl TurnRunner {
 
     /// Records spend. A cancelled or failed stream never reports usage, so it is
     /// estimated (about 4 characters per token) rather than counted as zero.
-    fn record(&self, reported: Option<Usage>, input_chars: usize, output_chars: usize) {
+    fn record(
+        &self,
+        reported: Option<Usage>,
+        input_chars: usize,
+        output_chars: usize,
+        price: Price,
+        sink: &dyn TurnSink,
+    ) {
         let usage = reported.unwrap_or_else(|| estimate_usage(input_chars, output_chars));
         if usage != Usage::default() {
-            self.spend.record(self.today(), usage, self.cfg.price);
+            self.spend.record(self.today(), usage, price);
+            sink.usage(self.spend.summary(self.today()));
         }
     }
 

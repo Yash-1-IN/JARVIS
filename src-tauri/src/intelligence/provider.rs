@@ -80,12 +80,6 @@ pub enum ProviderError {
     Protocol(String),
 }
 
-impl ProviderError {
-    pub fn retryable(&self) -> bool {
-        matches!(self, Self::RateLimit | Self::Unavailable(_) | Self::Offline)
-    }
-}
-
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     fn id(&self) -> &'static str;

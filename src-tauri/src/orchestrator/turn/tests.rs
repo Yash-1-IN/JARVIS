@@ -9,6 +9,7 @@ use std::time::Duration;
 struct Rec {
     events: Mutex<Vec<TurnStreamEvent>>,
     snaps: Mutex<Vec<Snapshot>>,
+    usages: Mutex<Vec<UsageSummary>>,
 }
 impl TurnSink for Rec {
     fn event(&self, e: TurnStreamEvent) {
@@ -16,6 +17,9 @@ impl TurnSink for Rec {
     }
     fn snapshot(&self, s: Snapshot) {
         lock(&self.snaps).push(s);
+    }
+    fn usage(&self, u: UsageSummary) {
+        lock(&self.usages).push(u);
     }
 }
 impl Rec {
@@ -121,10 +125,10 @@ fn runner(
         orch.clone(),
         spend.clone(),
         Box::new(move || provider.clone().map(|p| p as Arc<dyn ModelProvider>)),
-        TurnConfig {
+        Box::new(|| TurnConfig {
             model: "test-model".into(),
             price: PRICE,
-        },
+        }),
         Box::new(|| NOW),
     ));
     (r, orch, spend)
@@ -156,6 +160,16 @@ async fn cloud_turn_streams_records_spend_and_returns_to_idle() {
             .any(|s| s.cloud_in_use && s.active_request_id.as_deref() == Some(&id))
     );
     assert_eq!(spend.totals(Day::from_unix_secs(NOW)).today, 1_000 + 500);
+    // The usage.updated payload follows the recorded spend.
+    let u = lock(&sink.usages).last().cloned().expect("a usage update");
+    assert_eq!(
+        (
+            u.today_micro_usd,
+            u.today_input_tokens,
+            u.today_output_tokens
+        ),
+        (1_500, 1000, 100)
+    );
     let seen = lock(&fake.seen);
     assert_eq!(seen[0].model, "test-model");
     assert!(seen[0].system.contains("JARVIS"));

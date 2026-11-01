@@ -343,3 +343,56 @@ fn config_debug_hides_api_key() {
     let c = AnthropicConfig::new("sk-ant-SECRET123456".into());
     assert!(!format!("{c:?}").contains("SECRET"));
 }
+
+#[tokio::test]
+async fn key_check_accepts_a_good_key_and_sends_no_body_tokens() {
+    let (url, seen) = serve(vec![Reply::Full {
+        status: 200,
+        body: "{}".into(),
+    }])
+    .await;
+    assert_eq!(
+        check_key(&url, "sk-ant-FAKEKEY-for-tests", Duration::from_secs(2)).await,
+        Ok(())
+    );
+    let sent = seen.lock().unwrap()[0].to_lowercase();
+    assert!(sent.starts_with("get /v1/models"), "{sent}");
+    assert!(sent.contains("x-api-key: sk-ant-fakekey-for-tests"));
+}
+
+#[tokio::test]
+async fn key_check_maps_rejection_offline_and_timeout() {
+    let (url, _) = serve(vec![Reply::Full {
+        status: 401,
+        body: "{}".into(),
+    }])
+    .await;
+    assert_eq!(
+        check_key(&url, "bad", Duration::from_secs(2)).await,
+        Err(ProviderError::Auth)
+    );
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = format!("http://{}", l.local_addr().unwrap());
+    drop(l);
+    assert_eq!(
+        check_key(&dead, "k", Duration::from_secs(2)).await,
+        Err(ProviderError::Offline)
+    );
+    // A server that accepts the connection and never answers.
+    let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", silent.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _held = silent.accept().await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    });
+    let r = check_key(&url, "k", Duration::from_millis(200)).await;
+    assert!(matches!(r, Err(ProviderError::Unavailable(_))), "{r:?}");
+}
+
+#[tokio::test]
+async fn key_with_invalid_header_characters_is_rejected_without_a_request() {
+    assert_eq!(
+        check_key("http://127.0.0.1:1", "bad\nkey", Duration::from_secs(1)).await,
+        Err(ProviderError::Auth)
+    );
+}
