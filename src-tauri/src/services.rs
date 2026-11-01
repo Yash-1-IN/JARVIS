@@ -7,7 +7,8 @@ use crate::intelligence::pricing::{DEFAULT_MODEL, PriceTable};
 use crate::intelligence::provider::{ModelProvider, ProviderError};
 use crate::intelligence::spend::{Caps, Day, SpendMeter};
 use crate::ipc::types::{
-    ApiKeyStatus, ErrorCode, JarvisError, KeyStorage, Settings, SettingsPatch, UsageSummary,
+    AllowedApp, ApiKeyStatus, ErrorCode, JarvisError, KeyStorage, Settings, SettingsPatch,
+    UsageSummary,
 };
 use crate::orchestrator::turn::TurnConfig;
 use crate::platform::keychain::{ApiKeyVault, KeyStorage as VaultStorage, SecretString};
@@ -17,6 +18,20 @@ use std::time::Duration;
 /// How long `api_key_set` waits for the provider before giving up (#8).
 pub const KEY_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What apps this machine has. The per-OS implementation lives in `platform/`
+/// (Developer B); until it exists, `NoApps` makes every app allow-list request fail.
+pub trait InstalledApps: Send + Sync {
+    fn list(&self) -> Vec<AllowedApp>;
+}
+
+pub struct NoApps;
+
+impl InstalledApps for NoApps {
+    fn list(&self) -> Vec<AllowedApp> {
+        Vec::new()
+    }
+}
+
 pub struct Services {
     pub settings: Arc<SettingsStore>,
     pub prices: Arc<PriceTable>,
@@ -24,6 +39,7 @@ pub struct Services {
     pub spend: Arc<SpendMeter>,
     /// `https://api.anthropic.com` in the app; a fake server in tests.
     pub api_base_url: String,
+    pub installed: Arc<dyn InstalledApps>,
 }
 
 fn err(code: ErrorCode, message: &str, retryable: bool) -> JarvisError {
@@ -76,22 +92,32 @@ impl Services {
             available_models: self.prices.model_ids(),
             daily_cap_micro_usd: s.daily_cap_micro_usd,
             monthly_cap_micro_usd: s.monthly_cap_micro_usd,
+            allowed_folders: s.allowed_folders,
+            allowed_apps: s.allowed_apps,
+            auto_allow_medium: s.auto_allow_medium,
         }
     }
 
     pub fn set_settings(&self, patch: &SettingsPatch) -> Result<Settings, JarvisError> {
         self.settings
-            .apply(patch, &self.prices)
+            .apply_with(patch, &self.prices, &self.installed.list())
             .map_err(|e| match e {
-                SettingsError::UnknownModel(_) | SettingsError::CapTooLarge => {
-                    err(ErrorCode::Internal, &e.to_string(), false)
-                }
+                SettingsError::UnknownModel(_)
+                | SettingsError::CapTooLarge
+                | SettingsError::BadFolder(_)
+                | SettingsError::UnknownApp(_)
+                | SettingsError::TooMany => err(ErrorCode::Internal, &e.to_string(), false),
                 SettingsError::Save => {
                     err(ErrorCode::Internal, "Settings could not be saved.", true)
                 }
             })?;
         self.apply_saved_caps();
         Ok(self.settings())
+    }
+
+    /// The `apps_installed` command: the only ids `settings_set` will accept.
+    pub fn apps_installed(&self) -> Vec<AllowedApp> {
+        self.installed.list()
     }
 
     pub fn usage(&self, now: Day) -> UsageSummary {
@@ -186,6 +212,16 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    struct FakeApps;
+    impl InstalledApps for FakeApps {
+        fn list(&self) -> Vec<AllowedApp> {
+            vec![AllowedApp {
+                id: "com.spotify.client".into(),
+                name: "Spotify".into(),
+            }]
+        }
+    }
+
     const KEY: &str = "sk-ant-test-0123456789abcdefWXYZ";
     const DAY: Day = Day {
         year: 2026,
@@ -207,6 +243,7 @@ mod tests {
             )),
             spend: Arc::new(SpendMeter::new(Caps::default(), DAY)),
             api_base_url: api.into(),
+            installed: Arc::new(FakeApps),
         }
     }
 
@@ -317,5 +354,27 @@ mod tests {
         assert_eq!(svc.spend.caps().monthly, None);
         svc.apply_saved_caps();
         assert_eq!(svc.spend.caps().monthly, Some(777));
+    }
+
+    #[test]
+    fn allowed_apps_must_be_installed_ids_and_show_the_installed_name() {
+        let svc = services("http://unused");
+        assert_eq!(svc.apps_installed().len(), 1);
+        let spoof: SettingsPatch = serde_json::from_str(
+            r#"{"allowedApps":[{"id":"com.spotify.client","name":"Totally Safe Bank"}]}"#,
+        )
+        .unwrap();
+        let out = svc.set_settings(&spoof).unwrap();
+        assert_eq!(out.allowed_apps[0].name, "Spotify");
+        let unknown: SettingsPatch =
+            serde_json::from_str(r#"{"allowedApps":[{"id":"evil.exe","name":"Spotify"}]}"#)
+                .unwrap();
+        let e = svc.set_settings(&unknown).unwrap_err();
+        assert!(e.message.contains("evil.exe") && !e.retryable);
+        assert_eq!(
+            svc.settings().allowed_apps.len(),
+            1,
+            "a rejected patch changes nothing"
+        );
     }
 }
