@@ -2,6 +2,7 @@ mod config;
 mod intelligence;
 mod ipc;
 mod logging;
+mod memory;
 mod orchestrator;
 mod permissions;
 mod platform;
