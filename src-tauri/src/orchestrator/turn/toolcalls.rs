@@ -29,15 +29,26 @@ pub struct ToolWiring {
 /// The result of one call, as the model will see it.
 pub struct CallResult {
     pub content: String,
+    /// The tool's own text (or the error message) without the untrusted-data label, for
+    /// answers worded locally.
+    pub text: String,
     pub is_error: bool,
 }
 
 impl CallResult {
     fn err(m: impl Into<String>) -> Self {
+        let m: String = m.into();
         Self {
-            content: m.into(),
+            text: m.clone(),
+            content: m,
             is_error: true,
         }
+    }
+}
+
+impl CallResult {
+    pub(super) fn over_limit() -> Self {
+        Self::err("Tool call limit reached for this request.")
     }
 }
 
@@ -201,6 +212,7 @@ impl TurnRunner {
                 }
                 Some(CallResult {
                     content: untrusted(name, &out.text),
+                    text: out.text.chars().take(MAX_RESULT_CHARS).collect(),
                     is_error: false,
                 })
             }

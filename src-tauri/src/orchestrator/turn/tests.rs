@@ -607,11 +607,22 @@ struct Tooled {
     root: std::path::PathBuf,
     /// Milliseconds added to the gateway's clock.
     skew: Arc<std::sync::atomic::AtomicU64>,
+    spend: Arc<SpendMeter>,
 }
 
 fn tooled(
     fake: impl FnOnce(&std::path::Path) -> Arc<Fake>,
     auto_medium: bool,
+) -> (Tooled, Arc<Fake>) {
+    tooled_full(fake, auto_medium, Caps::default(), true, vec![])
+}
+
+fn tooled_full(
+    fake: impl FnOnce(&std::path::Path) -> Arc<Fake>,
+    auto_medium: bool,
+    caps: Caps,
+    has_key: bool,
+    apps: Vec<crate::ipc::types::AllowedApp>,
 ) -> (Tooled, Arc<Fake>) {
     let root = std::env::temp_dir().join(format!("jarvis-turn-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&root).unwrap();
@@ -626,7 +637,7 @@ fn tooled(
     ));
     gateway.set_auto_allow_medium(auto_medium);
     let roots = vec![crate::config::display_path(&root)];
-    let (r, _, _) = runner(Some(fake.clone()), Caps::default());
+    let (r, _, spend) = runner(has_key.then(|| fake.clone()), caps);
     let r = Arc::new(Arc::into_inner(r).unwrap().with_tools(ToolWiring {
         gateway: gateway.clone(),
         registry: Arc::new(Registry::alpha()),
@@ -634,7 +645,7 @@ fn tooled(
         context: Box::new(move || ToolContext {
             scope: PathScope::new(&roots),
             now_secs: Arc::new(|| NOW),
-            apps: vec![],
+            apps: apps.clone(),
             ports: Arc::new(crate::tools::ports::Ports::placeholders()),
         }),
     }));
@@ -645,6 +656,7 @@ fn tooled(
             sink: Arc::new(Rec::default()),
             root,
             skew,
+            spend,
         },
         fake,
     )
@@ -1036,4 +1048,122 @@ fn a_tool_name_with_a_double_underscore_cannot_be_registered() {
         }
     }
     crate::tools::Registry::new().register(Arc::new(Bad));
+}
+
+// ------------------------------------------------------------------ answers without the model
+
+fn app(id: &str, name: &str) -> crate::ipc::types::AllowedApp {
+    crate::ipc::types::AllowedApp {
+        id: id.into(),
+        name: name.into(),
+    }
+}
+
+async fn ask(t: &Tooled, q: &str) {
+    t.r.start(q.into(), t.sink.clone()).unwrap();
+    t.sink.wait_done().await;
+}
+
+fn no_script(_: &std::path::Path) -> Arc<Fake> {
+    Fake::new(Script::Ok(vec!["cloud"], Usage::default()))
+}
+
+#[tokio::test]
+async fn without_a_key_time_and_files_are_answered_locally_through_the_gateway() {
+    let (t, fake) = tooled_full(no_script, false, Caps::default(), false, vec![]);
+    std::fs::write(t.root.join("tax-return.txt"), "x").unwrap();
+    ask(&t, "what time is it").await;
+    assert!(t.sink.text().contains("UTC"), "{}", t.sink.text());
+    assert_eq!(t.sink.dones(), vec![StopReason::End]);
+    {
+        let a = lock(&t.sink.activity);
+        assert_eq!(
+            (a[0].tool.as_str(), a[0].decision),
+            ("time.now", ToolDecision::AutoAllowed)
+        );
+    }
+    let t2 = Arc::new(Rec::default());
+    t.r.start("find tax".into(), t2.clone()).unwrap();
+    t2.wait_done().await;
+    assert!(t2.text().contains("tax-return.txt"), "{}", t2.text());
+    assert_eq!(*lock(&fake.calls), 0, "the model was never called");
+}
+
+#[tokio::test]
+async fn at_the_spend_cap_status_is_still_answered_locally() {
+    let caps = Caps {
+        daily: Some(100),
+        monthly: None,
+    };
+    let (t, fake) = tooled_full(no_script, false, caps, true, vec![]);
+    t.spend.record(
+        Day::from_unix_secs(NOW),
+        Usage {
+            input_tokens: 100,
+            output_tokens: 0,
+        },
+        PRICE,
+    );
+    // The placeholder status source says so plainly instead of pretending.
+    ask(&t, "system status").await;
+    assert!(t.sink.text().contains("not available"), "{}", t.sink.text());
+    assert_eq!(t.sink.dones(), vec![StopReason::End]);
+    // Anything that needs the model is still refused at the cap.
+    let t2 = Arc::new(Rec::default());
+    t.r.start("explain black holes".into(), t2.clone()).unwrap();
+    t2.wait_done().await;
+    assert_eq!(t2.dones(), vec![StopReason::SpendCap]);
+    assert_eq!(*lock(&fake.calls), 0);
+}
+
+#[tokio::test]
+async fn with_the_network_down_a_tool_question_is_answered_locally() {
+    let fake = |_: &std::path::Path| Fake::new(Script::FailToStart(ProviderError::Offline));
+    let (t, _) = tooled_full(fake, false, Caps::default(), true, vec![]);
+    ask(&t, "what's the date today").await;
+    assert!(t.sink.text().contains("UTC"), "{}", t.sink.text());
+    assert_eq!(t.sink.dones(), vec![StopReason::End]);
+    // A question that needs the model reports the network problem, as before.
+    let t2 = Arc::new(Rec::default());
+    t.r.start("tell me a story".into(), t2.clone()).unwrap();
+    t2.wait_done().await;
+    assert_eq!(t2.dones(), vec![StopReason::Error]);
+    // The failed turns left nothing in the history.
+    assert!(lock(&t.r.history).is_empty());
+}
+
+#[tokio::test]
+async fn opening_an_app_by_name_needs_exactly_one_allowed_match() {
+    let apps = vec![
+        app("chrome.exe", "Google Chrome"),
+        app("firefox.exe", "Mozilla Firefox"),
+        app("code.exe", "Visual Studio Code"),
+        app("code-insiders.exe", "Visual Studio Code Insiders"),
+    ];
+    let (t, _) = tooled_full(no_script, false, Caps::default(), false, apps);
+    // One match: the launch goes through the gateway (the placeholder launcher says it
+    // is unavailable, which is reported as such, never as a success).
+    ask(&t, "open chrome").await;
+    assert!(t.sink.text().contains("not available"), "{}", t.sink.text());
+    assert_eq!(lock(&t.sink.activity)[0].tool, "apps.launch");
+    // Two matches: ask which, run nothing.
+    let t2 = Arc::new(Rec::default());
+    t.r.start("open visual studio".into(), t2.clone()).unwrap();
+    t2.wait_done().await;
+    assert!(t2.text().contains("Which one"), "{}", t2.text());
+    assert!(t2.text().contains("Insiders"));
+    // No match: say so, run nothing.
+    let t3 = Arc::new(Rec::default());
+    t.r.start("open spotify".into(), t3.clone()).unwrap();
+    t3.wait_done().await;
+    assert!(
+        t3.text().contains("can't find an allowed app"),
+        "{}",
+        t3.text()
+    );
+    assert_eq!(
+        lock(&t.sink.activity).len(),
+        1,
+        "only the first one reached the gateway"
+    );
 }
