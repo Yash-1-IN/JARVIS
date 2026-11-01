@@ -138,14 +138,14 @@ impl Registry {
         self.tools.insert(t.name(), t);
     }
 
-    /// The tools the model is offered. `files.move` and `files.rename` are held back until
-    /// the no-replace rename lands in `platform/` (kibong2's review of #22): the current
-    /// `std::fs::rename` would silently replace a destination created after the check.
+    /// The tools the model is offered.
     pub fn wired() -> Self {
         let mut r = Self::new();
         r.register(Arc::new(timenow::TimeNow));
         r.register(Arc::new(files::FilesSearch));
         r.register(Arc::new(files::FilesReadText));
+        r.register(Arc::new(files::FilesMove));
+        r.register(Arc::new(files::FilesRename));
         r
     }
 

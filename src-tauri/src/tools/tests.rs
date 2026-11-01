@@ -709,8 +709,16 @@ async fn a_timeout_cancels_the_token_the_tool_was_given() {
 }
 
 #[test]
-fn the_wired_set_holds_back_move_and_rename() {
+fn the_wired_set_is_the_five_implemented_tools() {
     let names = Registry::wired().names();
-    assert_eq!(names, vec!["files.read_text", "files.search", "time.now"]);
-    assert!(Registry::alpha().names().contains(&"files.rename"));
+    assert_eq!(
+        names,
+        vec![
+            "files.move",
+            "files.read_text",
+            "files.rename",
+            "files.search",
+            "time.now"
+        ]
+    );
 }
