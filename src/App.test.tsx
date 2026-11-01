@@ -261,3 +261,101 @@ describe("App approvals", () => {
     vi.useRealTimers();
   });
 });
+
+describe("App panels (issue #37)", () => {
+  beforeEach(() => {
+    useSnapshotStore.setState({ snapshot: null });
+    useChatStore.setState({ turns: [], pendingInterrupts: {} });
+  });
+
+  it("opens one panel at a time beside the chat, with focus moved in and back", async () => {
+    render(<App transport={new MockTransport()} />);
+    await screen.findByTestId("phase");
+    const settingsBtn = screen.getByRole("button", { name: "Settings" });
+    const activityBtn = screen.getByRole("button", { name: "Activity" });
+    expect(settingsBtn).toHaveAttribute("aria-pressed", "false");
+
+    await act(async () => fireEvent.click(settingsBtn));
+    const panel = screen.getByRole("region", { name: "Settings" });
+    expect(settingsBtn).toHaveAttribute("aria-pressed", "true");
+    expect(settingsBtn).toHaveAttribute("aria-controls", panel.id);
+    expect(screen.getByRole("heading", { name: "Settings" })).toHaveFocus();
+    // The chat stays on screen.
+    expect(screen.getByLabelText("Message JARVIS")).toBeInTheDocument();
+
+    // Opening Activity replaces Settings.
+    await act(async () => fireEvent.click(activityBtn));
+    expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+    expect(
+      screen.getByRole("region", { name: "Activity" }),
+    ).toBeInTheDocument();
+    expect(activityBtn).toHaveAttribute("aria-pressed", "true");
+    expect(settingsBtn).toHaveAttribute("aria-pressed", "false");
+
+    // Clicking the open one again closes it.
+    await act(async () => fireEvent.click(activityBtn));
+    expect(screen.queryByRole("region", { name: "Activity" })).toBeNull();
+
+    // Close returns focus to the button that opened the panel.
+    await act(async () => fireEvent.click(settingsBtn));
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: /Close/ })),
+    );
+    expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+    expect(settingsBtn).toHaveFocus();
+  });
+
+  it("Esc inside a panel closes it and does not cancel the reply; outside it still cancels", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    const cancel = vi.spyOn(t, "cancel");
+    render(<App transport={t} />);
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText("Message JARVIS"), {
+      target: { value: "long one" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Activity" })),
+    );
+    const heading = screen.getByRole("heading", { name: "Activity" });
+    await act(async () => {
+      fireEvent.keyDown(heading, { key: "Escape" });
+    });
+    expect(screen.queryByRole("region", { name: "Activity" })).toBeNull();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Activity" })).toHaveFocus();
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("keeps the approval card on screen and reachable while a panel is open", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    render(<App transport={t} />);
+    await act(async () => {});
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Settings" })),
+    );
+    act(() => {
+      t.runScript("approval");
+      vi.advanceTimersByTime(1000);
+    });
+    const card = screen.getByTestId("approval-card");
+    expect(
+      screen.getByRole("region", { name: "Settings" }),
+    ).not.toContainElement(card);
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    vi.useRealTimers();
+  });
+});
