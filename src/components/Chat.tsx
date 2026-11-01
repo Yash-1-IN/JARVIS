@@ -9,6 +9,22 @@ const STOP_NOTES: Partial<Record<NonNullable<ChatTurn["stopReason"]>, string>> =
     spend_cap: "Stopped: spend cap reached",
   };
 
+const INTERRUPT_NOTES: Record<
+  NonNullable<ChatTurn["interruptedBy"]>,
+  string
+> = {
+  user_cancel: "Cancelled",
+  hotkey: "Stopped by the hotkey",
+  wake_word: "Interrupted: listening again",
+  error: "Stopped by an error",
+};
+
+/** The interrupt reason, when known, says more than the bare stop reason. */
+function stopNote(t: ChatTurn): string | undefined {
+  if (t.interruptedBy) return INTERRUPT_NOTES[t.interruptedBy];
+  return t.stopReason ? STOP_NOTES[t.stopReason] : undefined;
+}
+
 interface Props {
   turns: ChatTurn[];
   busy: boolean;
@@ -42,9 +58,9 @@ export function Chat({ turns, busy, onSubmit }: Props) {
             >
               <span className="visually-hidden">JARVIS: </span>
               <Markdown text={t.reply} />
-              {t.stopReason && STOP_NOTES[t.stopReason] && (
+              {stopNote(t) && (
                 <p>
-                  <em className="chat-stop">[{STOP_NOTES[t.stopReason]}]</em>
+                  <em className="chat-stop">[{stopNote(t)}]</em>
                 </p>
               )}
             </div>

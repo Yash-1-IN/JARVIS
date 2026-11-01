@@ -92,4 +92,21 @@ describe("TauriTransport", () => {
     });
     expect(got).toEqual([{ todayMicroUsd: 7 }]);
   });
+
+  it("delivers turn_interrupted envelopes", async () => {
+    const got: unknown[] = [];
+    new TauriTransport().onInterrupted((e) => got.push(e));
+    await Promise.resolve();
+    handlers.get("turn_interrupted")!({
+      payload: {
+        v: PROTOCOL_VERSION,
+        seq: 2,
+        id: "x",
+        ts: 0,
+        kind: "turn.interrupted",
+        payload: { requestId: "r", reason: "hotkey" },
+      },
+    });
+    expect(got).toEqual([{ requestId: "r", reason: "hotkey" }]);
+  });
 });

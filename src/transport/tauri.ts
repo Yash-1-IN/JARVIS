@@ -8,6 +8,7 @@ import type { PingResponse } from "../types/generated/PingResponse";
 import type { Settings } from "../types/generated/Settings";
 import type { SettingsPatch } from "../types/generated/SettingsPatch";
 import type { Snapshot } from "../types/generated/Snapshot";
+import type { TurnInterrupted } from "../types/generated/TurnInterrupted";
 import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
 import type { UsageSummary } from "../types/generated/UsageSummary";
 import type {
@@ -15,10 +16,12 @@ import type {
   Transport,
   TurnListener,
   UsageListener,
+  InterruptListener,
 } from "./index";
 
 export const SNAPSHOT_EVENT = "state_snapshot";
 export const USAGE_EVENT = "usage_updated";
+export const INTERRUPT_EVENT = "turn_interrupted";
 
 export class TauriTransport implements Transport {
   readonly isMock = false;
@@ -39,6 +42,14 @@ export class TauriTransport implements Transport {
    */
   onSnapshot(listener: SnapshotListener): () => void {
     return subscribe<Snapshot>(SNAPSHOT_EVENT, "state.snapshot", listener);
+  }
+
+  onInterrupted(listener: InterruptListener): () => void {
+    return subscribe<TurnInterrupted>(
+      INTERRUPT_EVENT,
+      "turn.interrupted",
+      listener,
+    );
   }
 
   onUsage(listener: UsageListener): () => void {

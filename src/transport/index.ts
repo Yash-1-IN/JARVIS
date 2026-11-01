@@ -3,12 +3,14 @@ import type { PingResponse } from "../types/generated/PingResponse";
 import type { Settings } from "../types/generated/Settings";
 import type { SettingsPatch } from "../types/generated/SettingsPatch";
 import type { Snapshot } from "../types/generated/Snapshot";
+import type { TurnInterrupted } from "../types/generated/TurnInterrupted";
 import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
 import type { UsageSummary } from "../types/generated/UsageSummary";
 
 export type SnapshotListener = (snapshot: Snapshot) => void;
 export type TurnListener = (event: TurnStreamEvent) => void;
 export type UsageListener = (usage: UsageSummary) => void;
+export type InterruptListener = (e: TurnInterrupted) => void;
 
 /** One interface, two implementations: TauriTransport and MockTransport. */
 export interface Transport {
@@ -26,6 +28,11 @@ export interface Transport {
    * always ends with exactly one `done`.
    */
   submitText(text: string, onEvent: TurnListener): Promise<string>;
+  /**
+   * `turn.interrupted` broadcasts: why a turn stopped early. The turn's own
+   * channel still ends with `done { stopReason: "cancelled" }`.
+   */
+  onInterrupted(listener: InterruptListener): () => void;
   /** Contract: `set_mute`. */
   setMute(muted: boolean): Promise<void>;
 

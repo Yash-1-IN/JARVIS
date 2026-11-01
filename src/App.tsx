@@ -74,6 +74,9 @@ export default function App({ transport }: { transport: Transport }) {
     // Subscribe before fetching so no update between the two is lost; the
     // store's seq check discards whichever arrives stale.
     const unsubscribe = transport.onSnapshot(receive);
+    const offInterrupt = transport.onInterrupted((e) =>
+      useChatStore.getState().markInterrupted(e.requestId, e.reason),
+    );
     (async () => {
       try {
         const pong = await transport.ping();
@@ -91,6 +94,7 @@ export default function App({ transport }: { transport: Transport }) {
     return () => {
       cancelled = true;
       unsubscribe();
+      offInterrupt();
     };
   }, [transport, receive]);
 

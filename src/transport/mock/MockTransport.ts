@@ -7,6 +7,8 @@ import type { Settings } from "../../types/generated/Settings";
 import type { SettingsPatch } from "../../types/generated/SettingsPatch";
 import type { Snapshot } from "../../types/generated/Snapshot";
 import type { StopReason } from "../../types/generated/StopReason";
+import type { InterruptReason } from "../../types/generated/InterruptReason";
+import type { TurnInterrupted } from "../../types/generated/TurnInterrupted";
 import type { UsageSummary } from "../../types/generated/UsageSummary";
 import type {
   SnapshotListener,
@@ -77,6 +79,7 @@ export class MockTransport implements Transport {
   private turnCount = 0;
   private nextFault: MockFault | null = null;
   private usageListeners = new Set<UsageListener>();
+  private interruptListeners = new Set<(e: TurnInterrupted) => void>();
   private settings: Settings = {
     schemaVersion: 1,
     apiKey: { isSet: false, storage: null, hint: null },
@@ -198,15 +201,37 @@ export class MockTransport implements Transport {
 
   async cancel(requestId: string): Promise<void> {
     if (this.snapshot.activeRequestId !== requestId) return;
+    this.interrupt("user_cancel");
+  }
+
+  onInterrupted(listener: (e: TurnInterrupted) => void): () => void {
+    this.interruptListeners.add(listener);
+    return () => this.interruptListeners.delete(listener);
+  }
+
+  /**
+   * Ends the active turn early as the backend would (contracts.md): the turn
+   * channel gets `done cancelled`, `turn.interrupted` is broadcast, and the
+   * phase becomes `listening` for a wake word and `idle` otherwise.
+   */
+  interrupt(reason: InterruptReason): void {
+    const requestId = this.snapshot.activeRequestId;
+    if (!requestId) return;
     this.stop();
     this.endTurn("cancelled");
+    const wake = reason === "wake_word";
     this.apply({
-      phase: "idle",
+      phase: wake ? "listening" : "idle",
       activeRequestId: null,
-      mic: this.snapshot.mic === "capturing" ? "standby" : this.snapshot.mic,
+      mic: wake
+        ? "capturing"
+        : this.snapshot.mic === "capturing"
+          ? "standby"
+          : this.snapshot.mic,
       cloudInUse: false,
       pendingApprovals: [],
     });
+    for (const l of this.interruptListeners) l({ requestId, reason });
   }
 
   async setMute(muted: boolean): Promise<void> {

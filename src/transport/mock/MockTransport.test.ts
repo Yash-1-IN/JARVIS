@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantPhase } from "../../types/generated/AssistantPhase";
 import type { Snapshot } from "../../types/generated/Snapshot";
+import type { TurnInterrupted } from "../../types/generated/TurnInterrupted";
 import type { TurnStreamEvent } from "../../types/generated/TurnStreamEvent";
 import { MOCK_FAULTS } from "./faults";
 import { MockTransport } from "./MockTransport";
@@ -298,5 +299,39 @@ describe("MockTransport settings", () => {
     const u = await new MockTransport().getUsage();
     expect(u.dayResetsAt).toBe(Date.UTC(2026, 10, 16));
     expect(u.monthResetsAt).toBe(Date.UTC(2026, 11, 1));
+  });
+});
+
+describe("MockTransport interrupts", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("cancel broadcasts user_cancel; a wake word returns to listening", async () => {
+    const t = new MockTransport();
+    const seen: TurnInterrupted[] = [];
+    t.onInterrupted((e) => seen.push(e));
+    const events: TurnStreamEvent[] = [];
+
+    const a = await t.submitText("one", (e) => events.push(e));
+    vi.advanceTimersByTime(500);
+    await t.cancel(a);
+    expect(seen).toEqual([{ requestId: a, reason: "user_cancel" }]);
+    expect((await t.getSnapshot()).phase).toBe("idle");
+
+    const b = await t.submitText("two", (e) => events.push(e));
+    vi.advanceTimersByTime(500);
+    t.interrupt("wake_word");
+    expect(seen[1]).toEqual({ requestId: b, reason: "wake_word" });
+    expect(await t.getSnapshot()).toMatchObject({
+      phase: "listening",
+      mic: "capturing",
+    });
+    expect(events.filter((e) => e.type === "done")).toEqual([
+      { type: "done", stopReason: "cancelled" },
+      { type: "done", stopReason: "cancelled" },
+    ]);
+
+    t.interrupt("hotkey"); // nothing active: no event
+    expect(seen).toHaveLength(2);
   });
 });

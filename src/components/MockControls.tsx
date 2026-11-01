@@ -18,6 +18,13 @@ export function MockControls({ transport }: { transport: MockTransport }) {
       ))}
       <button
         type="button"
+        title="Interrupt the running reply as if the wake word was heard"
+        onClick={() => transport.interrupt("wake_word")}
+      >
+        interrupt: wake word
+      </button>
+      <button
+        type="button"
         title="Pretend the OS keychain is unavailable (D-09 warning path); reopen Settings to see it"
         onClick={() => transport.simulateSessionOnlyKey()}
       >
