@@ -21,10 +21,10 @@ Spec: `docs/spec.md` §5.
 | `usage_get` | none | `UsageSummary` | M2 |
 | `apps_installed` | none | `AllowedApp[]` | M4 (backend now, platform list by Dev B) |
 | `activity_list` | `limit: number` (1 to 200), `before?: string` (an `ActivityEntry.id`) | `ActivityEntry[]` newest first | M4 |
-| `memory_list` | `status?: MemoryStatus` | `Memory[]` newest first | M5 |
-| `memory_accept` | `id: string` | `Memory` (now `active`) | M5 |
-| `memory_edit` | `id: string`, `content: string` (1 to 500 characters) | `Memory` | M5 |
-| `memory_delete` | `id: string` | `void` | M5 |
+| `memory_list` | `status?: MemoryStatus` | `Memory[]` newest first | implemented |
+| `memory_accept` | `id: string` | `Memory` (now `active`) | implemented |
+| `memory_edit` | `id: string`, `content: string` (1 to 500 characters) | `Memory` | implemented |
+| `memory_delete` | `id: string` | `void` | implemented |
 | `memory_export` | none | `string` (JSON of all memories and history) | M5 |
 | `history_list` | `limit: number` (1 to 200), `before?: string` (a `ConversationSummary.id`) | `ConversationSummary[]` newest first | M5 |
 | `history_get` | `conversationId: string` | `HistoryMessage[]` oldest first | M5 |
@@ -86,11 +86,12 @@ Every event is an `Envelope<P>`: `{ v, seq, id, ts, kind, payload }`, where `kin
 - Additive changes keep `PROTOCOL_VERSION`; breaking changes bump it.
 
 ### Memory and history (M5)
-Agreed here before any code (spec §8). Nothing is implemented until the M5 backend PR.
+Agreed here before any code (spec §8). The `memory_*` commands and the `memory.proposed` event are implemented; `memory_export` and the `history_*` commands follow.
 - **Nothing becomes a memory without the user.** "Remember that X" and a model's `memory.propose` both create a `proposed` row and emit `memory.proposed`; the UI shows a card with the exact `content`. **Accept** is `memory_accept` (the row becomes `active`). **Deny** is `memory_delete`: a denied proposal is gone, nothing is stored. Only `active` memories are ever put into a prompt, as quoted data, never as instructions.
 - `memory_edit` changes the text of any memory. Editing an `active` memory keeps it `active`; the new text is what the user sees and confirms in the form. Maximum 500 characters, counted as Unicode code points (Rust `chars().count()`, not UTF-16 units or bytes); control characters are removed and an empty text is rejected.
 - **Delete is a hard delete.** The text is removed from the database, the search index, retrieval and the next prompt (a backend test asserts this).
 - `history_*`: conversations end after 10 minutes idle or on "new conversation". Stored messages hold tool results as one-line summaries, never file contents; raw audio, API keys and detected secrets are never stored. `history_delete_all` leaves an empty database. `memory_export` returns one JSON document and never contains API keys.
 - `HistorySettings.retention` is `off | days7 | days30 | days365 | forever`; the default is `days30`. Changing it purges what is now older than the limit on the next purge run (at start-up and daily).
-- Money, time and ids follow the existing rules (Unix ms, UUIDv7 strings). Errors are `JarvisError`; for now an unknown id is `INTERNAL` with a message the UI can show. A `NOT_FOUND` code (additive) comes with the backend PR. `HistoryMessage.role` is the closed enum `user | assistant | tool`.
+- Money, time and ids follow the existing rules (Unix ms, UUIDv7 strings). Errors are `JarvisError`; an invalid text is `INTERNAL` with a message the UI can show. `NOT_FOUND` is now a code: an unknown memory id returns it (message "That memory no longer exists."). `HistoryMessage.role` is the closed enum `user | assistant | tool`.
 - Additive only: no existing type changed, so `PROTOCOL_VERSION` stays 1.
+- "Remember that X" (said or typed) and the model's `memory.propose` both end in the same place: a `proposed` row and a `memory.proposed` event. The reply to the user does not repeat the text; the card does. For a cloud turn the backend adds up to five **active** memories that match the question to the system prompt as quoted data (JSON strings, labelled as notes and not instructions); proposed and archived memories are never added.

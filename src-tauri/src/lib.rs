@@ -64,7 +64,24 @@ pub fn run() {
                 Box::new(|| now_secs() * 1000),
                 activity.clone(),
             ));
-            let ports = Arc::new(tools::adapters::platform_ports());
+            // The memory database (spec §8). A failed migration stops start-up with its error;
+            // an unreadable file is moved aside and replaced, and that is logged.
+            let db_path = app.path().app_data_dir()?.join("jarvis.db");
+            let opened = memory::db::open(&db_path, now_secs() * 1000)
+                .map_err(|e| format!("the memory database could not be opened: {e}"))?;
+            if let Some(backup) = &opened.recovered_from {
+                tracing::warn!(backup = %backup.display(), "the memory database was unreadable; started a new one");
+            }
+            let store = Arc::new(memory::store::MemoryStore::new(opened.conn));
+            let handle = app.handle().clone();
+            let inbox = memory::inbox::StoreInbox::new(
+                store.clone(),
+                Box::new(|| now_secs() * 1000),
+                Box::new(move |m| {
+                    ipc::commands::publish_event(&handle, ipc::types::EventKind::MemoryProposed, m)
+                }),
+            );
+            let ports = Arc::new(tools::adapters::platform_ports(Arc::new(inbox)));
             let for_tools = svc.clone();
             let for_gateway = gateway.clone();
             let tools = orchestrator::turn::ToolWiring {
@@ -94,8 +111,10 @@ pub fn run() {
                     Box::new(move || for_config.turn_config()),
                     Box::new(now_secs),
                 )
-                .with_tools(tools),
+                .with_tools(tools)
+                .with_memory(store.clone()),
             );
+            app.manage(store);
             app.manage(activity);
             app.manage(orch);
             app.manage(runner);
@@ -115,7 +134,11 @@ pub fn run() {
             ipc::commands::api_key_clear,
             ipc::commands::apps_installed,
             ipc::commands::resolve_approval,
-            ipc::commands::activity_list
+            ipc::commands::activity_list,
+            ipc::commands::memory_list,
+            ipc::commands::memory_accept,
+            ipc::commands::memory_edit,
+            ipc::commands::memory_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

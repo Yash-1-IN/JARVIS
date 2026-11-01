@@ -39,12 +39,12 @@ pub fn convert(s: &status::SystemStatus) -> SystemStatus {
     }
 }
 
-/// The real adapters, with proposals kept in memory.
-pub fn platform_ports() -> Ports {
+/// The real adapters; `memory` is where proposed memories go.
+pub fn platform_ports(memory: Arc<dyn super::ports::MemoryInbox>) -> Ports {
     Ports {
         launcher: Arc::new(PlatformLauncher),
         status: Arc::new(PlatformStatus),
-        ..Ports::placeholders()
+        memory,
     }
 }
 

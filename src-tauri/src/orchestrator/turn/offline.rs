@@ -87,4 +87,16 @@ impl TurnRunner {
             }
         }
     }
+
+    /// "Remember that ...": the text becomes a proposed memory and the window shows the
+    /// confirmation card. Nothing is kept until the user accepts it.
+    pub(super) fn remember(&self, text: &str) -> String {
+        let Some(w) = self.tools.as_ref() else {
+            return "Memory is not available in this build.".into();
+        };
+        match (w.context)().ports.memory.propose(text) {
+            Ok(_) => "Okay. Confirm it on the card and I will keep it.".into(),
+            Err(why) => why,
+        }
+    }
 }

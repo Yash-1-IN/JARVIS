@@ -54,6 +54,8 @@ pub enum ErrorCode {
     ToolDenied,
     ToolTimeout,
     ToolFailed,
+    /// An id the backend does not know (for example a memory deleted in another window).
+    NotFound,
     Internal,
 }
 
