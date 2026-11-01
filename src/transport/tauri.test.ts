@@ -186,4 +186,28 @@ describe("TauriTransport", () => {
     handlers.get("memory_proposed")!(envelope("usage.updated"));
     expect(got).toEqual([{ id: "m2" }]);
   });
+
+  it("maps history and export to their commands", async () => {
+    invoke.mockResolvedValue([]);
+    const t = new TauriTransport();
+    await t.listConversations(30, "c1");
+    expect(invoke).toHaveBeenLastCalledWith("history_list", {
+      limit: 30,
+      before: "c1",
+    });
+    await t.getConversation("c2");
+    expect(invoke).toHaveBeenLastCalledWith("history_get", {
+      conversationId: "c2",
+    });
+    await t.deleteAllHistory();
+    expect(invoke).toHaveBeenLastCalledWith("history_delete_all");
+    await t.getHistorySettings();
+    expect(invoke).toHaveBeenLastCalledWith("history_settings_get");
+    await t.setHistorySettings({ retention: "days7" });
+    expect(invoke).toHaveBeenLastCalledWith("history_settings_set", {
+      settings: { retention: "days7" },
+    });
+    await t.exportData();
+    expect(invoke).toHaveBeenLastCalledWith("memory_export");
+  });
 });

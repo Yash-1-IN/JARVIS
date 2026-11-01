@@ -3,6 +3,7 @@ import { ActivityLog } from "./components/ActivityLog";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
 import { Controls } from "./components/Controls";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { MemoryProposalCard } from "./components/MemoryProposalCard";
 import { MockBadge } from "./components/MockBadge";
@@ -27,6 +28,7 @@ function isMock(t: Transport): t is MockTransport {
 /** The panels that open beside the conversation; one at a time (issue #37). */
 const PANELS = {
   memory: "Memory",
+  history: "History",
   activity: "Activity",
   settings: "Settings",
 } as const;
@@ -205,6 +207,7 @@ export default function App({ transport }: { transport: Transport }) {
             {panel === "settings" && <SettingsPanel transport={transport} />}
             {panel === "activity" && <ActivityLog transport={transport} />}
             {panel === "memory" && <MemoryPanel data={memories} />}
+            {panel === "history" && <HistoryPanel transport={transport} />}
           </SidePanel>
         )}
       </div>

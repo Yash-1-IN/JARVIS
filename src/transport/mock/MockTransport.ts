@@ -8,6 +8,9 @@ import type { ApiKeyStatus } from "../../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../../types/generated/ApprovalDecision";
 import type { ErrorCode } from "../../types/generated/ErrorCode";
 import type { JarvisError } from "../../types/generated/JarvisError";
+import type { ConversationSummary } from "../../types/generated/ConversationSummary";
+import type { HistoryMessage } from "../../types/generated/HistoryMessage";
+import type { HistorySettings } from "../../types/generated/HistorySettings";
 import type { Memory } from "../../types/generated/Memory";
 import type { MemoryStatus } from "../../types/generated/MemoryStatus";
 import type { PingResponse } from "../../types/generated/PingResponse";
@@ -26,6 +29,7 @@ import type {
   UsageListener,
 } from "../index";
 import { MOCK_FAULTS, type MockFault } from "./faults";
+import { MockHistory } from "./history";
 import { MockMemoryStore, rememberText } from "./memory";
 import { MOCK_SCRIPTS, type MockScript, type SnapshotPatch } from "./scripts";
 
@@ -103,6 +107,7 @@ export class MockTransport implements Transport {
   private activityCount = 0;
   private interruptListeners = new Set<(e: TurnInterrupted) => void>();
   private memory = new MockMemoryStore();
+  private history = new MockHistory();
   private settings: Settings = {
     schemaVersion: 1,
     apiKey: { isSet: false, storage: null, hint: null },
@@ -169,8 +174,15 @@ export class MockTransport implements Transport {
     this.turn = { requestId, onEvent };
 
     // "Remember that ..." is answered locally, like the backend: no cloud, no
-    // cost, works at the spend cap. The card shows the text, the reply doesn't.
+    // cost, works at the spend cap. The card shows the text, the reply doesn't;
+    // history keeps a neutral line so the text cannot outlive the memory.
     const remember = rememberText(text);
+    this.history.record(
+      "user",
+      remember === null
+        ? text
+        : "Asked JARVIS to remember something (see Memory).",
+    );
     if (remember !== null) {
       let reply = "Okay. Confirm it on the card and I will keep it.";
       try {
@@ -186,6 +198,7 @@ export class MockTransport implements Transport {
       this.timers.push(
         setTimeout(() => {
           onEvent({ type: "text_delta", text: reply });
+          this.history.record("assistant", reply);
           this.endTurn("end");
           this.apply({ phase: "idle", activeRequestId: null });
         }, 100),
@@ -237,6 +250,7 @@ export class MockTransport implements Transport {
     this.timers.push(
       setTimeout(
         () => {
+          this.history.record("assistant", reply);
           this.endTurn("end");
           this.recordUsage();
           this.apply({
@@ -377,6 +391,51 @@ export class MockTransport implements Transport {
 
   onMemoryProposed(listener: MemoryListener): () => void {
     return this.memory.onProposed(listener);
+  }
+
+  async exportData(): Promise<string> {
+    const history = this.history.list(200).map((c) => ({
+      conversation: c,
+      messages: this.history.get(c.id),
+    }));
+    return JSON.stringify(
+      {
+        format: "jarvis-export",
+        version: 1,
+        exportedAt: Date.now(),
+        historyRetention: this.history.retention,
+        memories: this.memory.list(),
+        history,
+      },
+      null,
+      2,
+    );
+  }
+
+  async listConversations(
+    limit: number,
+    before?: string,
+  ): Promise<ConversationSummary[]> {
+    return this.history.list(limit, before);
+  }
+
+  async getConversation(conversationId: string): Promise<HistoryMessage[]> {
+    return this.history.get(conversationId);
+  }
+
+  async deleteAllHistory(): Promise<void> {
+    this.history.deleteAll();
+  }
+
+  async getHistorySettings(): Promise<HistorySettings> {
+    return { retention: this.history.retention };
+  }
+
+  async setHistorySettings(
+    settings: HistorySettings,
+  ): Promise<HistorySettings> {
+    this.history.setRetention(settings.retention);
+    return { retention: this.history.retention };
   }
 
   /** Dev helper: the model proposes a memory (`memory.propose`), as in a cloud turn. */

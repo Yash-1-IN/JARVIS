@@ -7,6 +7,9 @@ import type { ActivityEntry } from "../types/generated/ActivityEntry";
 import type { AllowedApp } from "../types/generated/AllowedApp";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
+import type { ConversationSummary } from "../types/generated/ConversationSummary";
+import type { HistoryMessage } from "../types/generated/HistoryMessage";
+import type { HistorySettings } from "../types/generated/HistorySettings";
 import type { Memory } from "../types/generated/Memory";
 import type { MemoryStatus } from "../types/generated/MemoryStatus";
 import type { PingResponse } from "../types/generated/PingResponse";
@@ -117,6 +120,33 @@ export class TauriTransport implements Transport {
       "memory.proposed",
       listener,
     );
+  }
+
+  exportData(): Promise<string> {
+    return invoke<string>("memory_export");
+  }
+
+  listConversations(
+    limit: number,
+    before?: string,
+  ): Promise<ConversationSummary[]> {
+    return invoke<ConversationSummary[]>("history_list", { limit, before });
+  }
+
+  getConversation(conversationId: string): Promise<HistoryMessage[]> {
+    return invoke<HistoryMessage[]>("history_get", { conversationId });
+  }
+
+  deleteAllHistory(): Promise<void> {
+    return invoke("history_delete_all");
+  }
+
+  getHistorySettings(): Promise<HistorySettings> {
+    return invoke<HistorySettings>("history_settings_get");
+  }
+
+  setHistorySettings(settings: HistorySettings): Promise<HistorySettings> {
+    return invoke<HistorySettings>("history_settings_set", { settings });
   }
 
   appsInstalled(): Promise<AllowedApp[]> {
