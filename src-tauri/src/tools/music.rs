@@ -91,6 +91,9 @@ fn to_tool_error(e: MediaError) -> ToolError {
             ToolError::Unavailable("Nothing is playing right now.".into())
         }
         MediaError::Refused => ToolError::Failed("The player did not accept that.".into()),
+        MediaError::NotAllowed => ToolError::Unavailable(
+            "macOS has not allowed JARVIS to control that player. Switch JARVIS on under System Settings, Privacy and Security, Automation, then ask again.".into(),
+        ),
         MediaError::Failed => ToolError::Failed("Controlling the music failed.".into()),
     }
 }

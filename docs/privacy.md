@@ -21,7 +21,7 @@ you would not want them to hold.
 
 Quick commands that never need the model (stop, mute, "repeat that", "what can you do", "remember that
 ...", and music controls such as "pause", "next song", "volume up" and "what's playing") are handled on your
-computer. The music controls talk to your operating system's media player controls, not to the internet; a
+computer. The music controls talk to your operating system's media player controls, not to the internet (on macOS, to the Spotify and Music apps through fixed scripts, after you allow it once under Privacy and Security, Automation); a
 track name is read from the playing app and shown to you; like any reply, it can be part of the recent
 conversation that is sent when you next message the model. When the spend cap is reached, there is no key, or you are offline, the
 time, system status, open-an-app and find-a-file questions are also answered on your computer.

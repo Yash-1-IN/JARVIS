@@ -52,6 +52,7 @@ fn convert_error(e: media::MediaError) -> MediaError {
         media::MediaError::Unsupported => MediaError::Unsupported,
         media::MediaError::NothingPlaying => MediaError::NothingPlaying,
         media::MediaError::Refused => MediaError::Refused,
+        media::MediaError::NotAllowed => MediaError::NotAllowed,
         media::MediaError::Failed => MediaError::Failed,
     }
 }

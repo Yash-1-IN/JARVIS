@@ -64,6 +64,8 @@ pub enum MediaError {
     NothingPlaying,
     /// An app has a session but did not accept the command.
     Refused,
+    /// The operating system has not let JARVIS control the app (macOS Automation permission).
+    NotAllowed,
     Failed,
 }
 
