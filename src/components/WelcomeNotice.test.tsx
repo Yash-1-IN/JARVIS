@@ -104,4 +104,36 @@ describe("WelcomeNotice (issue #45)", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("read-only");
     expect(screen.getByTestId("welcome")).toBeInTheDocument();
   });
+
+  it("Esc works on a fresh launch with nothing focused, and does not also cancel a reply", async () => {
+    const t = new MockTransport();
+    const update = vi.spyOn(t, "updateSettings");
+    render(<WelcomeNotice transport={t} />);
+    await act(async () => {});
+    // Nothing inside the notice has focus: the key press lands on the page body.
+    expect(document.activeElement).toBe(document.body);
+    // The app's "Esc cancels the reply" shortcut listens on the window.
+    const cancelShortcut = vi.fn();
+    window.addEventListener("keydown", cancelShortcut);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    window.removeEventListener("keydown", cancelShortcut);
+
+    expect(screen.queryByTestId("welcome")).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+    expect(cancelShortcut).not.toHaveBeenCalled();
+    // Remembered: not shown again.
+    const again = render(<WelcomeNotice transport={t} />);
+    await act(async () => {});
+    expect(again.queryByTestId("welcome")).toBeNull();
+  });
+
+  it("once closed, Esc goes back to cancelling a reply as usual", async () => {
+    await show();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    const cancelShortcut = vi.fn();
+    window.addEventListener("keydown", cancelShortcut);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    window.removeEventListener("keydown", cancelShortcut);
+    expect(cancelShortcut).toHaveBeenCalledTimes(1);
+  });
 });

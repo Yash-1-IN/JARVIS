@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useState } from "react";
 import { describeError } from "../state/errors";
 import type { Transport } from "../transport";
 
@@ -49,6 +49,22 @@ export function WelcomeNotice({ transport }: { transport: Transport }) {
     };
   }, [transport]);
 
+  // Esc anywhere closes the notice, not only once focus is inside it: it opens with
+  // nothing focused, so a key press lands on the page body. The listener is on the
+  // document, which runs before the window's "Esc cancels a reply" shortcut, and
+  // stops the event there so a reply in progress is not cancelled as well.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.repeat) return;
+      e.stopPropagation();
+      markSeen();
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
   if (!open) return null;
 
   const keepAsking = () => {
@@ -68,20 +84,11 @@ export function WelcomeNotice({ transport }: { transport: Transport }) {
       setBusy(false);
     }
   };
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && !e.repeat) {
-      // Esc here closes the notice; it must not also cancel a reply.
-      e.stopPropagation();
-      keepAsking();
-    }
-  };
-
   return (
     <section
       className="welcome"
       role="region"
       aria-labelledby="welcome-title"
-      onKeyDown={onKeyDown}
       data-testid="welcome"
     >
       <header className="welcome-header">
