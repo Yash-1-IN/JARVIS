@@ -237,9 +237,11 @@ export function PolicySettings({ transport, settings, save, busy }: Props) {
         without asking
       </label>
       <p className="hint">
-        Even with this on, JARVIS still asks after it has read a file or web
-        page in this conversation, and always asks for high-risk actions such as
-        moving a whole folder.
+        With this on, reading a file sends its contents to the AI provider
+        without a card. JARVIS still asks after it has read a file or web page
+        in this conversation, and always asks for high-risk actions such as
+        moving a whole folder. Allowed folders still apply, and every action is
+        listed in Activity.
       </p>
     </>
   );

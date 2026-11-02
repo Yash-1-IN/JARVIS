@@ -663,3 +663,32 @@ blockquote.memory-text {
 .display-settings > div {
   margin: 0.3rem 0;
 }
+
+/* ---- First-run notice (issue #45) ---- */
+.welcome {
+  max-width: 52rem;
+  margin: 0.75rem auto 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.welcome-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.welcome-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+/* Two equal choices: same style, side by side, neither emphasised. */
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

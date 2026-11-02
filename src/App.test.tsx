@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -299,7 +299,12 @@ describe("App panels (issue #37)", () => {
     // Close returns focus to the button that opened the panel.
     await act(async () => fireEvent.click(settingsBtn));
     await act(async () =>
-      fireEvent.click(screen.getByRole("button", { name: /Close/ })),
+      fireEvent.click(
+        within(screen.getByRole("region", { name: "Settings" })).getByRole(
+          "button",
+          { name: /Close/ },
+        ),
+      ),
     );
     expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
     expect(settingsBtn).toHaveFocus();
