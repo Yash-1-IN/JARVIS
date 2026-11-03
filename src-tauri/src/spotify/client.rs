@@ -72,7 +72,7 @@ impl Endpoints {
             accounts: "https://accounts.spotify.com".into(),
             api: "https://api.spotify.com".into(),
             redirect_port: REDIRECT_PORT,
-            settle_ms: 800,
+            settle_ms: 1000,
         }
     }
 }
@@ -94,6 +94,9 @@ pub struct Spotify {
     access: tokio::sync::Mutex<Option<Access>>,
     signing_in: Mutex<Option<CancellationToken>>,
     name: Mutex<Option<String>>,
+    /// The steps of the last "play" and the HTTP status each got (no bodies, no tokens), so a
+    /// failure can say what Spotify answered.
+    trace: Mutex<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -174,7 +177,23 @@ impl Spotify {
             access: tokio::sync::Mutex::new(None),
             signing_in: Mutex::new(None),
             name: Mutex::new(None),
+            trace: Mutex::new(Vec::new()),
         }
+    }
+
+    fn note(&self, step: String) {
+        let mut t = self.trace.lock().unwrap_or_else(|e| e.into_inner());
+        if t.len() < 20 {
+            t.push(step);
+        }
+    }
+
+    /// What the last "play" did, for example `search 200 · play 204 · player 204`.
+    pub fn last_trace(&self) -> String {
+        self.trace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .join(" · ")
     }
 
     pub fn connected(&self) -> bool {
@@ -366,6 +385,12 @@ impl Spotify {
             if status == StatusCode::UNAUTHORIZED && attempt == 0 {
                 continue;
             }
+            self.note(format!(
+                "{} {} {}",
+                method.as_str().to_lowercase(),
+                path.trim_start_matches("/v1/").replace("me/", ""),
+                status.as_u16()
+            ));
             let text = r.text().await.map_err(|_| SpotifyError::Failed)?;
             return Ok((status, text));
         }
@@ -391,6 +416,7 @@ impl Spotify {
         words: &str,
         cancel: &CancellationToken,
     ) -> Result<Played, SpotifyError> {
+        self.trace.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let q = clean_query(words).ok_or(SpotifyError::NoResults)?;
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
@@ -437,7 +463,7 @@ impl Spotify {
                     reqwest::Method::PUT,
                     "/v1/me/player/play",
                     &[("device_id", &id)],
-                    Some(body),
+                    Some(body.clone()),
                 )
                 .await?;
         }
@@ -449,7 +475,14 @@ impl Spotify {
                 map_status(s)
             });
         }
-        let device = self.confirm_playing(cancel).await?;
+        let device = match self.confirm_playing(cancel).await {
+            Err(SpotifyError::NotPlaying) => {
+                // Spotify took the request but nothing started: the device may be asleep.
+                // Move playback to it explicitly, then ask for the song again.
+                self.wake_device_and_retry(&body, cancel).await?
+            }
+            other => other?,
+        };
         Ok(Played {
             title: clip(&track.name, 120),
             artist: clip(
@@ -460,14 +493,58 @@ impl Spotify {
         })
     }
 
-    /// Asks Spotify whether something is really playing, up to three times. A 204 or
+    async fn wake_device_and_retry(
+        &self,
+        body: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Option<String>, SpotifyError> {
+        let devs: Devices = self.get_json("/v1/me/player/devices", &[]).await?;
+        self.note(format!(
+            "devices {}",
+            devs.devices
+                .iter()
+                .map(|d| format!(
+                    "{}{}",
+                    if d.is_active { "active" } else { "idle" },
+                    if d.is_restricted { "+restricted" } else { "" }
+                ))
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+        let id = devs
+            .devices
+            .iter()
+            .filter(|d| !d.is_restricted)
+            .max_by_key(|d| d.is_active)
+            .and_then(|d| d.id.clone())
+            .ok_or(SpotifyError::NoDevice)?;
+        let transfer = serde_json::json!({ "device_ids": [id], "play": true }).to_string();
+        let _ = self
+            .call(reqwest::Method::PUT, "/v1/me/player", &[], Some(transfer))
+            .await?;
+        tokio::time::sleep(Duration::from_millis(self.ep.settle_ms.saturating_mul(2))).await;
+        let (s, _) = self
+            .call(
+                reqwest::Method::PUT,
+                "/v1/me/player/play",
+                &[("device_id", &id)],
+                Some(body.to_owned()),
+            )
+            .await?;
+        if !s.is_success() {
+            return Err(map_status(s));
+        }
+        self.confirm_playing(cancel).await
+    }
+
+    /// Asks Spotify whether something is really playing, up to four times. A 204 or
     /// `is_playing: false` means no. Any other answer is "cannot tell", which is not a
     /// failure (the play request itself was accepted).
     async fn confirm_playing(
         &self,
         cancel: &CancellationToken,
     ) -> Result<Option<String>, SpotifyError> {
-        for attempt in 0..3 {
+        for attempt in 0..4 {
             if self.ep.settle_ms > 0 {
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(SpotifyError::Cancelled),
@@ -478,7 +555,7 @@ impl Spotify {
                 .call(reqwest::Method::GET, "/v1/me/player", &[], None)
                 .await?;
             if s == StatusCode::NO_CONTENT {
-                if attempt == 2 {
+                if attempt == 3 {
                     return Err(SpotifyError::NotPlaying);
                 }
                 continue;
@@ -492,7 +569,7 @@ impl Spotify {
             if state.is_playing {
                 return Ok(state.device.map(|d| clip(&d.name, 60)));
             }
-            if attempt == 2 {
+            if attempt == 3 {
                 return Err(SpotifyError::NotPlaying);
             }
         }
@@ -543,6 +620,10 @@ struct Devices {
 #[derive(Deserialize)]
 struct Device {
     id: Option<String>,
+    #[serde(default)]
+    is_active: bool,
+    #[serde(default)]
+    is_restricted: bool,
 }
 
 const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>JARVIS</title><body style=\"font-family:system-ui;text-align:center;margin-top:20vh\"><h1>You can close this tab.</h1><p>Return to JARVIS.</p>";
@@ -1016,7 +1097,8 @@ mod tests {
 
     fn playing_answer(state: &'static str, searches: Arc<Mutex<Vec<String>>>) -> Answer {
         Arc::new(
-            move |r| match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+            move |r| {
+                match (r.method.as_str(), r.target.split('?').next().unwrap()) {
                 ("POST", "/api/token") => (
                     200,
                     r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
@@ -1029,7 +1111,12 @@ mod tests {
                         (200, SEARCH_HIT.into())
                     }
                 }
-                ("PUT", "/v1/me/player/play") => (204, String::new()),
+                ("PUT", "/v1/me/player/play" | "/v1/me/player") => (204, String::new()),
+                ("GET", "/v1/me/player/devices") => (
+                    200,
+                    r#"{"devices":[{"id":"d1","name":"Mac","is_active":false,"is_restricted":false}]}"#
+                        .into(),
+                ),
                 ("GET", "/v1/me/player") => match state {
                     "playing" => (
                         200,
@@ -1042,6 +1129,7 @@ mod tests {
                     _ => (204, String::new()),
                 },
                 _ => (404, "{}".into()),
+            }
             },
         )
     }
@@ -1063,6 +1151,20 @@ mod tests {
                 sp.play("queen", &CancellationToken::new()).await,
                 Err(SpotifyError::NotPlaying),
                 "{state}"
+            );
+            // The trace says what Spotify answered, including the explicit device transfer.
+            let t = sp.last_trace();
+            assert!(
+                t.contains("search 200") && t.contains("player/play 204"),
+                "{t}"
+            );
+            assert!(
+                t.contains("devices idle") && t.contains("player 204"),
+                "{t}"
+            );
+            assert!(
+                !t.contains("acc-") && !t.contains("ref-"),
+                "no token in the trace"
             );
         }
     }

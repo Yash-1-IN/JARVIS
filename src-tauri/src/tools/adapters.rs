@@ -100,6 +100,10 @@ pub struct SpotifyPlayer(pub Arc<crate::spotify::client::Spotify>);
 
 #[async_trait::async_trait]
 impl super::ports::MusicPlayer for SpotifyPlayer {
+    fn detail(&self) -> Option<String> {
+        Some(self.0.last_trace()).filter(|t| !t.is_empty())
+    }
+
     async fn play(
         &self,
         words: &str,

@@ -170,6 +170,11 @@ pub trait MusicPlayer: Send + Sync {
         words: &str,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<PlayedTrack, PlayError>;
+    /// A short, secret-free account of the last attempt (steps and HTTP statuses), appended
+    /// to failures so they can be diagnosed.
+    fn detail(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct NoMusicPlayer;
