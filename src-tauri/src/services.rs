@@ -7,8 +7,8 @@ use crate::intelligence::pricing::{DEFAULT_MODEL, PriceTable};
 use crate::intelligence::provider::{ModelProvider, ProviderError};
 use crate::intelligence::spend::{Caps, Day, SpendMeter};
 use crate::ipc::types::{
-    AllowedApp, ApiKeyStatus, AudioDevices, ErrorCode, JarvisError, KeyStorage, MicPermission,
-    Settings, SettingsPatch, SpotifyStatus, UsageSummary, VoiceSettingsPatch, VoiceStatus,
+    AllowedApp, ApiKeyStatus, ErrorCode, JarvisError, KeyStorage, MicPermission, Settings,
+    SettingsPatch, SpotifyStatus, UsageSummary, VoiceSettingsPatch, VoiceStatus,
 };
 use crate::orchestrator::turn::TurnConfig;
 use crate::platform::keychain::{ApiKeyVault, KeyStorage as VaultStorage, SecretString};
@@ -191,15 +191,6 @@ impl Services {
             other => err(ErrorCode::Internal, &other.to_string(), false),
         })?;
         Ok(self.voice_status())
-    }
-
-    /// The `voice_devices` command. Empty until audio capture is built.
-    pub fn voice_devices(&self) -> AudioDevices {
-        AudioDevices {
-            inputs: Vec::new(),
-            outputs: Vec::new(),
-            default_input: None,
-        }
     }
 
     /// The `voice_capture_start` command (push to talk, key down). Not built yet.
@@ -605,7 +596,5 @@ mod tests {
             ErrorCode::Internal
         );
         svc.voice_capture_stop(); // safe when nothing is capturing
-        let d = svc.voice_devices();
-        assert!(d.inputs.is_empty() && d.outputs.is_empty() && d.default_input.is_none());
     }
 }

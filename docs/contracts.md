@@ -38,7 +38,7 @@ Spec: `docs/spec.md` §5.
 | `spotify_disconnect` | none | `SpotifyStatus` | implemented (safe when not connected) |
 | `voice_status` | none | `VoiceStatus` | implemented (saved choices are real; nothing is installed yet) |
 | `voice_settings_set` | `patch: VoiceSettingsPatch` | `VoiceStatus` | implemented |
-| `voice_devices` | none | `AudioDevices` | **stub**: empty lists until audio capture is built |
+| `voice_devices` | none | `AudioDevices` | implemented (real device names and the default input; empty lists on a computer with no audio hardware) |
 | `voice_capture_start` | none | `void` | **stub**: answers an `INTERNAL` error ("Voice input is not built yet.") |
 | `voice_capture_stop` | none | `void` | implemented (safe when nothing is capturing) |
 | `voice_models_install` | none | `VoiceStatus` | **stub**: answers an `INTERNAL` error |

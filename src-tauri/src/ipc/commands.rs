@@ -244,10 +244,20 @@ pub fn voice_settings_set(
     svc.voice_settings_set(&patch)
 }
 
-/// The microphones and speakers the system has, by name. Empty until audio capture is built.
+/// The microphones and speakers the system has, by name, and which microphone is the default.
+/// Asking the operating system can take a moment, so it runs off the main thread.
 #[tauri::command]
-pub fn voice_devices(svc: tauri::State<'_, Arc<Services>>) -> AudioDevices {
-    svc.voice_devices()
+pub async fn voice_devices() -> AudioDevices {
+    tauri::async_runtime::spawn_blocking(crate::audio::cpal_backend::list_devices)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "listing audio devices failed");
+            AudioDevices {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                default_input: None,
+            }
+        })
 }
 
 /// Push to talk, key down: starts listening. Until voice input is built this answers with an error.
