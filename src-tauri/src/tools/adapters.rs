@@ -122,26 +122,35 @@ impl super::ports::MusicPlayer for SpotifyPlayer {
             E::Cancelled => P::Cancelled,
             E::TimedOut | E::Denied | E::PortBusy | E::Failed => P::Failed,
         };
-        let p = match self.0.play(words, cancel).await {
+        // Search first, then prefer the Spotify app on this computer when it is open: it
+        // starts at once and needs neither Premium nor a device from Spotify's servers.
+        let found = self.0.find(words, cancel).await.map_err(map)?;
+        let local = |uri: String| async move {
+            tokio::task::spawn_blocking(move || crate::platform::media::play_spotify_uri(&uri))
+                .await
+        };
+        let here = |f: &crate::spotify::client::Found| super::ports::PlayedTrack {
+            title: f.title.clone(),
+            artist: f.artist.clone(),
+            device: Some("the Spotify app on this computer".into()),
+        };
+        let first = local(found.uri.clone()).await;
+        self.0
+            .note(format!("this computer's Spotify app: {first:?}"));
+        if matches!(first, Ok(Ok(()))) {
+            return Ok(here(&found));
+        }
+        // Not open here (or not a Mac): ask Spotify's servers, which can wake a device.
+        let p = match self.0.play_found(&found, cancel).await {
             Ok(p) => p,
-            // Spotify's servers took the song but could not wake an app (it lists no active
-            // device). The Spotify app on this computer can be told directly.
+            // The servers took the song but could not start it. The cloud route may have
+            // just opened the app, so ask the app on this computer once more.
             Err(e @ (E::NotPlaying | E::NoDevice)) => {
-                if let Some(f) = self.0.last_found() {
-                    let uri = f.uri.clone();
-                    let local = tokio::task::spawn_blocking(move || {
-                        crate::platform::media::play_spotify_uri(&uri)
-                    })
-                    .await;
-                    self.0
-                        .note(format!("this computer's Spotify app: {local:?}"));
-                    if matches!(local, Ok(Ok(()))) {
-                        return Ok(super::ports::PlayedTrack {
-                            title: f.title,
-                            artist: f.artist,
-                            device: Some("the Spotify app on this computer".into()),
-                        });
-                    }
+                let again = local(found.uri.clone()).await;
+                self.0
+                    .note(format!("this computer's Spotify app again: {again:?}"));
+                if matches!(again, Ok(Ok(()))) {
+                    return Ok(here(&found));
                 }
                 return Err(map(e));
             }

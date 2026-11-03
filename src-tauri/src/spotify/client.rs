@@ -16,6 +16,8 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(180);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// All of "search, play, check" together; the `music.play` tool allows a little longer.
 pub const PLAY_DEADLINE: Duration = Duration::from_secs(20);
+/// The search alone.
+const FIND_DEADLINE: Duration = Duration::from_secs(10);
 /// Longest search words we send. A spoken request is short.
 const MAX_QUERY_CHARS: usize = 100;
 
@@ -107,8 +109,6 @@ pub struct Spotify {
     /// The steps of the last "play" and the HTTP status each got (no bodies, no tokens), so a
     /// failure can say what Spotify answered.
     trace: Mutex<Vec<String>>,
-    /// The track the last search chose, for the local fallback.
-    found: Mutex<Option<Found>>,
 }
 
 #[derive(Deserialize)]
@@ -190,13 +190,7 @@ impl Spotify {
             signing_in: Mutex::new(None),
             name: Mutex::new(None),
             trace: Mutex::new(Vec::new()),
-            found: Mutex::new(None),
         }
-    }
-
-    /// The track the last "play" chose, if its search found one.
-    pub fn last_found(&self) -> Option<Found> {
-        self.found.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn note(&self, step: String) {
@@ -446,16 +440,44 @@ impl Spotify {
     }
 
     /// "Play <words>": the top matching track, on the person's active (or first) device.
+    #[cfg(test)]
     pub async fn play(
         &self,
         words: &str,
         cancel: &CancellationToken,
     ) -> Result<Played, SpotifyError> {
+        let found = self.find(words, cancel).await?;
+        self.play_found(&found, cancel).await
+    }
+
+    /// Searches for the words and remembers the best match. Starts a new trace.
+    pub async fn find(
+        &self,
+        words: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Found, SpotifyError> {
         self.trace.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        *self.found.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        // Our own deadline is shorter than the tool's, so a slow Spotify ends here with the
-        // trace of what it answered, instead of the tool timing out with nothing to show.
-        match tokio::time::timeout(PLAY_DEADLINE, self.play_steps(words, cancel)).await {
+        match tokio::time::timeout(FIND_DEADLINE, self.find_steps(words, cancel)).await {
+            Ok(r) => r,
+            Err(_) => {
+                self.note(format!(
+                    "search gave up after {} s",
+                    FIND_DEADLINE.as_secs()
+                ));
+                Err(SpotifyError::Failed)
+            }
+        }
+    }
+
+    /// Plays a track found by `find` through Spotify's servers on the person's devices. Our
+    /// own deadline is shorter than the tool's, so a slow Spotify ends here with the trace of
+    /// what it answered, instead of the tool timing out with nothing to show.
+    pub async fn play_found(
+        &self,
+        found: &Found,
+        cancel: &CancellationToken,
+    ) -> Result<Played, SpotifyError> {
+        match tokio::time::timeout(PLAY_DEADLINE, self.play_found_steps(found, cancel)).await {
             Ok(r) => r,
             Err(_) => {
                 self.note(format!("gave up after {} s", PLAY_DEADLINE.as_secs()));
@@ -464,11 +486,11 @@ impl Spotify {
         }
     }
 
-    async fn play_steps(
+    async fn find_steps(
         &self,
         words: &str,
         cancel: &CancellationToken,
-    ) -> Result<Played, SpotifyError> {
+    ) -> Result<Found, SpotifyError> {
         let q = clean_query(words).ok_or(SpotifyError::NoResults)?;
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
@@ -490,18 +512,26 @@ impl Spotify {
         if !track.uri.starts_with("spotify:track:") || track.uri.len() > 64 {
             return Err(SpotifyError::Failed);
         }
-        *self.found.lock().unwrap_or_else(|e| e.into_inner()) = Some(Found {
-            uri: track.uri.clone(),
+        let found = Found {
+            uri: track.uri,
             title: clip(&track.name, 120),
             artist: clip(
                 track.artists.first().map(|a| a.name.as_str()).unwrap_or(""),
                 120,
             ),
-        });
+        };
+        Ok(found)
+    }
+
+    async fn play_found_steps(
+        &self,
+        found: &Found,
+        cancel: &CancellationToken,
+    ) -> Result<Played, SpotifyError> {
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
         }
-        let body = serde_json::json!({ "uris": [track.uri] }).to_string();
+        let body = serde_json::json!({ "uris": [found.uri] }).to_string();
         let (mut s, _) = self
             .call(
                 reqwest::Method::PUT,
@@ -544,11 +574,8 @@ impl Spotify {
             other => other?,
         };
         Ok(Played {
-            title: clip(&track.name, 120),
-            artist: clip(
-                track.artists.first().map(|a| a.name.as_str()).unwrap_or(""),
-                120,
-            ),
+            title: found.title.clone(),
+            artist: found.artist.clone(),
             device,
         })
     }
