@@ -2,7 +2,7 @@
 //! The API key is never stored here; it lives in the keychain vault.
 
 use crate::intelligence::pricing::{DEFAULT_MODEL, PriceTable};
-use crate::ipc::types::{AllowedApp, SettingsPatch};
+use crate::ipc::types::{AllowedApp, SettingsPatch, VoiceSettingsPatch};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -31,6 +31,45 @@ pub struct StoredSettings {
     /// The Spotify developer app's Client ID (not a secret). Older files lack this field.
     #[serde(default)]
     pub spotify_client_id: Option<String>,
+    /// Voice choices (M3). Older files lack this field.
+    #[serde(default)]
+    pub voice: StoredVoice,
+}
+
+/// The saved voice choices. What is installed, and the OS permission, are read live, not saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredVoice {
+    #[serde(default)]
+    pub wake_enabled: bool,
+    #[serde(default = "yes")]
+    pub follow_up_window: bool,
+    #[serde(default = "default_voice")]
+    pub voice: String,
+    #[serde(default)]
+    pub input_device: Option<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// The voice used until the person picks another.
+pub const DEFAULT_VOICE: &str = "default";
+
+fn default_voice() -> String {
+    DEFAULT_VOICE.into()
+}
+
+impl Default for StoredVoice {
+    fn default() -> Self {
+        Self {
+            wake_enabled: false,
+            follow_up_window: true,
+            voice: default_voice(),
+            input_device: None,
+        }
+    }
 }
 
 impl Default for StoredSettings {
@@ -44,6 +83,7 @@ impl Default for StoredSettings {
             allowed_apps: vec![],
             auto_allow_medium: false,
             spotify_client_id: None,
+            voice: StoredVoice::default(),
         }
     }
 }
@@ -62,6 +102,10 @@ pub enum SettingsError {
     TooMany,
     #[error("that does not look like a Spotify Client ID (32 characters, 0-9 and a-f)")]
     BadClientId,
+    #[error("that is not a valid voice id (1 to 64 letters, digits, `_` or `-`)")]
+    BadVoice,
+    #[error("that is not a valid microphone name (1 to 200 characters, no control characters)")]
+    BadDevice,
     #[error("settings could not be saved")]
     Save,
 }
@@ -179,6 +223,65 @@ impl SettingsStore {
         let saved = next.spotify_client_id.clone();
         *self.lock() = next;
         Ok(saved)
+    }
+}
+
+impl SettingsStore {
+    /// Validates and applies a voice patch, then saves. On any error nothing changes.
+    pub fn apply_voice(&self, patch: &VoiceSettingsPatch) -> Result<StoredVoice, SettingsError> {
+        let mut next = self.get();
+        if let Some(on) = patch.wake_enabled {
+            next.voice.wake_enabled = on;
+        }
+        if let Some(on) = patch.follow_up_window {
+            next.voice.follow_up_window = on;
+        }
+        if let Some(v) = &patch.voice {
+            next.voice.voice = valid_voice_id(v)?;
+        }
+        if let Some(d) = &patch.input_device {
+            next.voice.input_device = match d {
+                Some(name) => valid_device_name(name)?,
+                None => None,
+            };
+        }
+        save_atomically(&self.path, &next).map_err(|e| {
+            tracing::warn!(error = %e, "saving settings failed");
+            SettingsError::Save
+        })?;
+        let saved = next.voice.clone();
+        *self.lock() = next;
+        Ok(saved)
+    }
+}
+
+/// A voice id is 1 to 64 ASCII letters, digits, `_` or `-`. Whether it is installed is checked
+/// where the voices are known, not here.
+pub fn valid_voice_id(input: &str) -> Result<String, SettingsError> {
+    let id = input.trim();
+    if !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        Ok(id.to_string())
+    } else {
+        Err(SettingsError::BadVoice)
+    }
+}
+
+/// A microphone name is shown by the system, so it can hold spaces, brackets and non-ASCII text:
+/// only its length and control characters are checked. Empty means "the system default".
+pub fn valid_device_name(input: &str) -> Result<Option<String>, SettingsError> {
+    let name = input.trim();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    if name.chars().count() <= 200 && !name.chars().any(char::is_control) {
+        Ok(Some(name.to_string()))
+    } else {
+        Err(SettingsError::BadDevice)
     }
 }
 
@@ -586,5 +689,67 @@ mod tests {
         .unwrap();
         let store = SettingsStore::load(path, &prices());
         assert_eq!(store.get().spotify_client_id, None);
+        // ... and has the voice defaults: wake word off, follow-up window on.
+        assert_eq!(store.get().voice, StoredVoice::default());
+        assert!(!store.get().voice.wake_enabled);
+        assert!(store.get().voice.follow_up_window);
+    }
+
+    #[test]
+    fn voice_ids_and_device_names_are_checked_and_never_echoed() {
+        assert_eq!(valid_voice_id(" af_sky-2 "), Ok("af_sky-2".to_string()));
+        for bad in ["", "  ", "a b", "../x", "vo\nice", "é", &"a".repeat(65)] {
+            assert_eq!(valid_voice_id(bad), Err(SettingsError::BadVoice), "{bad:?}");
+        }
+        assert_eq!(valid_device_name(""), Ok(None));
+        assert_eq!(
+            valid_device_name("Microphone Array (Realtek(R) Audio) é"),
+            Ok(Some("Microphone Array (Realtek(R) Audio) é".to_string()))
+        );
+        for bad in ["a\0b", "a\nb", &"x".repeat(201)] {
+            assert_eq!(
+                valid_device_name(bad),
+                Err(SettingsError::BadDevice),
+                "{bad:?}"
+            );
+        }
+        // The messages describe the rule, not the input.
+        assert!(!SettingsError::BadVoice.to_string().contains("../"));
+    }
+
+    #[test]
+    fn voice_settings_are_saved_survive_a_restart_and_a_bad_value_changes_nothing() {
+        let path = tmp_path();
+        let store = SettingsStore::load(path.clone(), &prices());
+        let patch = VoiceSettingsPatch {
+            wake_enabled: Some(true),
+            follow_up_window: Some(false),
+            voice: Some("af_sky".into()),
+            input_device: Some(Some("Realtek".into())),
+        };
+        let saved = store.apply_voice(&patch).unwrap();
+        assert!(saved.wake_enabled && !saved.follow_up_window);
+        let again = SettingsStore::load(path.clone(), &prices());
+        assert_eq!(again.get().voice, saved);
+        // A bad voice in a patch with good fields applies none of them.
+        let bad = VoiceSettingsPatch {
+            wake_enabled: Some(false),
+            voice: Some("a b".into()),
+            ..Default::default()
+        };
+        assert_eq!(again.apply_voice(&bad), Err(SettingsError::BadVoice));
+        assert_eq!(again.get().voice, saved);
+        assert_eq!(
+            SettingsStore::load(path.clone(), &prices()).get().voice,
+            saved
+        );
+        // `null` goes back to the system default; an empty patch changes nothing.
+        let clear = VoiceSettingsPatch {
+            input_device: Some(None),
+            ..Default::default()
+        };
+        assert_eq!(again.apply_voice(&clear).unwrap().input_device, None);
+        let same = again.apply_voice(&VoiceSettingsPatch::default()).unwrap();
+        assert_eq!(same.voice, "af_sky");
     }
 }

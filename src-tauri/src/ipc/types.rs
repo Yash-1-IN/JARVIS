@@ -180,6 +180,15 @@ pub enum EventKind {
     #[serde(rename = "memory.proposed")]
     #[ts(rename = "memory.proposed")]
     MemoryProposed,
+    #[serde(rename = "transcript.partial")]
+    #[ts(rename = "transcript.partial")]
+    TranscriptPartial,
+    #[serde(rename = "transcript.final")]
+    #[ts(rename = "transcript.final")]
+    TranscriptFinal,
+    #[serde(rename = "voice.models_progress")]
+    #[ts(rename = "voice.models_progress")]
+    VoiceModelsProgress,
 }
 
 impl EventKind {
@@ -192,6 +201,9 @@ impl EventKind {
             Self::TurnInterrupted => "turn.interrupted",
             Self::UsageUpdated => "usage.updated",
             Self::MemoryProposed => "memory.proposed",
+            Self::TranscriptPartial => "transcript.partial",
+            Self::TranscriptFinal => "transcript.final",
+            Self::VoiceModelsProgress => "voice.models_progress",
         }
     }
 
@@ -325,6 +337,105 @@ pub struct SpotifyStatus {
     pub connected: bool,
     /// The Spotify account's display name while connected. Shown to the person only.
     pub display_name: Option<String>,
+}
+
+/// Whether the operating system lets JARVIS use the microphone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum MicPermission {
+    Granted,
+    /// Refused in the OS privacy settings. The UI shows `MIC_PERMISSION_DENIED` guidance.
+    Denied,
+    /// Not asked yet, or the OS cannot tell (also what every build says before voice exists).
+    Unknown,
+}
+
+/// Where voice input and output stand (M3, docs/m3-plan.md). It carries text and settings only,
+/// never audio, and never a path or a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct VoiceStatus {
+    /// Listen for "hey jarvis" while the microphone is on standby. Off by default.
+    pub wake_enabled: bool,
+    /// After JARVIS speaks, keep listening for 6 seconds without the wake word.
+    pub follow_up_window: bool,
+    /// Id of the chosen voice. Always one the install knows, or the default.
+    pub voice: String,
+    /// Ids of the voices that are installed. Empty until the voice models are.
+    pub available_voices: Vec<String>,
+    /// Name of the chosen microphone; `null` means the system default.
+    pub input_device: Option<String>,
+    pub mic_permission: MicPermission,
+    /// True once every voice model file is downloaded and its checksum verified.
+    pub models_ready: bool,
+}
+
+/// Partial update of the voice settings. Omit a field to leave it unchanged; `inputDevice: null`
+/// goes back to the system default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct VoiceSettingsPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wake_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub follow_up_window: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub voice: Option<String>,
+    #[serde(default, deserialize_with = "tri_state_string")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "string | null")]
+    pub input_device: Option<Option<String>>,
+}
+
+/// The audio devices this computer has, by the name the system gives them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AudioDevices {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    /// The name of the microphone the system default points at right now, so the window can say
+    /// which input is really used when `inputDevice` is `null`. `null` when there is none or it is
+    /// not known yet. Names are not unique: see the limitations in `docs/contracts.md`.
+    pub default_input: Option<String>,
+}
+
+/// Text heard from the microphone, as the `transcript.partial` and `transcript.final` events.
+/// `requestId` is the turn it belongs to. Partial text can still change; final text is what the
+/// turn uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Transcript {
+    pub request_id: String,
+    pub text: String,
+}
+
+/// Progress of one voice model download, as the `voice.models_progress` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelProgress {
+    /// The model's name from the manifest, for display.
+    pub name: String,
+    #[ts(type = "number")]
+    pub done_bytes: u64,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+}
+
+/// Like `tri_state`, for text: a missing field is `None`, an explicit `null` is `Some(None)`.
+fn tri_state_string<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(d).map(Some)
 }
 
 /// Distinguishes a missing field (`None`) from an explicit `null` (`Some(None)`).
@@ -609,6 +720,9 @@ mod tests {
             (EventKind::TurnInterrupted, "turn.interrupted"),
             (EventKind::UsageUpdated, "usage.updated"),
             (EventKind::MemoryProposed, "memory.proposed"),
+            (EventKind::TranscriptPartial, "transcript.partial"),
+            (EventKind::TranscriptFinal, "transcript.final"),
+            (EventKind::VoiceModelsProgress, "voice.models_progress"),
         ] {
             assert_eq!(serde_json::to_value(k).unwrap(), name);
             assert_eq!(k.wire_name(), name);
@@ -618,6 +732,50 @@ mod tests {
             EventKind::StateSnapshot.tauri_event_name(),
             "state_snapshot"
         );
+    }
+
+    #[test]
+    fn voice_types_have_the_agreed_wire_shape() {
+        let s = VoiceStatus {
+            wake_enabled: false,
+            follow_up_window: true,
+            voice: "default".into(),
+            available_voices: vec![],
+            input_device: None,
+            mic_permission: MicPermission::Unknown,
+            models_ready: false,
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["micPermission"], "unknown");
+        assert_eq!(v["followUpWindow"], true);
+        assert!(v["inputDevice"].is_null());
+        // The status never grows a path, a secret or audio by accident.
+        assert_eq!(v.as_object().unwrap().len(), 7);
+        let t = serde_json::to_value(Transcript {
+            request_id: "r".into(),
+            text: "hello".into(),
+        })
+        .unwrap();
+        assert_eq!(t, serde_json::json!({"requestId":"r","text":"hello"}));
+        let m = serde_json::to_value(ModelProgress {
+            name: "stt".into(),
+            done_bytes: 1,
+            total_bytes: 2,
+        })
+        .unwrap();
+        assert_eq!(m["doneBytes"], 1);
+        assert_eq!(m["totalBytes"], 2);
+    }
+
+    #[test]
+    fn voice_patch_tells_missing_from_null_and_rejects_unknown_fields() {
+        let p: VoiceSettingsPatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(p, VoiceSettingsPatch::default());
+        let p: VoiceSettingsPatch = serde_json::from_str(r#"{"inputDevice":null}"#).unwrap();
+        assert_eq!(p.input_device, Some(None));
+        let p: VoiceSettingsPatch = serde_json::from_str(r#"{"inputDevice":"Mic"}"#).unwrap();
+        assert_eq!(p.input_device, Some(Some("Mic".into())));
+        assert!(serde_json::from_str::<VoiceSettingsPatch>(r#"{"audioPath":"/x"}"#).is_err());
     }
 
     #[test]
