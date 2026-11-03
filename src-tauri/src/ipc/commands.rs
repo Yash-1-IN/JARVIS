@@ -216,11 +216,13 @@ pub fn spotify_set_client_id(
     svc.set_spotify_client_id(client_id.as_deref())
 }
 
-/// Starts the sign-in in the person's browser and returns when it ends. Until the sign-in is
-/// built this answers with an error saying so.
+/// Starts the sign-in in the person's browser and returns when it ends, times out (about 3
+/// minutes) or is cancelled by `spotify_disconnect`. Async, so the window stays responsive.
 #[tauri::command]
-pub fn spotify_connect(svc: tauri::State<'_, Arc<Services>>) -> Result<SpotifyStatus, JarvisError> {
-    svc.spotify_connect()
+pub async fn spotify_connect(
+    svc: tauri::State<'_, Arc<Services>>,
+) -> Result<SpotifyStatus, JarvisError> {
+    svc.spotify_connect().await
 }
 
 /// Forgets the Spotify sign-in (and cancels one in progress). Safe to call when not connected.

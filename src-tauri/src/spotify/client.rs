@@ -270,10 +270,8 @@ impl Spotify {
     /// A valid access token, refreshed from the keychain's refresh token when needed.
     async fn token(&self, force_refresh: bool) -> Result<SecretString, SpotifyError> {
         let mut slot = self.access.lock().await;
-        if !force_refresh {
-            if let Some(a) = slot.as_ref().filter(|a| a.expires > Instant::now()) {
-                return Ok(a.token.clone());
-            }
+        if !force_refresh && let Some(a) = slot.as_ref().filter(|a| a.expires > Instant::now()) {
+            return Ok(a.token.clone());
         }
         let client_id = (self.client_id)().ok_or(SpotifyError::NotConfigured)?;
         let refresh = self
@@ -417,7 +415,7 @@ impl Spotify {
         Ok(Played {
             title: clip(&track.name, 120),
             artist: clip(
-                &track.artists.first().map(|a| a.name.as_str()).unwrap_or(""),
+                track.artists.first().map(|a| a.name.as_str()).unwrap_or(""),
                 120,
             ),
         })

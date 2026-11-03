@@ -52,6 +52,7 @@ fn plan(w: &ToolWiring, intent: &Intent) -> Option<Plan> {
         Intent::SystemStatus => Plan::Call("system.status", json!({})),
         Intent::Music(c) => Plan::Call("music.control", json!({ "action": c.action() })),
         Intent::NowPlaying => Plan::Call("music.now_playing", json!({})),
+        Intent::PlayQuery(q) => Plan::Call("music.play", json!({ "query": q })),
         Intent::LaunchApp(name) => pick_app(w, name),
         Intent::FindFile(q) => Plan::Call("files.search", json!({ "query": q })),
         _ => return None,

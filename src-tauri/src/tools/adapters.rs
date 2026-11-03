@@ -82,12 +82,44 @@ pub fn convert(s: &status::SystemStatus) -> SystemStatus {
 }
 
 /// The real adapters; `memory` is where proposed memories go.
-pub fn platform_ports(memory: Arc<dyn super::ports::MemoryInbox>) -> Ports {
+pub fn platform_ports(
+    memory: Arc<dyn super::ports::MemoryInbox>,
+    music: Arc<dyn super::ports::MusicPlayer>,
+) -> Ports {
     Ports {
         launcher: Arc::new(PlatformLauncher),
         status: Arc::new(PlatformStatus),
         memory,
         media: Arc::new(PlatformMedia),
+        music,
+    }
+}
+
+/// "Play X" through the Spotify client.
+pub struct SpotifyPlayer(pub Arc<crate::spotify::client::Spotify>);
+
+#[async_trait::async_trait]
+impl super::ports::MusicPlayer for SpotifyPlayer {
+    async fn play(
+        &self,
+        words: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<super::ports::PlayedTrack, super::ports::PlayError> {
+        use super::ports::PlayError as P;
+        use crate::spotify::client::SpotifyError as E;
+        let p = self.0.play(words, cancel).await.map_err(|e| match e {
+            E::NotConfigured | E::NotConnected => P::NotConnected,
+            E::Offline => P::Offline,
+            E::Forbidden => P::Forbidden,
+            E::NoDevice => P::NoDevice,
+            E::NoResults => P::NoResults,
+            E::Cancelled => P::Cancelled,
+            E::TimedOut | E::Denied | E::Failed => P::Failed,
+        })?;
+        Ok(super::ports::PlayedTrack {
+            title: p.title,
+            artist: p.artist,
+        })
     }
 }
 

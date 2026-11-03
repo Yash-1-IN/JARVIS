@@ -137,12 +137,56 @@ impl MemoryInbox for MemoryProposals {
     }
 }
 
+/// The track Spotify started. The words come from Spotify: untrusted text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayedTrack {
+    pub title: String,
+    pub artist: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayError {
+    /// No Client ID saved, or not signed in to Spotify.
+    NotConnected,
+    Offline,
+    /// Spotify says this needs Premium.
+    Forbidden,
+    /// No Spotify app or device is open.
+    NoDevice,
+    NoResults,
+    Cancelled,
+    Failed,
+}
+
+/// "Play <words>" through the person's own Spotify account (music step 2, issue #68).
+#[async_trait::async_trait]
+pub trait MusicPlayer: Send + Sync {
+    async fn play(
+        &self,
+        words: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<PlayedTrack, PlayError>;
+}
+
+pub struct NoMusicPlayer;
+#[async_trait::async_trait]
+impl MusicPlayer for NoMusicPlayer {
+    async fn play(
+        &self,
+        _: &str,
+        _: &tokio_util::sync::CancellationToken,
+    ) -> Result<PlayedTrack, PlayError> {
+        Err(PlayError::NotConnected)
+    }
+}
+
 /// The adapters a tool call may use.
 pub struct Ports {
     pub launcher: Arc<dyn AppLauncher>,
     pub status: Arc<dyn StatusSource>,
     pub memory: Arc<dyn MemoryInbox>,
     pub media: Arc<dyn MediaControl>,
+    pub music: Arc<dyn MusicPlayer>,
 }
 
 impl Ports {
@@ -153,6 +197,7 @@ impl Ports {
             status: Arc::new(NoStatus),
             memory: Arc::new(MemoryProposals::new(100)),
             media: Arc::new(NoMedia),
+            music: Arc::new(NoMusicPlayer),
         }
     }
 }

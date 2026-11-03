@@ -417,6 +417,7 @@ fn registry_only_holds_tools_the_gateway_knows_and_schemas_are_strict() {
             "memory.propose",
             "music.control",
             "music.now_playing",
+            "music.play",
             "system.status",
             "time.now"
         ]
@@ -1252,4 +1253,107 @@ async fn now_playing_handles_nothing_playing_bad_arguments_and_no_adapter() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("not available on this computer"));
+}
+
+// ----------------------------------------------------------------------------- music.play
+
+use super::music::MusicPlay;
+use super::ports::{MusicPlayer, PlayError, PlayedTrack};
+
+struct FakePlayer {
+    asked: StdMutex<Vec<String>>,
+    answer: Result<PlayedTrack, PlayError>,
+}
+
+#[async_trait::async_trait]
+impl MusicPlayer for FakePlayer {
+    async fn play(
+        &self,
+        words: &str,
+        _: &tokio_util::sync::CancellationToken,
+    ) -> Result<PlayedTrack, PlayError> {
+        self.asked.lock().unwrap().push(words.to_owned());
+        self.answer.clone()
+    }
+}
+
+fn player_ctx(p: &Arc<FakePlayer>) -> ToolContext {
+    let mut ctx = ctx_for(&[]);
+    let mut ports = Ports::placeholders();
+    ports.music = p.clone();
+    ctx.ports = Arc::new(ports);
+    ctx
+}
+
+fn player(answer: Result<PlayedTrack, PlayError>) -> Arc<FakePlayer> {
+    Arc::new(FakePlayer {
+        asked: StdMutex::new(vec![]),
+        answer,
+    })
+}
+
+#[tokio::test]
+async fn music_play_plays_the_words_and_marks_the_title_as_outside_text() {
+    let p = player(Ok(PlayedTrack {
+        title: "Bohemian Rhapsody".into(),
+        artist: "Queen".into(),
+    }));
+    let out = run(
+        &MusicPlay,
+        json!({ "query": "  bohemian\u{0}rhapsody " }),
+        &player_ctx(&p),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.text, "Playing Bohemian Rhapsody by Queen.");
+    assert!(out.external_content, "titles come from Spotify");
+    assert_eq!(*p.asked.lock().unwrap(), ["bohemianrhapsody"]);
+    assert_eq!(MusicPlay.base_risk(), ToolRisk::Low);
+}
+
+#[tokio::test]
+async fn music_play_rejects_bad_arguments_before_calling_spotify() {
+    let p = player(Err(PlayError::Failed));
+    let ctx = player_ctx(&p);
+    for bad in [
+        json!({}),
+        json!({ "query": "" }),
+        json!({ "query": "   " }),
+        json!({ "query": "x".repeat(101) }),
+        json!({ "query": "x", "device": "all" }),
+        json!({ "query": 5 }),
+    ] {
+        let r = run(&MusicPlay, bad.clone(), &ctx).await;
+        assert!(matches!(r, Err(ToolError::Invalid(_))), "{bad}: {r:?}");
+    }
+    assert!(p.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn music_play_says_plainly_what_is_missing() {
+    let cases = [
+        (PlayError::NotConnected, "Connect"),
+        (PlayError::Offline, "reached"),
+        (PlayError::Forbidden, "Premium"),
+        (PlayError::NoDevice, "Open the Spotify app"),
+        (PlayError::NoResults, "could not find"),
+        (PlayError::Failed, "failed"),
+    ];
+    for (e, word) in cases {
+        let p = player(Err(e));
+        let r = run(&MusicPlay, json!({ "query": "x" }), &player_ctx(&p)).await;
+        let msg = match r {
+            Err(ToolError::Unavailable(m) | ToolError::Failed(m)) => m,
+            other => panic!("{e:?}: {other:?}"),
+        };
+        assert!(msg.contains(word), "{e:?}: {msg}");
+    }
+    let p = player(Err(PlayError::Cancelled));
+    assert!(matches!(
+        run(&MusicPlay, json!({ "query": "x" }), &player_ctx(&p)).await,
+        Err(ToolError::Cancelled)
+    ));
+    // With no Spotify wired at all, it is "not connected", not a crash.
+    let r = run(&MusicPlay, json!({ "query": "x" }), &ctx_for(&[])).await;
+    assert!(matches!(r, Err(ToolError::Unavailable(_))), "{r:?}");
 }

@@ -2,7 +2,7 @@
 //! media session, not to any one app and not to the network, so they work offline. The
 //! action list is fixed: nothing the model or a song title says becomes a command.
 
-use super::ports::{MediaAction, MediaError};
+use super::ports::{MediaAction, MediaError, PlayError};
 use super::{
     Prepared, Tool, ToolContext, ToolError, ToolOutput, clean_for_summary, empty_schema, parse_args,
 };
@@ -216,6 +216,114 @@ impl Tool for MusicNowPlaying {
                     external_content: true,
                 }
             }
+        })
+    }
+}
+
+/// Longest search words accepted (the Spotify client cuts at the same length).
+const MAX_QUERY_CHARS: usize = 100;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlayArgs {
+    query: String,
+}
+
+fn play_query(q: &str) -> Result<String, ToolError> {
+    let q: String = q.chars().filter(|c| !c.is_control()).collect();
+    let q = q.trim();
+    if q.is_empty() || q.chars().count() > MAX_QUERY_CHARS {
+        return Err(ToolError::Invalid(format!(
+            "Invalid arguments: query must be 1 to {MAX_QUERY_CHARS} characters."
+        )));
+    }
+    Ok(q.to_owned())
+}
+
+fn play_error(e: PlayError) -> ToolError {
+    match e {
+        PlayError::NotConnected => ToolError::Unavailable(
+            "Spotify is not connected. Add your Client ID and press Connect under Settings, Music."
+                .into(),
+        ),
+        PlayError::Offline => ToolError::Unavailable("Spotify could not be reached.".into()),
+        PlayError::Forbidden => ToolError::Failed(
+            "Spotify did not allow that. Choosing a song needs Spotify Premium.".into(),
+        ),
+        PlayError::NoDevice => ToolError::Unavailable(
+            "Open the Spotify app first, so there is somewhere to play.".into(),
+        ),
+        PlayError::NoResults => ToolError::Unavailable("I could not find that on Spotify.".into()),
+        PlayError::Cancelled => ToolError::Cancelled,
+        PlayError::Failed => ToolError::Failed("Playing that on Spotify failed.".into()),
+    }
+}
+
+/// `music.play`: search Spotify for the words and play the top track on the person's own
+/// device. Low risk like the other music tools: it only starts a song, it deletes and shares
+/// nothing. What comes back (a title) is outside text, so it taints the conversation.
+pub struct MusicPlay;
+
+#[async_trait]
+impl Tool for MusicPlay {
+    fn name(&self) -> &'static str {
+        "music.play"
+    }
+    fn description(&self) -> &'static str {
+        "Play a song, artist or album on the person's Spotify. Give the words to search for, for example \"Bohemian Rhapsody Queen\". It plays the best match. Needs Spotify Premium and the Spotify app open."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "minLength": 1, "maxLength": MAX_QUERY_CHARS }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
+    }
+    fn base_risk(&self) -> ToolRisk {
+        ToolRisk::Low
+    }
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(15)
+    }
+    fn prepare(&self, args: &Value, _: &ToolContext) -> Result<Prepared, ToolError> {
+        let a: PlayArgs = parse_args(args)?;
+        let q = play_query(&a.query)?;
+        Ok(Prepared {
+            arg_risk: None,
+            targets: vec![clean_for_summary(&q)],
+            summary: format!("Play \"{}\" on Spotify", clean_for_summary(&q)),
+        })
+    }
+    async fn run(
+        &self,
+        args: &Value,
+        ctx: &ToolContext,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let a: PlayArgs = parse_args(args)?;
+        let q = play_query(&a.query)?;
+        if cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let p = ctx
+            .ports
+            .music
+            .play(&q, &cancel)
+            .await
+            .map_err(play_error)?;
+        let (title, artist) = (clean_for_summary(&p.title), clean_for_summary(&p.artist));
+        let by = if artist.is_empty() {
+            String::new()
+        } else {
+            format!(" by {artist}")
+        };
+        Ok(ToolOutput {
+            text: format!("Playing {title}{by}."),
+            // The title comes from Spotify, so it counts as outside content.
+            external_content: true,
         })
     }
 }
