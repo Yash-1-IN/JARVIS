@@ -51,6 +51,12 @@ pub trait Backend: Send + 'static {
     fn open(&mut self, device: Option<&str>) -> Result<Opened, AudioError>;
 }
 
+impl Backend for Box<dyn Backend> {
+    fn open(&mut self, device: Option<&str>) -> Result<Opened, AudioError> {
+        (**self).open(device)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaptureStatus {
     Starting,
