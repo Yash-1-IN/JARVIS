@@ -290,7 +290,7 @@ impl Tool for MusicPlay {
         ToolRisk::Low
     }
     fn timeout(&self) -> Duration {
-        Duration::from_secs(15)
+        Duration::from_secs(30)
     }
     fn prepare(&self, args: &Value, _: &ToolContext) -> Result<Prepared, ToolError> {
         let a: PlayArgs = parse_args(args)?;

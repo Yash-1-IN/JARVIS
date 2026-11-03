@@ -13,7 +13,9 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(180);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+/// All of "search, play, check" together; the `music.play` tool allows a little longer.
+pub const PLAY_DEADLINE: Duration = Duration::from_secs(20);
 /// Longest search words we send. A spoken request is short.
 const MAX_QUERY_CHARS: usize = 100;
 
@@ -417,6 +419,22 @@ impl Spotify {
         cancel: &CancellationToken,
     ) -> Result<Played, SpotifyError> {
         self.trace.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        // Our own deadline is shorter than the tool's, so a slow Spotify ends here with the
+        // trace of what it answered, instead of the tool timing out with nothing to show.
+        match tokio::time::timeout(PLAY_DEADLINE, self.play_steps(words, cancel)).await {
+            Ok(r) => r,
+            Err(_) => {
+                self.note(format!("gave up after {} s", PLAY_DEADLINE.as_secs()));
+                Err(SpotifyError::Failed)
+            }
+        }
+    }
+
+    async fn play_steps(
+        &self,
+        words: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Played, SpotifyError> {
         let q = clean_query(words).ok_or(SpotifyError::NoResults)?;
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
