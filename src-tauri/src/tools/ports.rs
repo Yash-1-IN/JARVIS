@@ -142,6 +142,8 @@ impl MemoryInbox for MemoryProposals {
 pub struct PlayedTrack {
     pub title: String,
     pub artist: String,
+    /// The Spotify device playing it, when known.
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +156,8 @@ pub enum PlayError {
     /// No Spotify app or device is open.
     NoDevice,
     NoResults,
+    /// Spotify accepted the song but nothing is playing.
+    NotPlaying,
     Cancelled,
     Failed,
 }

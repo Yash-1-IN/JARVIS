@@ -1297,6 +1297,7 @@ async fn music_play_plays_the_words_and_marks_the_title_as_outside_text() {
     let p = player(Ok(PlayedTrack {
         title: "Bohemian Rhapsody".into(),
         artist: "Queen".into(),
+        device: Some("MacBook Air".into()),
     }));
     let out = run(
         &MusicPlay,
@@ -1305,7 +1306,10 @@ async fn music_play_plays_the_words_and_marks_the_title_as_outside_text() {
     )
     .await
     .unwrap();
-    assert_eq!(out.text, "Playing Bohemian Rhapsody by Queen.");
+    assert_eq!(
+        out.text,
+        "Playing Bohemian Rhapsody by Queen on MacBook Air."
+    );
     assert!(out.external_content, "titles come from Spotify");
     assert_eq!(*p.asked.lock().unwrap(), ["bohemianrhapsody"]);
     assert_eq!(MusicPlay.base_risk(), ToolRisk::Low);
@@ -1337,6 +1341,7 @@ async fn music_play_says_plainly_what_is_missing() {
         (PlayError::Forbidden, "Premium"),
         (PlayError::NoDevice, "Open the Spotify app"),
         (PlayError::NoResults, "could not find"),
+        (PlayError::NotPlaying, "nothing started"),
         (PlayError::Failed, "failed"),
     ];
     for (e, word) in cases {

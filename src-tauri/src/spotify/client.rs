@@ -36,6 +36,8 @@ pub enum SpotifyError {
     NoResults,
     /// Another program is using the sign-in's loopback port.
     PortBusy,
+    /// Spotify accepted the song but nothing started playing.
+    NotPlaying,
     /// Anything else. Details are logged without the response body.
     Failed,
 }
@@ -45,6 +47,8 @@ pub enum SpotifyError {
 pub struct Played {
     pub title: String,
     pub artist: String,
+    /// The Spotify device that is playing it, when Spotify says.
+    pub device: Option<String>,
 }
 
 #[derive(Clone)]
@@ -55,6 +59,8 @@ pub struct Endpoints {
     /// redirect address with a port, and the request must match it exactly, so the app uses
     /// one fixed port. 0 (tests only) lets the system choose.
     pub redirect_port: u16,
+    /// How long to wait before asking Spotify whether the song really started (0 in tests).
+    pub settle_ms: u64,
 }
 
 /// The redirect address the person registers in their Spotify app.
@@ -66,6 +72,7 @@ impl Endpoints {
             accounts: "https://accounts.spotify.com".into(),
             api: "https://api.spotify.com".into(),
             redirect_port: REDIRECT_PORT,
+            settle_ms: 800,
         }
     }
 }
@@ -110,6 +117,21 @@ pub fn clean_query(q: &str) -> Option<String> {
     let q = clip(q, MAX_QUERY_CHARS);
     let q = q.trim();
     (!q.is_empty()).then(|| q.to_owned())
+}
+
+/// The searches to try, best first. "X by Y" is searched as a track and an artist, which
+/// finds the right song far more often than plain words; the plain words come second.
+pub fn search_queries(words: &str) -> Vec<String> {
+    let plain = words.replace('"', "");
+    let mut out = Vec::new();
+    if let Some((track, artist)) = plain.rsplit_once(" by ") {
+        let (track, artist) = (track.trim(), artist.trim());
+        if !track.is_empty() && !artist.is_empty() {
+            out.push(format!("track:\"{track}\" artist:\"{artist}\""));
+        }
+    }
+    out.push(plain);
+    out
 }
 
 fn form_body(pairs: &[(&str, &str)]) -> String {
@@ -373,18 +395,20 @@ impl Spotify {
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
         }
-        let found: Search = self
-            .get_json(
-                "/v1/search",
-                &[("q", &q), ("type", "track"), ("limit", "1")],
-            )
-            .await?;
-        let track = found
-            .tracks
-            .items
-            .into_iter()
-            .next()
-            .ok_or(SpotifyError::NoResults)?;
+        let mut hit = None;
+        for query in search_queries(&q) {
+            let found: Search = self
+                .get_json(
+                    "/v1/search",
+                    &[("q", &query), ("type", "track"), ("limit", "5")],
+                )
+                .await?;
+            if let Some(t) = found.tracks.items.into_iter().next() {
+                hit = Some(t);
+                break;
+            }
+        }
+        let track = hit.ok_or(SpotifyError::NoResults)?;
         if !track.uri.starts_with("spotify:track:") || track.uri.len() > 64 {
             return Err(SpotifyError::Failed);
         }
@@ -425,13 +449,54 @@ impl Spotify {
                 map_status(s)
             });
         }
+        let device = self.confirm_playing(cancel).await?;
         Ok(Played {
             title: clip(&track.name, 120),
             artist: clip(
                 track.artists.first().map(|a| a.name.as_str()).unwrap_or(""),
                 120,
             ),
+            device,
         })
+    }
+
+    /// Asks Spotify whether something is really playing, up to three times. A 204 or
+    /// `is_playing: false` means no. Any other answer is "cannot tell", which is not a
+    /// failure (the play request itself was accepted).
+    async fn confirm_playing(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<Option<String>, SpotifyError> {
+        for attempt in 0..3 {
+            if self.ep.settle_ms > 0 {
+                tokio::select! {
+                    _ = cancel.cancelled() => return Err(SpotifyError::Cancelled),
+                    _ = tokio::time::sleep(Duration::from_millis(self.ep.settle_ms)) => {}
+                }
+            }
+            let (s, text) = self
+                .call(reqwest::Method::GET, "/v1/me/player", &[], None)
+                .await?;
+            if s == StatusCode::NO_CONTENT {
+                if attempt == 2 {
+                    return Err(SpotifyError::NotPlaying);
+                }
+                continue;
+            }
+            if !s.is_success() {
+                return Ok(None);
+            }
+            let Ok(state) = serde_json::from_str::<PlayerState>(&text) else {
+                return Ok(None);
+            };
+            if state.is_playing {
+                return Ok(state.device.map(|d| clip(&d.name, 60)));
+            }
+            if attempt == 2 {
+                return Err(SpotifyError::NotPlaying);
+            }
+        }
+        Err(SpotifyError::NotPlaying)
     }
 }
 
@@ -460,6 +525,15 @@ struct Track {
 }
 #[derive(Deserialize)]
 struct Artist {
+    name: String,
+}
+#[derive(Deserialize)]
+struct PlayerState {
+    is_playing: bool,
+    device: Option<PlayerDevice>,
+}
+#[derive(Deserialize)]
+struct PlayerDevice {
     name: String,
 }
 #[derive(Deserialize)]
@@ -604,6 +678,7 @@ mod tests {
             accounts: base.into(),
             api: base.into(),
             redirect_port: 0,
+            settle_ms: 0,
         };
         let s = Spotify::new(ep, vault.clone(), Arc::new(|| Some(ID.to_string())), open);
         (s, vault)
@@ -726,6 +801,7 @@ mod tests {
                 accounts: base.clone(),
                 api: base,
                 redirect_port: 0,
+                settle_ms: 0,
             },
             vault,
             Arc::new(|| None),
@@ -772,7 +848,7 @@ mod tests {
             .iter()
             .find(|r| r.target.starts_with("/v1/search"))
             .unwrap();
-        assert!(search.target.contains("q=bohemian+rhapsody") && search.target.contains("limit=1"));
+        assert!(search.target.contains("q=bohemian+rhapsody") && search.target.contains("limit=5"));
         let play = reqs.iter().find(|r| r.method == "PUT").unwrap();
         assert_eq!(
             play.body,
@@ -913,5 +989,81 @@ mod tests {
         sp.disconnect();
         assert!(!sp.connected());
         sp.disconnect(); // safe twice
+    }
+
+    #[test]
+    fn x_by_y_is_searched_as_track_and_artist_then_as_plain_words() {
+        assert_eq!(
+            search_queries("i like that by bazzi"),
+            [
+                "track:\"i like that\" artist:\"bazzi\"",
+                "i like that by bazzi"
+            ]
+        );
+        // The last " by " splits, so a title containing "by" still works.
+        assert_eq!(
+            search_queries("stand by me by ben e king")[0],
+            "track:\"stand by me\" artist:\"ben e king\""
+        );
+        assert_eq!(search_queries("bohemian rhapsody"), ["bohemian rhapsody"]);
+        // Quotes in the words cannot break out of the filter.
+        let q = search_queries("a\" artist:\"evil by b");
+        assert!(
+            !q[0].contains("evil\"") && q[0].matches('"').count() == 4,
+            "{q:?}"
+        );
+    }
+
+    fn playing_answer(state: &'static str, searches: Arc<Mutex<Vec<String>>>) -> Answer {
+        Arc::new(
+            move |r| match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/search") => {
+                    searches.lock().unwrap().push(r.target.clone());
+                    if r.target.contains("track%3A") {
+                        (200, r#"{"tracks":{"items":[]}}"#.into())
+                    } else {
+                        (200, SEARCH_HIT.into())
+                    }
+                }
+                ("PUT", "/v1/me/player/play") => (204, String::new()),
+                ("GET", "/v1/me/player") => match state {
+                    "playing" => (
+                        200,
+                        r#"{"is_playing":true,"device":{"name":"MacBook Air"}}"#.into(),
+                    ),
+                    "paused" => (
+                        200,
+                        r#"{"is_playing":false,"device":{"name":"MacBook Air"}}"#.into(),
+                    ),
+                    _ => (204, String::new()),
+                },
+                _ => (404, "{}".into()),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn it_checks_that_the_song_really_started_and_names_the_device() {
+        let searches = Arc::new(Mutex::new(vec![]));
+        let (sp, _) = connected(playing_answer("playing", searches.clone())).await;
+        let p = sp
+            .play("queen by queen", &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(p.device.as_deref(), Some("MacBook Air"));
+        // The track-and-artist search found nothing, so the plain words were tried next.
+        assert_eq!(searches.lock().unwrap().len(), 2);
+        for state in ["paused", "none"] {
+            let (sp, _) = connected(playing_answer(state, Arc::new(Mutex::new(vec![])))).await;
+            assert_eq!(
+                sp.play("queen", &CancellationToken::new()).await,
+                Err(SpotifyError::NotPlaying),
+                "{state}"
+            );
+        }
     }
 }

@@ -254,6 +254,10 @@ fn play_error(e: PlayError) -> ToolError {
             "Open the Spotify app first, so there is somewhere to play.".into(),
         ),
         PlayError::NoResults => ToolError::Unavailable("I could not find that on Spotify.".into()),
+        PlayError::NotPlaying => ToolError::Failed(
+            "Spotify accepted the song but nothing started. Open the Spotify app, press play on any song once, then ask again."
+                .into(),
+        ),
         PlayError::Cancelled => ToolError::Cancelled,
         PlayError::Failed => ToolError::Failed("Playing that on Spotify failed.".into()),
     }
@@ -320,8 +324,12 @@ impl Tool for MusicPlay {
         } else {
             format!(" by {artist}")
         };
+        let on = match p.device.as_deref().map(clean_for_summary) {
+            Some(d) if !d.is_empty() => format!(" on {d}"),
+            _ => String::new(),
+        };
         Ok(ToolOutput {
-            text: format!("Playing {title}{by}."),
+            text: format!("Playing {title}{by}{on}."),
             // The title comes from Spotify, so it counts as outside content.
             external_content: true,
         })

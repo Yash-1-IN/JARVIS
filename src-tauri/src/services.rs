@@ -321,6 +321,7 @@ mod tests {
             spotify: Arc::new(crate::spotify::client::Spotify::new(
                 crate::spotify::client::Endpoints {
                     redirect_port: 0,
+                    settle_ms: 0,
                     ..crate::spotify::client::Endpoints::real()
                 },
                 Arc::new(ApiKeyVault::with_backend(
