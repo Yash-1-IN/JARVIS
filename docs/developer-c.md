@@ -73,6 +73,26 @@ Held until the owner and Developer A agree otherwise: the permission gateway, th
 OAuth sign-in and token storage, the wake-word and capture pipeline's real-time parts, and anything
 that touches a secret. Those stay with A and B.
 
+## Keeping token use down across all three
+
+The reason for a third worker is to spend fewer of A's and B's tokens on routine work. That only works
+if handing work over costs less than doing it:
+
+- **Delegate what is cheap to verify.** Work whose result is checked by tests or CI (a listed test set, a
+  workflow diff against known tags, a doc checked against behaviour) costs the reviewer little. Work that
+  needs a reviewer to re-derive the design costs more than it saves; keep that.
+- **Short specs, written as tests.** A spec is the signatures, the error cases and a list of tests, plus
+  a pointer to an existing file to copy the pattern from ("same shape as `platform/media.rs`"). Not an
+  essay. Failing tests written first are the cheapest spec there is.
+- **Small PRs.** One issue, one PR, one concern. A large diff costs the reviewer more than the work saved.
+- **Read only what the task needs** (`CLAUDE.md`, Cost discipline). Do not re-read the whole spec; the
+  issue names the sections.
+- **Do not duplicate work.** Before starting, search open issues and PRs, and say in the issue that the
+  task is taken. Two workers on one task is the most expensive mistake.
+- **Review rework counts.** If a Developer C PR needs more than one round of changes, the next task in
+  that area goes back to A or B, and the spec gets tighter.
+- **Long command output goes to a file**; read only the errors and the summary.
+
 ## Off limits (ask Developer A or B)
 
 | Path or topic | Why |
