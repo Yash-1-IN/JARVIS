@@ -32,6 +32,10 @@ Spec: `docs/spec.md` §5.
 | `history_delete_all` | none | `void` | implemented |
 | `history_settings_get` | none | `HistorySettings` | implemented |
 | `history_settings_set` | `settings: HistorySettings` | `HistorySettings` | implemented |
+| `spotify_status` | none | `SpotifyStatus` | implemented (never connected until the sign-in is built) |
+| `spotify_set_client_id` | `clientId: string \| null` | `SpotifyStatus` | implemented |
+| `spotify_connect` | none | `SpotifyStatus` | **stub**: answers an `INTERNAL` error saying the sign-in is not built yet |
+| `spotify_disconnect` | none | `SpotifyStatus` | implemented (safe when not connected) |
 
 Errors are `JarvisError` (`code` from the closed `ErrorCode` enum).
 The command signatures marked M2/M4 are agreed here and implemented in their milestone.
@@ -45,6 +49,15 @@ The command signatures marked M2/M4 are agreed here and implemented in their mil
 - `SettingsPatch`: omit a field to leave it unchanged. For the caps, send `null` to clear the cap and a number (micro-dollars) to set it.
 - Money is integer micro-dollars (1e-6 USD). A cap stops new requests once reached; one long turn can overshoot by its own cost.
 - Usage counts reset on UTC day and month boundaries (D-15). `dayResetsAt` and `monthResetsAt` are Unix ms; the UI shows them in local time.
+
+### Spotify (music step 2, issue #68)
+Proposed by Developer A in the #68 plan, which Developer B's session did not object to; the shapes below are what this PR adds. The first music step (`music.control`, `music.now_playing`, D-22) needs no contract: it uses the operating system's media controls.
+- `SpotifyStatus { clientId: string | null, connected: boolean, displayName: string | null }` has exactly these three fields. **It never carries a token, an authorisation code, a refresh token or any other secret**, now or later; a test checks the field count so one cannot be added by accident. Tokens live only in the Rust backend and the OS keychain, like the API key.
+- `clientId` is the Client ID of the developer app the person created at developer.spotify.com (needs their Premium; Spotify's February 2026 development-mode rules apply). It is **not a secret**: the sign-in uses the Authorization Code flow with PKCE, so there is no client secret anywhere. It is 32 characters, `0-9` and `a-f`; `spotify_set_client_id` trims it, stores it lower case, and treats `null` or an empty string as "clear it". Anything else is an `INTERNAL` error ("that does not look like a Spotify Client ID ..."; the message never echoes the input), and **nothing changes**. It is stored in the settings file but is **not part of `Settings` or `SettingsPatch`**, so existing code that builds a `Settings` value does not change.
+- `spotify_connect` (stub today) will open the system browser **from Rust** (no webview permission, no `opener` or `http` plugin) and return when the sign-in ends, times out (about 3 minutes) or is cancelled; the window shows a spinner and a Cancel button that calls `spotify_disconnect`. Errors reuse existing codes: `INTERNAL` with a plain message ("Add your Spotify Client ID first." when there is none; "Signing in to Spotify is not built yet." for now) and `NETWORK_OFFLINE` when Spotify cannot be reached. **No new `ErrorCode`**, so the frontend's `ERROR_INFO` table is unaffected.
+- `spotify_disconnect` forgets the token, cancels a sign-in in progress, keeps the Client ID, and is safe to call at any time. Setting a different Client ID also drops a sign-in made with the old one.
+- No new event and no new capability: the window polls `spotify_status` when its Music settings open and uses the value returned by each command. `PROTOCOL_VERSION` stays 1 (additive only).
+- What the future tools may do is limited by the permission gateway, not by this contract: `music.search` (Low, untrusted results), `music.play` (Low), `music.like`, `music.playlist_create` and `music.playlist_add` (Medium, approval card); nothing that deletes.
 
 ### Tools, approvals and the activity log (M4)
 - **The model only proposes.** Every tool call goes through the permission gateway in Rust (spec §9.3). The webview never calls a tool; it can only answer an approval.

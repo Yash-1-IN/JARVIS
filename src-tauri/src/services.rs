@@ -8,7 +8,7 @@ use crate::intelligence::provider::{ModelProvider, ProviderError};
 use crate::intelligence::spend::{Caps, Day, SpendMeter};
 use crate::ipc::types::{
     AllowedApp, ApiKeyStatus, ErrorCode, JarvisError, KeyStorage, Settings, SettingsPatch,
-    UsageSummary,
+    SpotifyStatus, UsageSummary,
 };
 use crate::orchestrator::turn::TurnConfig;
 use crate::platform::keychain::{ApiKeyVault, KeyStorage as VaultStorage, SecretString};
@@ -108,6 +108,7 @@ impl Services {
                 | SettingsError::CapTooLarge
                 | SettingsError::BadFolder(_)
                 | SettingsError::UnknownApp(_)
+                | SettingsError::BadClientId
                 | SettingsError::TooMany => err(ErrorCode::Internal, &e.to_string(), false),
                 SettingsError::Save => {
                     err(ErrorCode::Internal, "Settings could not be saved.", true)
@@ -115,6 +116,52 @@ impl Services {
             })?;
         self.apply_saved_caps();
         Ok(self.settings())
+    }
+
+    /// The `spotify_status` command. No token is held yet (the sign-in is not built), so it
+    /// is never connected; it already reports the saved Client ID.
+    pub fn spotify_status(&self) -> SpotifyStatus {
+        SpotifyStatus {
+            client_id: self.settings.get().spotify_client_id,
+            connected: false,
+            display_name: None,
+        }
+    }
+
+    /// The `spotify_set_client_id` command. A new or cleared Client ID also drops any sign-in
+    /// made with the old one (nothing to drop until the sign-in exists).
+    pub fn set_spotify_client_id(&self, id: Option<&str>) -> Result<SpotifyStatus, JarvisError> {
+        self.settings
+            .set_spotify_client_id(id)
+            .map_err(|e| match e {
+                SettingsError::Save => {
+                    err(ErrorCode::Internal, "Settings could not be saved.", true)
+                }
+                other => err(ErrorCode::Internal, &other.to_string(), false),
+            })?;
+        Ok(self.spotify_status())
+    }
+
+    /// The `spotify_connect` command. The sign-in is not built yet, so after the Client ID check
+    /// it says so plainly instead of pretending.
+    pub fn spotify_connect(&self) -> Result<SpotifyStatus, JarvisError> {
+        if self.settings.get().spotify_client_id.is_none() {
+            return Err(err(
+                ErrorCode::Internal,
+                "Add your Spotify Client ID first.",
+                false,
+            ));
+        }
+        Err(err(
+            ErrorCode::Internal,
+            "Signing in to Spotify is not built yet.",
+            false,
+        ))
+    }
+
+    /// The `spotify_disconnect` command. Safe to call when not connected.
+    pub fn spotify_disconnect(&self) -> SpotifyStatus {
+        self.spotify_status()
     }
 
     /// The `apps_installed` command: the only ids `settings_set` will accept.
@@ -378,5 +425,71 @@ mod tests {
             1,
             "a rejected patch changes nothing"
         );
+    }
+
+    const SPOTIFY_ID: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn spotify_status_starts_empty_and_follows_the_client_id() {
+        let svc = services("http://127.0.0.1:1");
+        let s = svc.spotify_status();
+        assert_eq!(
+            s,
+            SpotifyStatus {
+                client_id: None,
+                connected: false,
+                display_name: None
+            }
+        );
+        let s = svc.set_spotify_client_id(Some(SPOTIFY_ID)).unwrap();
+        assert_eq!(s.client_id.as_deref(), Some(SPOTIFY_ID));
+        assert!(!s.connected && s.display_name.is_none());
+        assert_eq!(svc.spotify_status(), s);
+        // The Client ID is not part of Settings, so the settings contract is untouched.
+        assert!(
+            !serde_json::to_string(&svc.settings())
+                .unwrap()
+                .contains("spotify")
+        );
+        let cleared = svc.set_spotify_client_id(None).unwrap();
+        assert_eq!(cleared.client_id, None);
+    }
+
+    #[test]
+    fn a_bad_client_id_is_an_internal_error_with_a_plain_message_and_changes_nothing() {
+        let svc = services("http://127.0.0.1:1");
+        svc.set_spotify_client_id(Some(SPOTIFY_ID)).unwrap();
+        for bad in [
+            "abc",
+            "not a client id at all",
+            "0123456789abcdef0123456789abcdeZ",
+        ] {
+            let e = svc.set_spotify_client_id(Some(bad)).unwrap_err();
+            assert_eq!(e.code, ErrorCode::Internal);
+            assert!(e.message.contains("Spotify Client ID"), "{}", e.message);
+            assert!(!e.retryable);
+            assert!(
+                !e.message.contains(bad),
+                "the message never echoes the input"
+            );
+        }
+        assert_eq!(svc.spotify_status().client_id.as_deref(), Some(SPOTIFY_ID));
+    }
+
+    #[test]
+    fn connecting_says_what_is_missing_and_that_the_sign_in_is_not_built_yet() {
+        let svc = services("http://127.0.0.1:1");
+        let e = svc.spotify_connect().unwrap_err();
+        assert_eq!(
+            (e.code, e.message.as_str()),
+            (ErrorCode::Internal, "Add your Spotify Client ID first.")
+        );
+        svc.set_spotify_client_id(Some(SPOTIFY_ID)).unwrap();
+        let e = svc.spotify_connect().unwrap_err();
+        assert_eq!(e.message, "Signing in to Spotify is not built yet.");
+        // Disconnecting is safe at any time and keeps the Client ID.
+        let s = svc.spotify_disconnect();
+        assert!(!s.connected);
+        assert_eq!(s.client_id.as_deref(), Some(SPOTIFY_ID));
     }
 }

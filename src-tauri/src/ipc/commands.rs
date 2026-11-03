@@ -200,6 +200,35 @@ pub fn settings_set(
     Ok(out)
 }
 
+/// The Spotify sign-in state (music step 2). Never carries a token.
+#[tauri::command]
+pub fn spotify_status(svc: tauri::State<'_, Arc<Services>>) -> SpotifyStatus {
+    svc.spotify_status()
+}
+
+/// Saves the Client ID from the person's Spotify developer app (32 characters, 0-9 and a-f);
+/// `null` or an empty string clears it. A bad value is an `INTERNAL` error with a plain message.
+#[tauri::command]
+pub fn spotify_set_client_id(
+    svc: tauri::State<'_, Arc<Services>>,
+    client_id: Option<String>,
+) -> Result<SpotifyStatus, JarvisError> {
+    svc.set_spotify_client_id(client_id.as_deref())
+}
+
+/// Starts the sign-in in the person's browser and returns when it ends. Until the sign-in is
+/// built this answers with an error saying so.
+#[tauri::command]
+pub fn spotify_connect(svc: tauri::State<'_, Arc<Services>>) -> Result<SpotifyStatus, JarvisError> {
+    svc.spotify_connect()
+}
+
+/// Forgets the Spotify sign-in (and cancels one in progress). Safe to call when not connected.
+#[tauri::command]
+pub fn spotify_disconnect(svc: tauri::State<'_, Arc<Services>>) -> SpotifyStatus {
+    svc.spotify_disconnect()
+}
+
 /// Apps that can be put on the allow-list (`AllowedApp.id` is what is checked and launched).
 #[tauri::command]
 pub fn apps_installed(svc: tauri::State<'_, Arc<Services>>) -> Vec<AllowedApp> {

@@ -28,6 +28,9 @@ pub struct StoredSettings {
     pub allowed_apps: Vec<AllowedApp>,
     #[serde(default)]
     pub auto_allow_medium: bool,
+    /// The Spotify developer app's Client ID (not a secret). Older files lack this field.
+    #[serde(default)]
+    pub spotify_client_id: Option<String>,
 }
 
 impl Default for StoredSettings {
@@ -40,6 +43,7 @@ impl Default for StoredSettings {
             allowed_folders: vec![],
             allowed_apps: vec![],
             auto_allow_medium: false,
+            spotify_client_id: None,
         }
     }
 }
@@ -56,6 +60,8 @@ pub enum SettingsError {
     UnknownApp(String),
     #[error("too many entries in an allow-list")]
     TooMany,
+    #[error("that does not look like a Spotify Client ID (32 characters, 0-9 and a-f)")]
+    BadClientId,
     #[error("settings could not be saved")]
     Save,
 }
@@ -156,6 +162,40 @@ impl SettingsStore {
         })?;
         *self.lock() = next.clone();
         Ok(next)
+    }
+
+    /// Sets (or, with `None` or an empty string, clears) the Spotify Client ID, then saves.
+    /// On any error nothing changes.
+    pub fn set_spotify_client_id(&self, id: Option<&str>) -> Result<Option<String>, SettingsError> {
+        let mut next = self.get();
+        next.spotify_client_id = match id {
+            Some(raw) => valid_client_id(raw)?,
+            None => None,
+        };
+        save_atomically(&self.path, &next).map_err(|e| {
+            tracing::warn!(error = %e, "saving settings failed");
+            SettingsError::Save
+        })?;
+        let saved = next.spotify_client_id.clone();
+        *self.lock() = next;
+        Ok(saved)
+    }
+}
+
+/// A Spotify Client ID is 32 hexadecimal characters. Stored lower case; empty means "clear it".
+pub fn valid_client_id(input: &str) -> Result<Option<String>, SettingsError> {
+    let id = input.trim().to_ascii_lowercase();
+    if id.is_empty() {
+        return Ok(None);
+    }
+    if id.len() == 32
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        Ok(Some(id))
+    } else {
+        Err(SettingsError::BadClientId)
     }
 }
 
@@ -467,5 +507,84 @@ mod tests {
                 .allowed_apps
                 .is_empty()
         );
+    }
+
+    const ID: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn a_spotify_client_id_is_32_hex_characters_and_nothing_else() {
+        assert_eq!(valid_client_id(ID), Ok(Some(ID.to_string())));
+        // Trimmed, and stored lower case.
+        assert_eq!(
+            valid_client_id("  0123456789ABCDEF0123456789ABCDEF \n"),
+            Ok(Some(ID.to_string()))
+        );
+        // Empty clears it.
+        assert_eq!(valid_client_id(""), Ok(None));
+        assert_eq!(valid_client_id("   "), Ok(None));
+        for bad in [
+            "0123456789abcdef0123456789abcde",       // 31
+            "0123456789abcdef0123456789abcdef0",     // 33
+            "0123456789abcdeg0123456789abcdef",      // not hex
+            "0123456789abcdef0123456789abcde\u{e9}", // not ASCII
+            "client_id=0123456789abcdef0123456789abcdef",
+            "https://accounts.spotify.com/authorize?x=1",
+            "0123456789abcdef 0123456789abcdef",
+        ] {
+            assert_eq!(
+                valid_client_id(bad),
+                Err(SettingsError::BadClientId),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_client_id_is_saved_cleared_and_survives_a_restart() {
+        let path = tmp_path();
+        let store = SettingsStore::load(path.clone(), &prices());
+        assert_eq!(store.get().spotify_client_id, None);
+        assert_eq!(
+            store.set_spotify_client_id(Some(ID)),
+            Ok(Some(ID.to_string()))
+        );
+        let again = SettingsStore::load(path.clone(), &prices());
+        assert_eq!(again.get().spotify_client_id.as_deref(), Some(ID));
+        // A bad value changes nothing, on disk or in memory.
+        assert_eq!(
+            again.set_spotify_client_id(Some("nope")),
+            Err(SettingsError::BadClientId)
+        );
+        assert_eq!(again.get().spotify_client_id.as_deref(), Some(ID));
+        assert_eq!(
+            SettingsStore::load(path.clone(), &prices())
+                .get()
+                .spotify_client_id
+                .as_deref(),
+            Some(ID)
+        );
+        // None and an empty string both clear it.
+        assert_eq!(again.set_spotify_client_id(None), Ok(None));
+        assert_eq!(
+            again.set_spotify_client_id(Some(ID)),
+            Ok(Some(ID.to_string()))
+        );
+        assert_eq!(again.set_spotify_client_id(Some("")), Ok(None));
+        assert_eq!(
+            SettingsStore::load(path, &prices()).get().spotify_client_id,
+            None
+        );
+    }
+
+    #[test]
+    fn a_settings_file_from_before_spotify_still_loads() {
+        let path = tmp_path();
+        std::fs::write(
+            &path,
+            r#"{"schemaVersion":1,"model":"claude-haiku-4-5","dailyCapMicroUsd":null,"monthlyCapMicroUsd":null}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(path, &prices());
+        assert_eq!(store.get().spotify_client_id, None);
     }
 }
