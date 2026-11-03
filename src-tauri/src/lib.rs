@@ -131,6 +131,7 @@ pub fn run() {
             app.manage(orch);
             app.manage(runner);
             app.manage(svc);
+            app.manage(Arc::new(ipc::voice_stream::VoiceStream::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -149,6 +150,7 @@ pub fn run() {
             ipc::commands::spotify_set_client_id,
             ipc::commands::spotify_connect,
             ipc::commands::spotify_disconnect,
+            ipc::commands::voice_attach,
             ipc::commands::voice_status,
             ipc::commands::voice_settings_set,
             ipc::commands::voice_devices,

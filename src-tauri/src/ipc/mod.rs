@@ -4,6 +4,7 @@
 
 pub mod commands;
 pub mod types;
+pub mod voice_stream;
 
 /// Bump on any breaking change to commands, events or payloads.
 pub const PROTOCOL_VERSION: u32 = 1;
