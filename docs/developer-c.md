@@ -38,7 +38,9 @@ Developer C may change:
 - `docs/**` except `docs/spec.md`, `docs/decisions.md` (add rows only), `docs/contracts.md` and
   `docs/adr/**`.
 - `.github/workflows/**`, `scripts/**` and `.github/pull_request_template.md`, with a reviewer who
-  reads the diff line by line (CI files run with repository secrets in scope).
+  reads the diff line by line (CI files run with repository secrets in scope). A PR touching
+  `.github/workflows/**` must not use `pull_request_target`, must not add `secrets` to a job, and must
+  keep `permissions:` minimal. The reviewer checks those three first.
 - Test files and test-only fixtures in any module, when the PR changes no non-test code.
 - A small, named piece of code that an issue assigns to it explicitly, such as the `spawn_blocking`
   change for the SQLite calls.
@@ -63,10 +65,9 @@ This is for work where the design is already decided and the risk is in typing i
 | --- | --- | --- |
 | Voice model manager: manifest, resumable download, SHA-256 check, import from folder (M3 step 2) | `docs/m3-plan.md`, §6.8 | Network and file writes: reviewer checks paths and checksums first. |
 | Audio device listing, input and output (M3 step 3, the listing part) | contract `voice_devices` | The capture callback itself stays with A (no allocation or locks in it). |
-| Linux media control through MPRIS (`platform/media.rs`) | the Windows and macOS adapters | Fixed calls only; no text from the user or model in a command. |
+| Linux media control through MPRIS (`platform/media.rs`) | Developer B's spec, naming `platform/media.rs` as the pattern | `platform/` is Developer B's lane. Fixed calls only; no text from the user or model in a command; the pure parts compiled and tested on every OS. |
 | Mic permission detection per OS (M3 step 3) | spec §6.7 | Reports `granted`, `denied` or `unknown` only. |
 | History and memory plumbing, migrations, retention purge (M5) | spec §8, the M5 acceptance list | A reviews migrations and deletion tests carefully. |
-| Settings → pieces of mock transport parity for new commands | `docs/contracts.md` | Mock only in `src/transport/mock/` with the MOCK badge; B reviews. |
 | Boilerplate for new tools after the first is reviewed | the tool contract, spec §9.5 | **Held**: each tool needs a risk level and gateway tests decided by A. |
 
 Held until the owner and Developer A agree otherwise: the permission gateway, the approval logic, the
@@ -100,10 +101,10 @@ if handing work over costs less than doing it:
 | `src-tauri/src/ipc/**`, `src/types/generated/**`, `docs/contracts.md` | Shared contract; both developers must agree. |
 | `src-tauri/src/permissions/**`, `tools/**` | The permission gateway and tools: security-sensitive. |
 | `src-tauri/src/platform/keychain.rs`, anything that reads or stores a key or token | Secrets handling. |
-| Spotify sign-in, token storage, OAuth redirect handling | Security-sensitive and in progress by Developer B. |
+| Spotify sign-in, token storage, OAuth redirect handling | Security-sensitive. It is built by Developer B on `b/68-spotify-keychain` and will be merged code by the time Developer C starts; it stays off limits. |
 | `src-tauri/src/orchestrator/**`, `audio/**`, `voice/**` | The only state machine, and the M3 voice pipeline (`docs/m3-plan.md`). |
 | `src-tauri/capabilities/**`, `tauri.conf.json` | Webview permissions. |
-| `src/**` (the frontend) | Developer B's lane. |
+| `src/**` (the frontend), including `src/transport/mock/` | Developer B's lane. A wrong mock can be mistaken for real behaviour (it shows the MOCK badge), so mock parity for new commands is not delegated. |
 | Wake-word model files (D-23), any recorded audio | Never committed, bundled or published; audio is never written to disk. |
 
 ## Secrets and data
@@ -118,11 +119,13 @@ if handing work over costs less than doing it:
 Ordered by value. None touches the off-limits list.
 
 1. **Pin the CI actions by commit SHA** (`.github/workflows/*`), with a comment naming the tag each SHA
-   came from. Output: a diff the reviewer can verify against the tags.
+   came from. The PR lists each SHA next to the tag URL it came from, so the reviewer can open and
+   compare each one; a SHA that cannot be matched to a tag is not accepted.
 2. **A CI guard against mock code in installers.** Fails if a release build can contain
    `src/transport/mock/` behaviour or `VITE_TRANSPORT=mock`. (`CLAUDE.md`, Mocks.)
 3. **`docs/setup-macos.md`**: build from source and the Open Anyway steps for the ad-hoc build (spec
-   §6.9). Marked "not tested on a second Mac" until kibong2 or another tester follows it.
+   §6.9). **kibong2 is the named tester** and follows it on the M2 Air; the doc is marked "not tested on
+   a second Mac" until a person other than kibong2 follows it on a Mac that did not build the app.
 4. **`docs/setup-windows.md` and a non-developer first-run guide** (spec §13, M6): install, add the API
    key, first commands, what leaves the computer. Plain words, no jargon.
 5. **Fill in the persona and offline-mode docs** that `docs/` still lacks (spec §3.3, D-18), reading the
