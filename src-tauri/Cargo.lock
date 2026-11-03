@@ -2061,7 +2061,9 @@ name = "jarvis"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "futures",
+ "getrandom 0.4.3",
  "keyring",
  "libc",
  "lnk",

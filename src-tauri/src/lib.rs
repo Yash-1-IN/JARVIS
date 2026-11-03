@@ -7,6 +7,7 @@ mod orchestrator;
 mod permissions;
 mod platform;
 mod services;
+mod spotify;
 mod tools;
 
 use config::SettingsStore;
