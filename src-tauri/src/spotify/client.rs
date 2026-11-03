@@ -647,7 +647,7 @@ impl Spotify {
         }
         // A freshly started app registers as a device before it is ready to play: give it a few
         // seconds more, and watch the player for longer.
-        let ready = Duration::from_millis(self.ep.settle_ms.saturating_mul(3));
+        let ready = Duration::from_millis(self.ep.settle_ms.saturating_mul(5));
         tokio::select! {
             _ = cancel.cancelled() => return Err(SpotifyError::Cancelled),
             _ = tokio::time::sleep(ready) => {}
@@ -765,7 +765,22 @@ impl Spotify {
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
         }
-        let body = serde_json::json!({ "uris": [found.uri] }).to_string();
+        // The ways to ask, best first. Playing the track inside its album is how Spotify's own apps
+        // start a song, and it is the one that works on Windows (the app clears its player when
+        // asked for the track alone); the track alone is the fallback, and the only way when the
+        // album is not known.
+        let alone = serde_json::json!({ "uris": [found.uri] }).to_string();
+        let (body, fallback) = match &found.album_uri {
+            Some(album) => (
+                serde_json::json!({
+                    "context_uri": album,
+                    "offset": { "uri": found.uri }
+                })
+                .to_string(),
+                Some(alone),
+            ),
+            None => (alone, None),
+        };
         let (mut s, _) = self
             .call(
                 reqwest::Method::PUT,
@@ -804,10 +819,10 @@ impl Spotify {
                 // Spotify took the request but nothing started: the device may be asleep.
                 // Move playback to it explicitly, then ask for the song again.
                 match self.wake_device_and_retry(&body, cancel, polls).await {
-                    // Still nothing: play the track inside its album, which is how Spotify's
-                    // own apps start a song.
-                    Err(SpotifyError::NotPlaying) if found.album_uri.is_some() => {
-                        self.play_in_album(found, cancel, polls).await?
+                    // Still nothing: ask the other way.
+                    Err(SpotifyError::NotPlaying) if fallback.is_some() => {
+                        self.play_other_way(fallback.as_deref().unwrap_or_default(), cancel, polls)
+                            .await?
                     }
                     other => other?,
                 }
@@ -821,16 +836,13 @@ impl Spotify {
         })
     }
 
-    /// Plays the track as part of its album (`context_uri` with the track as the offset).
-    async fn play_in_album(
+    /// Asks once more with `body` (the other way of asking) on the best device, and watches.
+    async fn play_other_way(
         &self,
-        found: &Found,
+        body: &str,
         cancel: &CancellationToken,
         polls: u32,
     ) -> Result<Option<String>, SpotifyError> {
-        let Some(album) = &found.album_uri else {
-            return Err(SpotifyError::NotPlaying);
-        };
         let devs: Devices = self.get_json("/v1/me/player/devices", &[]).await?;
         let id = devs
             .devices
@@ -839,18 +851,13 @@ impl Spotify {
             .max_by_key(|d| d.is_active)
             .and_then(|d| d.id.clone())
             .ok_or(SpotifyError::NoDevice)?;
-        self.note("trying the track inside its album".into());
-        let body = serde_json::json!({
-            "context_uri": album,
-            "offset": { "uri": found.uri }
-        })
-        .to_string();
+        self.note("trying the other way of asking".into());
         let (s, _) = self
             .call(
                 reqwest::Method::PUT,
                 "/v1/me/player/play",
                 &[("device_id", &id)],
-                Some(body),
+                Some(body.to_owned()),
             )
             .await?;
         if !s.is_success() {
@@ -2004,11 +2011,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn if_the_track_alone_never_starts_it_is_played_inside_its_album() {
-        let in_album = Arc::new(AtomicBool::new(false));
-        let flag = in_album.clone();
-        let (sp, log) = connected(Arc::new(move |r| {
+    /// A Spotify app that plays only when asked the given way (`needle` is in the request body).
+    fn picky(needle: &'static str, plays: Arc<Mutex<Vec<String>>>) -> Answer {
+        let started = Arc::new(AtomicBool::new(false));
+        Arc::new(move |r| {
             match (r.method.as_str(), r.target.split('?').next().unwrap()) {
                 ("POST", "/api/token") => (
                     200,
@@ -2019,13 +2025,14 @@ mod tests {
                     r#"{"devices":[{"id":"pc1","type":"Computer","is_active":true}]}"#.into(),
                 ),
                 ("PUT", "/v1/me/player/play") => {
-                    if r.body.contains("context_uri") {
-                        flag.store(true, Ordering::SeqCst);
+                    plays.lock().unwrap().push(r.body.clone());
+                    if r.body.contains(needle) {
+                        started.store(true, Ordering::SeqCst);
                     }
                     (204, String::new())
                 }
                 ("PUT", _) => (204, String::new()),
-                ("GET", "/v1/me/player") if flag.load(Ordering::SeqCst) => (
+                ("GET", "/v1/me/player") if started.load(Ordering::SeqCst) => (
                     200,
                     r#"{"is_playing":true,"device":{"name":"My PC","is_active":true},"progress_ms":900}"#.into(),
                 ),
@@ -2035,40 +2042,42 @@ mod tests {
                 ),
                 _ => (404, "{}".into()),
             }
-        }))
-        .await;
+        })
+    }
+
+    #[tokio::test]
+    async fn the_track_is_played_inside_its_album_first_and_at_once() {
+        let plays = Arc::new(Mutex::new(Vec::new()));
+        let (sp, _) = connected(picky("context_uri", plays.clone())).await;
         let p = sp
             .play_found(&found(), &CancellationToken::new())
             .await
             .unwrap();
         assert_eq!(p.device.as_deref(), Some("My PC"));
-        assert!(in_album.load(Ordering::SeqCst));
-        let album_call = log
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|r| r.body.contains("context_uri"))
-            .cloned()
-            .unwrap();
-        assert!(
-            album_call
-                .body
-                .contains("spotify:album:6i6folBtxKV28WX3msQ4FE")
-        );
-        assert!(
-            album_call
-                .body
-                .contains(r#""offset":{"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv"}"#)
-        );
-        assert!(album_call.target.contains("device_id=pc1"));
-        assert!(
-            sp.last_trace()
-                .contains("trying the track inside its album")
-        );
+        let plays = plays.lock().unwrap().clone();
+        assert_eq!(plays.len(), 1, "one request was enough: {plays:?}");
+        assert!(plays[0].contains("spotify:album:6i6folBtxKV28WX3msQ4FE"));
+        assert!(plays[0].contains(r#""offset":{"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv"}"#));
+        assert!(!plays[0].contains("\"uris\""));
     }
 
     #[tokio::test]
-    async fn without_an_album_address_nothing_is_tried_inside_an_album() {
+    async fn if_the_album_way_never_starts_the_track_alone_is_tried() {
+        let plays = Arc::new(Mutex::new(Vec::new()));
+        let (sp, _) = connected(picky("\"uris\"", plays.clone())).await;
+        let p = sp
+            .play_found(&found(), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(p.device.as_deref(), Some("My PC"));
+        let plays = plays.lock().unwrap().clone();
+        assert!(plays.first().unwrap().contains("context_uri"));
+        assert!(plays.last().unwrap().contains("\"uris\""));
+        assert!(sp.last_trace().contains("trying the other way of asking"));
+    }
+
+    #[tokio::test]
+    async fn without_an_album_address_only_the_track_alone_is_asked_for() {
         let (sp, log) = connected(Arc::new(|r| {
             match (r.method.as_str(), r.target.split('?').next().unwrap()) {
                 ("POST", "/api/token") => (
