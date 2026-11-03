@@ -290,6 +290,26 @@ impl Spotify {
         Ok(())
     }
 
+    /// The refresh token from the OS keychain, read on a blocking thread with a time limit.
+    /// macOS can ask the person for permission the first time a rebuilt app reads an item;
+    /// that question must not stall an async worker, and a dialog nobody answers must end.
+    async fn read_refresh_token(&self) -> Result<SecretString, SpotifyError> {
+        let vault = self.vault.clone();
+        let read = tokio::task::spawn_blocking(move || vault.get());
+        match tokio::time::timeout(Duration::from_secs(12), read).await {
+            Ok(Ok(Ok(Some(t)))) => Ok(t),
+            Ok(Ok(Ok(None))) => Err(SpotifyError::NotConnected),
+            Ok(_) => {
+                self.note("keychain read failed".into());
+                Err(SpotifyError::Failed)
+            }
+            Err(_) => {
+                self.note("keychain read timed out (is a macOS permission question open?)".into());
+                Err(SpotifyError::Failed)
+            }
+        }
+    }
+
     async fn token_request(&self, body: &str) -> Result<TokenReply, SpotifyError> {
         let r = self
             .http
@@ -299,6 +319,7 @@ impl Spotify {
             .send()
             .await
             .map_err(|e| net(&e))?;
+        self.note(format!("token {}", r.status().as_u16()));
         if !r.status().is_success() {
             tracing::warn!(
                 status = r.status().as_u16(),
@@ -330,11 +351,7 @@ impl Spotify {
             return Ok(a.token.clone());
         }
         let client_id = (self.client_id)().ok_or(SpotifyError::NotConfigured)?;
-        let refresh = self
-            .vault
-            .get()
-            .map_err(|_| SpotifyError::Failed)?
-            .ok_or(SpotifyError::NotConnected)?;
+        let refresh = self.read_refresh_token().await?;
         let reply = self
             .token_request(&form_body(&[
                 ("grant_type", "refresh_token"),
@@ -1185,5 +1202,49 @@ mod tests {
                 "no token in the trace"
             );
         }
+    }
+
+    struct Locked;
+    impl crate::platform::keychain::SecretBackend for Locked {
+        fn get(&self) -> Result<Option<SecretString>, crate::platform::keychain::BackendError> {
+            Err(crate::platform::keychain::BackendError::Other(
+                "denied".into(),
+            ))
+        }
+        fn set(&self, _: &SecretString) -> Result<(), crate::platform::keychain::BackendError> {
+            Ok(())
+        }
+        fn delete(&self) -> Result<(), crate::platform::keychain::BackendError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_keychain_that_refuses_is_traced_not_blamed_on_spotify() {
+        let (base, _) = fake(Arc::new(|_| (404, "{}".into()))).await;
+        let vault = Arc::new(ApiKeyVault::with_backend(
+            Box::new(Locked),
+            KeyStorage::Keychain,
+        ));
+        let sp = Spotify::new(
+            Endpoints {
+                accounts: base.clone(),
+                api: base,
+                redirect_port: 0,
+                settle_ms: 0,
+            },
+            vault,
+            Arc::new(|| Some(ID.to_string())),
+            no_browser(),
+        );
+        assert_eq!(
+            sp.play("queen", &CancellationToken::new()).await,
+            Err(SpotifyError::Failed)
+        );
+        assert!(
+            sp.last_trace().contains("keychain read failed"),
+            "{}",
+            sp.last_trace()
+        );
     }
 }
