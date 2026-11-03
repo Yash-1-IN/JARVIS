@@ -6,6 +6,7 @@ use super::pkce::{self, Callback, Pkce};
 use crate::platform::keychain::{ApiKeyVault, SecretString};
 use reqwest::{StatusCode, Url};
 use serde::Deserialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -115,6 +116,11 @@ pub struct Spotify {
     /// The steps of the last "play" and the HTTP status each got (no bodies, no tokens), so a
     /// failure can say what Spotify answered.
     trace: Mutex<Vec<String>>,
+    /// Bumped by every Disconnect. A sign-in or refresh that started before it must not store its
+    /// token afterwards, or a Disconnect pressed while one was in flight would be undone.
+    epoch: AtomicU64,
+    /// Held while a token is written or cleared, so the epoch check and the write are one step.
+    store_gate: Mutex<()>,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +133,13 @@ struct TokenReply {
 #[derive(Deserialize)]
 struct Me {
     display_name: Option<String>,
+}
+
+enum Stored {
+    Yes,
+    /// Disconnect was pressed since this sign-in began.
+    Disconnected,
+    Failed,
 }
 
 /// `"get devices 200 ×3"` is `("get devices 200", 3)`; a line with no count is one occurrence.
@@ -207,6 +220,8 @@ impl Spotify {
             signing_in: Mutex::new(None),
             name: Mutex::new(None),
             trace: Mutex::new(Vec::new()),
+            epoch: AtomicU64::new(0),
+            store_gate: Mutex::new(()),
         }
     }
 
@@ -252,8 +267,12 @@ impl Spotify {
         {
             c.cancel();
         }
-        if self.vault.clear().is_err() {
-            tracing::warn!("could not delete the Spotify token");
+        {
+            let _gate = self.store_gate.lock().unwrap_or_else(|e| e.into_inner());
+            self.epoch.fetch_add(1, Ordering::SeqCst);
+            if self.vault.clear().is_err() {
+                tracing::warn!("could not delete the Spotify token");
+            }
         }
         *self.name.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // A running refresh may still hold the lock; the next call finds the vault empty.
@@ -281,6 +300,7 @@ impl Spotify {
         client_id: &str,
         cancel: &CancellationToken,
     ) -> Result<(), SpotifyError> {
+        let epoch = self.epoch.load(Ordering::SeqCst);
         let pkce = Pkce::new().map_err(|_| SpotifyError::Failed)?;
         let listener = TcpListener::bind(("127.0.0.1", self.ep.redirect_port))
             .await
@@ -316,7 +336,12 @@ impl Spotify {
             .await?;
         let refresh = reply.refresh_token.as_deref().ok_or(SpotifyError::Failed)?;
         let secret = SecretString::parse(refresh).map_err(|_| SpotifyError::Failed)?;
-        self.vault.set(&secret).map_err(|_| SpotifyError::Failed)?;
+        // A Disconnect pressed while the code was being exchanged wins: nothing is stored.
+        match self.store_refresh(epoch, &secret) {
+            Stored::Yes => {}
+            Stored::Disconnected => return Err(SpotifyError::Cancelled),
+            Stored::Failed => return Err(SpotifyError::Failed),
+        }
         self.keep_access(reply).await;
         // The name is only for the "Connected as ..." line; a failure here is not fatal.
         if let Ok(me) = self.get_json::<Me>("/v1/me", &[]).await {
@@ -324,6 +349,18 @@ impl Spotify {
                 me.display_name.map(|n| clip(&n, 60));
         }
         Ok(())
+    }
+
+    /// Saves a refresh token unless Disconnect was pressed since `epoch` was read.
+    fn store_refresh(&self, epoch: u64, secret: &SecretString) -> Stored {
+        let _gate = self.store_gate.lock().unwrap_or_else(|e| e.into_inner());
+        if self.epoch.load(Ordering::SeqCst) != epoch {
+            return Stored::Disconnected;
+        }
+        match self.vault.set(secret) {
+            Ok(_) => Stored::Yes,
+            Err(_) => Stored::Failed,
+        }
     }
 
     /// The refresh token from the OS keychain, read on a blocking thread with a time limit.
@@ -387,6 +424,7 @@ impl Spotify {
             return Ok(a.token.clone());
         }
         let client_id = (self.client_id)().ok_or(SpotifyError::NotConfigured)?;
+        let epoch = self.epoch.load(Ordering::SeqCst);
         let refresh = self.read_refresh_token().await?;
         let reply = self
             .token_request(&form_body(&[
@@ -395,12 +433,20 @@ impl Spotify {
                 ("client_id", &client_id),
             ]))
             .await?;
-        if let Some(new) = reply
-            .refresh_token
-            .as_deref()
-            .and_then(|r| SecretString::parse(r).ok())
+        // The refresh took a while; if Disconnect was pressed meanwhile, drop the result instead of
+        // putting a token back.
         {
-            let _ = self.vault.set(&new);
+            let _gate = self.store_gate.lock().unwrap_or_else(|e| e.into_inner());
+            if self.epoch.load(Ordering::SeqCst) != epoch {
+                return Err(SpotifyError::NotConnected);
+            }
+            if let Some(new) = reply
+                .refresh_token
+                .as_deref()
+                .and_then(|r| SecretString::parse(r).ok())
+            {
+                let _ = self.vault.set(&new);
+            }
         }
         let token = SecretString::parse(&reply.access_token).map_err(|_| SpotifyError::Failed)?;
         let life = Duration::from_secs(reply.expires_in.saturating_sub(60));
@@ -1765,5 +1811,44 @@ mod tests {
             !t.contains("PC"),
             "a device's name never goes into the trace: {t}"
         );
+    }
+
+    /// A Disconnect pressed while a token refresh is in flight must stay a Disconnect: the refresh
+    /// that was already on its way must not put the (possibly rotated) token back in the keychain.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_disconnect_during_a_refresh_is_not_undone_by_it() {
+        let (base, _) = fake(Arc::new(|r| {
+            if r.target.starts_with("/api/token") {
+                // The refresh is slow, and Spotify rotates the refresh token.
+                std::thread::sleep(Duration::from_millis(400));
+                return (
+                    200,
+                    r#"{"access_token":"acc-new-0123456789","expires_in":3600,"refresh_token":"ref-rotated-0123456789"}"#.into(),
+                );
+            }
+            (404, "{}".into())
+        }))
+        .await;
+        let (sp, vault) = client(&base, no_browser());
+        vault
+            .set(&SecretString::parse("ref-0123456789abcdef").unwrap())
+            .unwrap();
+        let sp = Arc::new(sp);
+        let refreshing = {
+            let sp = sp.clone();
+            tokio::spawn(async move { sp.token(true).await.is_ok() })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await; // the refresh is now in flight
+        sp.disconnect();
+        assert!(
+            vault.get().unwrap().is_none(),
+            "disconnect clears the keychain"
+        );
+        let _ = refreshing.await;
+        assert!(
+            vault.get().unwrap().is_none(),
+            "the in-flight refresh put the token back after Disconnect"
+        );
+        assert!(!sp.connected());
     }
 }
