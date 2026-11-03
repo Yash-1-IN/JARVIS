@@ -142,6 +142,13 @@ Anything that decides product behaviour, the wake-word engine, licences, the pro
 how permissions work. Those are the owner's and the two developers' decisions. Developer C implements
 decisions; it does not make them.
 
+## Running it automatically, and Developer D
+
+How an agent picks up a task, how often it looks, who it obeys and how to stop it are in
+`docs/agent-automation.md`. **Developer D** (account `backendcodinga`, branches `d/<issue>-<slug>`, label
+`for:D`) is a second agent that follows every rule on this page; read "Developer C" as "Developer D" for
+its work (issue #82).
+
 ## How it starts
 
 1. The owner decides account and permission, and says "go" in an issue.
