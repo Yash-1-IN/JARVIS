@@ -9,6 +9,7 @@ mod permissions;
 mod platform;
 mod services;
 mod tools;
+mod voice;
 
 use config::SettingsStore;
 use intelligence::pricing::PriceTable;

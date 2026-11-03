@@ -1689,3 +1689,93 @@ async fn sentences_that_only_mention_music_words_still_go_to_the_model() {
     assert_eq!(*lock(&fake.calls), 1);
     assert!(lock(&media.acts).is_empty());
 }
+
+fn voice_turn_at_transcribing(orch: &Orchestrator) -> String {
+    let (id, _) = orch.begin_listening().unwrap();
+    orch.transition(&id, AssistantPhase::Transcribing).unwrap();
+    id
+}
+
+#[tokio::test]
+async fn a_voice_turn_continues_from_transcribing_into_a_normal_turn() {
+    let fake = Fake::new(Script::Ok(vec!["Of course."], Usage::default()));
+    let (r, orch, _) = runner(Some(fake.clone()), Caps::default());
+    let id = voice_turn_at_transcribing(&orch);
+    let sink = Arc::new(Rec::default());
+    r.continue_voice(&id, "  tell me a story ".into(), sink.clone())
+        .unwrap();
+    sink.wait_done().await;
+    assert_eq!(sink.text(), "Of course.");
+    // It kept the id the voice turn began with, went through thinking, and ended idle.
+    let phases: Vec<_> = lock(&sink.snaps).iter().map(|s| s.phase).collect();
+    assert!(phases.contains(&AssistantPhase::Thinking));
+    assert!(
+        lock(&sink.snaps)
+            .iter()
+            .all(|s| s.active_request_id.as_deref() == Some(&id) || s.active_request_id.is_none())
+    );
+    let s = orch.snapshot();
+    assert_eq!((s.phase, s.active_request_id), (AssistantPhase::Idle, None));
+    // The model saw the transcript, trimmed, as the user's message.
+    assert_eq!(
+        lock(&fake.seen)[0].messages.last().unwrap().content,
+        "tell me a story"
+    );
+}
+
+#[tokio::test]
+async fn a_spoken_local_command_is_answered_without_the_model() {
+    let fake = Fake::new(Script::Ok(vec!["model"], Usage::default()));
+    let (r, orch, _) = runner(Some(fake.clone()), Caps::default());
+    let id = voice_turn_at_transcribing(&orch);
+    let sink = Arc::new(Rec::default());
+    r.continue_voice(&id, "what can you do".into(), sink.clone())
+        .unwrap();
+    sink.wait_done().await;
+    assert_eq!(*lock(&fake.calls), 0);
+    assert!(!sink.text().is_empty());
+}
+
+#[tokio::test]
+async fn a_spoken_mute_is_a_control_not_a_turn() {
+    let fake = Fake::new(Script::Ok(vec!["model"], Usage::default()));
+    let (r, orch, _) = runner(Some(fake.clone()), Caps::default());
+    let id = voice_turn_at_transcribing(&orch);
+    let sink = Arc::new(Rec::default());
+    r.continue_voice(&id, "mute".into(), sink.clone()).unwrap();
+    let s = orch.snapshot();
+    // The voice request is over, the microphone is muted, and no model call was made.
+    assert_eq!(
+        (s.phase, s.active_request_id, s.mic),
+        (
+            AssistantPhase::Idle,
+            None,
+            crate::ipc::types::MicState::Muted
+        )
+    );
+    assert_eq!(*lock(&fake.calls), 0);
+    assert_eq!(sink.text(), "Muted.");
+}
+
+#[tokio::test]
+async fn empty_text_and_a_stale_request_are_refused_and_change_nothing() {
+    let fake = Fake::new(Script::Ok(vec!["x"], Usage::default()));
+    let (r, orch, _) = runner(Some(fake), Caps::default());
+    let id = voice_turn_at_transcribing(&orch);
+    let sink = Arc::new(Rec::default());
+    let e = r
+        .continue_voice(&id, "   ".into(), sink.clone())
+        .unwrap_err();
+    assert_eq!(e.message, "I did not hear anything.");
+    assert_eq!(orch.snapshot().phase, AssistantPhase::Transcribing);
+    // A request id that is not the active one cannot start a turn.
+    let e = r
+        .continue_voice("not-the-active-id", "hello".into(), sink.clone())
+        .unwrap_err();
+    assert_eq!(e.message, "That request is no longer active.");
+    assert!(lock(&sink.events).is_empty());
+    assert_eq!(
+        orch.snapshot().active_request_id.as_deref(),
+        Some(id.as_str())
+    );
+}
