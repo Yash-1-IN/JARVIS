@@ -53,6 +53,14 @@ pub struct Played {
     pub device: Option<String>,
 }
 
+/// What a search chose: the address and the words to show. Words are untrusted text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub uri: String,
+    pub title: String,
+    pub artist: String,
+}
+
 #[derive(Clone)]
 pub struct Endpoints {
     pub accounts: String,
@@ -99,6 +107,8 @@ pub struct Spotify {
     /// The steps of the last "play" and the HTTP status each got (no bodies, no tokens), so a
     /// failure can say what Spotify answered.
     trace: Mutex<Vec<String>>,
+    /// The track the last search chose, for the local fallback.
+    found: Mutex<Option<Found>>,
 }
 
 #[derive(Deserialize)]
@@ -180,10 +190,16 @@ impl Spotify {
             signing_in: Mutex::new(None),
             name: Mutex::new(None),
             trace: Mutex::new(Vec::new()),
+            found: Mutex::new(None),
         }
     }
 
-    fn note(&self, step: String) {
+    /// The track the last "play" chose, if its search found one.
+    pub fn last_found(&self) -> Option<Found> {
+        self.found.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn note(&self, step: String) {
         let mut t = self.trace.lock().unwrap_or_else(|e| e.into_inner());
         if t.len() < 20 {
             t.push(step);
@@ -436,6 +452,7 @@ impl Spotify {
         cancel: &CancellationToken,
     ) -> Result<Played, SpotifyError> {
         self.trace.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        *self.found.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // Our own deadline is shorter than the tool's, so a slow Spotify ends here with the
         // trace of what it answered, instead of the tool timing out with nothing to show.
         match tokio::time::timeout(PLAY_DEADLINE, self.play_steps(words, cancel)).await {
@@ -473,6 +490,14 @@ impl Spotify {
         if !track.uri.starts_with("spotify:track:") || track.uri.len() > 64 {
             return Err(SpotifyError::Failed);
         }
+        *self.found.lock().unwrap_or_else(|e| e.into_inner()) = Some(Found {
+            uri: track.uri.clone(),
+            title: clip(&track.name, 120),
+            artist: clip(
+                track.artists.first().map(|a| a.name.as_str()).unwrap_or(""),
+                120,
+            ),
+        });
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
         }

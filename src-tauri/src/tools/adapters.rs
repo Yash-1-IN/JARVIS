@@ -52,6 +52,7 @@ fn convert_error(e: media::MediaError) -> MediaError {
         media::MediaError::Unsupported => MediaError::Unsupported,
         media::MediaError::NothingPlaying => MediaError::NothingPlaying,
         media::MediaError::Refused => MediaError::Refused,
+        media::MediaError::NotAllowed => MediaError::NotAllowed,
         media::MediaError::Failed => MediaError::Failed,
     }
 }
@@ -111,7 +112,7 @@ impl super::ports::MusicPlayer for SpotifyPlayer {
     ) -> Result<super::ports::PlayedTrack, super::ports::PlayError> {
         use super::ports::PlayError as P;
         use crate::spotify::client::SpotifyError as E;
-        let p = self.0.play(words, cancel).await.map_err(|e| match e {
+        let map = |e: E| match e {
             E::NotConfigured | E::NotConnected => P::NotConnected,
             E::Offline => P::Offline,
             E::Forbidden => P::Forbidden,
@@ -120,7 +121,32 @@ impl super::ports::MusicPlayer for SpotifyPlayer {
             E::NotPlaying => P::NotPlaying,
             E::Cancelled => P::Cancelled,
             E::TimedOut | E::Denied | E::PortBusy | E::Failed => P::Failed,
-        })?;
+        };
+        let p = match self.0.play(words, cancel).await {
+            Ok(p) => p,
+            // Spotify's servers took the song but could not wake an app (it lists no active
+            // device). The Spotify app on this computer can be told directly.
+            Err(e @ (E::NotPlaying | E::NoDevice)) => {
+                if let Some(f) = self.0.last_found() {
+                    let uri = f.uri.clone();
+                    let local = tokio::task::spawn_blocking(move || {
+                        crate::platform::media::play_spotify_uri(&uri)
+                    })
+                    .await;
+                    self.0
+                        .note(format!("this computer's Spotify app: {local:?}"));
+                    if matches!(local, Ok(Ok(()))) {
+                        return Ok(super::ports::PlayedTrack {
+                            title: f.title,
+                            artist: f.artist,
+                            device: Some("the Spotify app on this computer".into()),
+                        });
+                    }
+                }
+                return Err(map(e));
+            }
+            Err(e) => return Err(map(e)),
+        };
         Ok(super::ports::PlayedTrack {
             title: p.title,
             artist: p.artist,

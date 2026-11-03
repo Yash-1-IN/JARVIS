@@ -1157,6 +1157,12 @@ async fn music_control_says_why_it_could_not_act() {
             ToolOutcome::NotRun,
         ),
         (MediaError::Refused, "did not accept", ToolOutcome::Failed),
+        // macOS: tells the person where to switch the permission on.
+        (
+            MediaError::NotAllowed,
+            "Privacy and Security, Automation",
+            ToolOutcome::NotRun,
+        ),
         (MediaError::Failed, "failed", ToolOutcome::Failed),
     ];
     for (e, words, outcome) in cases {
