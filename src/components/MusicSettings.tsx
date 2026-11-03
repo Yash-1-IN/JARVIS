@@ -143,8 +143,8 @@ export function MusicSettings({ transport }: { transport: Transport }) {
       <p className="hint">
         To set it up: create a free app at developer.spotify.com/dashboard (it
         needs your Spotify Premium), tick “Web API”, set its Redirect URI to{" "}
-        <code>http://127.0.0.1</code>, and paste its Client ID here. Choosing a
-        song needs Spotify Premium and the Spotify app open.
+        <code>http://127.0.0.1:43597/callback</code>, and paste its Client ID
+        here. Choosing a song needs Spotify Premium and the Spotify app open.
       </p>
       <p className="hint">
         What is shared: the words you ask to play go to Spotify, and nothing is

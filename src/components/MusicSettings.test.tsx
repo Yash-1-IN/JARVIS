@@ -94,7 +94,9 @@ describe("Settings → Music (Spotify)", () => {
   it("never asks for or shows a secret, and explains the setup", async () => {
     await open();
     expect(screen.queryByLabelText(/secret|token/i)).toBeNull();
-    expect(screen.getByText(/http:\/\/127\.0\.0\.1/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/http:\/\/127\.0\.0\.1:43597\/callback/),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/nothing is sent to Anthropic/i),
     ).toBeInTheDocument();

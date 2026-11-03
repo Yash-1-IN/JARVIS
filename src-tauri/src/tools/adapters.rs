@@ -114,7 +114,7 @@ impl super::ports::MusicPlayer for SpotifyPlayer {
             E::NoDevice => P::NoDevice,
             E::NoResults => P::NoResults,
             E::Cancelled => P::Cancelled,
-            E::TimedOut | E::Denied | E::Failed => P::Failed,
+            E::TimedOut | E::Denied | E::PortBusy | E::Failed => P::Failed,
         })?;
         Ok(super::ports::PlayedTrack {
             title: p.title,

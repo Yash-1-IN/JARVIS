@@ -34,6 +34,8 @@ pub enum SpotifyError {
     NoDevice,
     /// The search found nothing.
     NoResults,
+    /// Another program is using the sign-in's loopback port.
+    PortBusy,
     /// Anything else. Details are logged without the response body.
     Failed,
 }
@@ -49,13 +51,21 @@ pub struct Played {
 pub struct Endpoints {
     pub accounts: String,
     pub api: String,
+    /// The loopback port of the redirect address. Spotify's dashboard only accepts a
+    /// redirect address with a port, and the request must match it exactly, so the app uses
+    /// one fixed port. 0 (tests only) lets the system choose.
+    pub redirect_port: u16,
 }
+
+/// The redirect address the person registers in their Spotify app.
+pub const REDIRECT_PORT: u16 = 43597;
 
 impl Endpoints {
     pub fn real() -> Self {
         Self {
             accounts: "https://accounts.spotify.com".into(),
             api: "https://api.spotify.com".into(),
+            redirect_port: REDIRECT_PORT,
         }
     }
 }
@@ -193,9 +203,12 @@ impl Spotify {
         cancel: &CancellationToken,
     ) -> Result<(), SpotifyError> {
         let pkce = Pkce::new().map_err(|_| SpotifyError::Failed)?;
-        let listener = TcpListener::bind("127.0.0.1:0")
+        let listener = TcpListener::bind(("127.0.0.1", self.ep.redirect_port))
             .await
-            .map_err(|_| SpotifyError::Failed)?;
+            .map_err(|e| {
+                tracing::warn!(error = %e, port = self.ep.redirect_port, "cannot listen for the Spotify sign-in");
+                SpotifyError::PortBusy
+            })?;
         let port = listener
             .local_addr()
             .map_err(|_| SpotifyError::Failed)?
@@ -590,6 +603,7 @@ mod tests {
         let ep = Endpoints {
             accounts: base.into(),
             api: base.into(),
+            redirect_port: 0,
         };
         let s = Spotify::new(ep, vault.clone(), Arc::new(|| Some(ID.to_string())), open);
         (s, vault)
@@ -711,6 +725,7 @@ mod tests {
             Endpoints {
                 accounts: base.clone(),
                 api: base,
+                redirect_port: 0,
             },
             vault,
             Arc::new(|| None),
@@ -874,6 +889,21 @@ mod tests {
             idle.play("x", &CancellationToken::new()).await,
             Err(SpotifyError::NotConnected)
         );
+    }
+
+    #[test]
+    fn the_real_redirect_port_is_the_one_the_docs_and_the_screen_tell_people_to_register() {
+        assert_eq!(Endpoints::real().redirect_port, 43597);
+    }
+
+    #[tokio::test]
+    async fn a_busy_port_is_its_own_error() {
+        let held = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = held.local_addr().unwrap().port();
+        let (base, _) = fake(Arc::new(|_| (404, "{}".into()))).await;
+        let (mut sp, _) = client(&base, Arc::new(|_| true));
+        sp.ep.redirect_port = port;
+        assert_eq!(sp.connect().await, Err(SpotifyError::PortBusy));
     }
 
     #[tokio::test]

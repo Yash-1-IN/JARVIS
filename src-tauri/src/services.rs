@@ -167,9 +167,14 @@ impl Services {
             ),
             E::Denied => err(ErrorCode::Internal, "Spotify sign-in was cancelled.", false),
             E::Cancelled => err(ErrorCode::Internal, "Spotify sign-in was cancelled.", false),
+            E::PortBusy => err(
+                ErrorCode::Internal,
+                "Another program is using port 43597, which the Spotify sign-in needs. Close it and try again.",
+                true,
+            ),
             _ => err(
                 ErrorCode::Internal,
-                "Signing in to Spotify failed. Check the Client ID and that http://127.0.0.1 is its Redirect URI.",
+                "Signing in to Spotify failed. Check the Client ID and that http://127.0.0.1:43597/callback is its Redirect URI.",
                 true,
             ),
         })?;
@@ -314,7 +319,10 @@ mod tests {
             api_base_url: api.into(),
             installed: Arc::new(FakeApps),
             spotify: Arc::new(crate::spotify::client::Spotify::new(
-                crate::spotify::client::Endpoints::real(),
+                crate::spotify::client::Endpoints {
+                    redirect_port: 0,
+                    ..crate::spotify::client::Endpoints::real()
+                },
                 Arc::new(ApiKeyVault::with_backend(
                     Box::<SessionMemory>::default(),
                     VS::SessionOnly,
@@ -516,7 +524,11 @@ mod tests {
         // The test "browser" cannot open, so the sign-in fails with advice, never a hang.
         svc.set_spotify_client_id(Some(SPOTIFY_ID)).unwrap();
         let e = svc.spotify_connect().await.unwrap_err();
-        assert!(e.message.contains("http://127.0.0.1"), "{}", e.message);
+        assert!(
+            e.message.contains("127.0.0.1:43597/callback"),
+            "{}",
+            e.message
+        );
         // Disconnecting is safe at any time and keeps the Client ID.
         let s = svc.spotify_disconnect();
         assert!(!s.connected);
