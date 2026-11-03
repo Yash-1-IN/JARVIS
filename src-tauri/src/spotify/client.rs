@@ -684,13 +684,10 @@ impl Spotify {
         }
         let mut hit = None;
         for query in search_queries(&q) {
-            let found: Search = self
-                .get_json(
-                    "/v1/search",
-                    &[("q", &query), ("type", "track"), ("limit", "5")],
-                )
-                .await?;
-            if let Some(t) = found.tracks.items.into_iter().next() {
+            let items = self.search_tracks(&query).await?;
+            // The first result that can be played where this person is. The Spotify app clears
+            // its player when it is asked for a track it cannot play (reported on Windows).
+            if let Some(t) = items.into_iter().find(|t| t.is_playable != Some(false)) {
                 hit = Some(t);
                 break;
             }
@@ -699,6 +696,17 @@ impl Spotify {
         if !track.uri.starts_with("spotify:track:") || track.uri.len() > 64 {
             return Err(SpotifyError::Failed);
         }
+        // A track address is public; recording it lets a failure be checked against what the
+        // Spotify app shows for the same song.
+        self.note(format!(
+            "track {} playable={}",
+            track.uri,
+            match track.is_playable {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "unknown",
+            }
+        ));
         let found = Found {
             uri: track.uri,
             title: clip(&track.name, 120),
@@ -708,6 +716,28 @@ impl Spotify {
             ),
         };
         Ok(found)
+    }
+
+    /// Searches for tracks in the country of the signed-in account (`market=from_token`), so a
+    /// version that is not available there is not chosen. If Spotify will not take that, the plain
+    /// search is used, as before.
+    async fn search_tracks(&self, query: &str) -> Result<Vec<Track>, SpotifyError> {
+        let base = [("q", query), ("type", "track"), ("limit", "5")];
+        let with_market = [base[0], base[1], base[2], ("market", "from_token")];
+        match self.get_json::<Search>("/v1/search", &with_market).await {
+            Ok(s) => Ok(s.tracks.items),
+            Err(
+                e @ (SpotifyError::NotConnected
+                | SpotifyError::NotConfigured
+                | SpotifyError::Offline
+                | SpotifyError::Cancelled),
+            ) => Err(e),
+            Err(_) => {
+                self.note("search without a country".into());
+                let s: Search = self.get_json("/v1/search", &base).await?;
+                Ok(s.tracks.items)
+            }
+        }
     }
 
     async fn play_found_steps(
@@ -891,6 +921,9 @@ struct Track {
     uri: String,
     name: String,
     artists: Vec<Artist>,
+    /// Present when the search is made for a country: false means not playable there.
+    #[serde(default)]
+    is_playable: Option<bool>,
 }
 #[derive(Deserialize)]
 struct Artist {
@@ -1850,5 +1883,93 @@ mod tests {
             "the in-flight refresh put the token back after Disconnect"
         );
         assert!(!sp.connected());
+    }
+
+    #[tokio::test]
+    async fn the_search_is_for_the_accounts_country_and_skips_a_track_that_cannot_be_played() {
+        let hits = r#"{"tracks":{"items":[
+            {"uri":"spotify:track:AAAAAAAAAAAAAAAAAAAAAA","name":"Blocked","artists":[{"name":"X"}],"is_playable":false},
+            {"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv","name":"Thunderstruck","artists":[{"name":"AC/DC"}],"is_playable":true}]}}"#;
+        let (sp, log) = connected(Arc::new(move |r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/search") => (200, hits.into()),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let f = sp
+            .find("thunderstruck", &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(f.uri, "spotify:track:4u7EnebtmKWzUH433cf5Qv");
+        let search = log
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.target.starts_with("/v1/search"))
+            .cloned()
+            .unwrap();
+        assert!(
+            search.target.contains("market=from_token"),
+            "{}",
+            search.target
+        );
+        assert!(
+            sp.last_trace()
+                .contains("track spotify:track:4u7EnebtmKWzUH433cf5Qv playable=yes")
+        );
+    }
+
+    #[tokio::test]
+    async fn if_spotify_will_not_take_the_country_the_plain_search_is_used() {
+        let (sp, log) = connected(Arc::new(|r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/search") if r.target.contains("market=") => (400, "{}".into()),
+                ("GET", "/v1/search") => (200, SEARCH_HIT.into()),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let f = sp.find("queen", &CancellationToken::new()).await.unwrap();
+        assert_eq!(f.title, "Bohemian Rhapsody");
+        assert!(sp.last_trace().contains("search without a country"));
+        assert!(sp.last_trace().contains("playable=unknown"));
+        let searches = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.target.starts_with("/v1/search"))
+            .count();
+        assert_eq!(searches, 2);
+    }
+
+    #[tokio::test]
+    async fn only_unplayable_results_count_as_no_results() {
+        let (sp, _) = connected(Arc::new(|r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/search") => (
+                    200,
+                    r#"{"tracks":{"items":[{"uri":"spotify:track:AAAAAAAAAAAAAAAAAAAAAA","name":"B","artists":[],"is_playable":false}]}}"#.into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        assert_eq!(
+            sp.find("anything", &CancellationToken::new()).await,
+            Err(SpotifyError::NoResults)
+        );
     }
 }
