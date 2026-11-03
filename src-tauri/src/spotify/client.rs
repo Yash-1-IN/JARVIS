@@ -68,6 +68,9 @@ pub struct Found {
     pub uri: String,
     pub title: String,
     pub artist: String,
+    /// The track's album (`spotify:album:` and 22 letters or digits), used to play the track inside
+    /// its album when playing the track alone does not start.
+    pub album_uri: Option<String>,
 }
 
 #[derive(Clone)]
@@ -179,6 +182,12 @@ pub fn search_queries(words: &str) -> Vec<String> {
     out
 }
 
+/// `prefix` and then exactly 22 letters or digits, nothing else.
+fn valid_id(uri: &str, prefix: &str) -> bool {
+    uri.strip_prefix(prefix)
+        .is_some_and(|id| id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
 fn form_body(pairs: &[(&str, &str)]) -> String {
     let mut u = Url::parse("http://x/").expect("static url");
     u.query_pairs_mut().extend_pairs(pairs.iter().copied());
@@ -239,6 +248,18 @@ impl Spotify {
         if t.len() < 20 {
             t.push(step);
         }
+    }
+
+    /// Records what the player said, in place of the plain "get player 200" line the request itself
+    /// just recorded, so a run of identical answers collapses to one line with a count.
+    fn note_state(&self, step: String) {
+        {
+            let mut t = self.trace.lock().unwrap_or_else(|e| e.into_inner());
+            if t.last().is_some_and(|l| l.starts_with("get player 200")) {
+                t.pop();
+            }
+        }
+        self.note(step);
     }
 
     /// What the last "play" did, for example `search 200 · play 204 · player 204`.
@@ -707,7 +728,12 @@ impl Spotify {
                 None => "unknown",
             }
         ));
+        let album_uri = track
+            .album
+            .map(|a| a.uri)
+            .filter(|u| valid_id(u, "spotify:album:"));
         let found = Found {
+            album_uri,
             uri: track.uri,
             title: clip(&track.name, 120),
             artist: clip(
@@ -718,26 +744,16 @@ impl Spotify {
         Ok(found)
     }
 
-    /// Searches for tracks in the country of the signed-in account (`market=from_token`), so a
-    /// version that is not available there is not chosen. If Spotify will not take that, the plain
-    /// search is used, as before.
+    /// Searches for tracks. (A search for the account's country, `market=from_token`, is refused
+    /// with 403 for apps in Spotify's development mode, so the plain search is the one used.)
     async fn search_tracks(&self, query: &str) -> Result<Vec<Track>, SpotifyError> {
-        let base = [("q", query), ("type", "track"), ("limit", "5")];
-        let with_market = [base[0], base[1], base[2], ("market", "from_token")];
-        match self.get_json::<Search>("/v1/search", &with_market).await {
-            Ok(s) => Ok(s.tracks.items),
-            Err(
-                e @ (SpotifyError::NotConnected
-                | SpotifyError::NotConfigured
-                | SpotifyError::Offline
-                | SpotifyError::Cancelled),
-            ) => Err(e),
-            Err(_) => {
-                self.note("search without a country".into());
-                let s: Search = self.get_json("/v1/search", &base).await?;
-                Ok(s.tracks.items)
-            }
-        }
+        let s: Search = self
+            .get_json(
+                "/v1/search",
+                &[("q", query), ("type", "track"), ("limit", "5")],
+            )
+            .await?;
+        Ok(s.tracks.items)
     }
 
     async fn play_found_steps(
@@ -787,7 +803,14 @@ impl Spotify {
             Err(SpotifyError::NotPlaying) => {
                 // Spotify took the request but nothing started: the device may be asleep.
                 // Move playback to it explicitly, then ask for the song again.
-                self.wake_device_and_retry(&body, cancel, polls).await?
+                match self.wake_device_and_retry(&body, cancel, polls).await {
+                    // Still nothing: play the track inside its album, which is how Spotify's
+                    // own apps start a song.
+                    Err(SpotifyError::NotPlaying) if found.album_uri.is_some() => {
+                        self.play_in_album(found, cancel, polls).await?
+                    }
+                    other => other?,
+                }
             }
             other => other?,
         };
@@ -796,6 +819,44 @@ impl Spotify {
             artist: found.artist.clone(),
             device,
         })
+    }
+
+    /// Plays the track as part of its album (`context_uri` with the track as the offset).
+    async fn play_in_album(
+        &self,
+        found: &Found,
+        cancel: &CancellationToken,
+        polls: u32,
+    ) -> Result<Option<String>, SpotifyError> {
+        let Some(album) = &found.album_uri else {
+            return Err(SpotifyError::NotPlaying);
+        };
+        let devs: Devices = self.get_json("/v1/me/player/devices", &[]).await?;
+        let id = devs
+            .devices
+            .iter()
+            .filter(|d| !d.is_restricted)
+            .max_by_key(|d| d.is_active)
+            .and_then(|d| d.id.clone())
+            .ok_or(SpotifyError::NoDevice)?;
+        self.note("trying the track inside its album".into());
+        let body = serde_json::json!({
+            "context_uri": album,
+            "offset": { "uri": found.uri }
+        })
+        .to_string();
+        let (s, _) = self
+            .call(
+                reqwest::Method::PUT,
+                "/v1/me/player/play",
+                &[("device_id", &id)],
+                Some(body),
+            )
+            .await?;
+        if !s.is_success() {
+            return Err(map_status(s));
+        }
+        self.confirm_playing(cancel, polls).await
     }
 
     async fn wake_device_and_retry(
@@ -877,7 +938,7 @@ impl Spotify {
             };
             // What the player says, as yes and no only: never the track, the device's name or any
             // text. Repeated identical lines collapse in the trace.
-            self.note(format!(
+            self.note_state(format!(
                 "player playing={} track={} progress={}s device={}",
                 state.is_playing,
                 state.item.is_some(),
@@ -921,9 +982,15 @@ struct Track {
     uri: String,
     name: String,
     artists: Vec<Artist>,
-    /// Present when the search is made for a country: false means not playable there.
+    /// False means Spotify says it cannot be played for this account.
     #[serde(default)]
     is_playable: Option<bool>,
+    #[serde(default)]
+    album: Option<Album>,
+}
+#[derive(Deserialize)]
+struct Album {
+    uri: String,
 }
 #[derive(Deserialize)]
 struct Artist {
@@ -1593,6 +1660,7 @@ mod tests {
             uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
             title: "Bohemian Rhapsody".into(),
             artist: "Queen".into(),
+            album_uri: Some("spotify:album:6i6folBtxKV28WX3msQ4FE".into()),
         }
     }
 
@@ -1886,11 +1954,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_search_is_for_the_accounts_country_and_skips_a_track_that_cannot_be_played() {
+    async fn the_search_skips_a_track_that_cannot_be_played_and_keeps_the_album() {
         let hits = r#"{"tracks":{"items":[
             {"uri":"spotify:track:AAAAAAAAAAAAAAAAAAAAAA","name":"Blocked","artists":[{"name":"X"}],"is_playable":false},
-            {"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv","name":"Thunderstruck","artists":[{"name":"AC/DC"}],"is_playable":true}]}}"#;
-        let (sp, log) = connected(Arc::new(move |r| {
+            {"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv","name":"Thunderstruck","artists":[{"name":"AC/DC"}],"is_playable":true,
+             "album":{"uri":"spotify:album:6i6folBtxKV28WX3msQ4FE"}},
+            {"uri":"spotify:track:BBBBBBBBBBBBBBBBBBBBBB","name":"Other","artists":[],"album":{"uri":"not an album address"}}]}}"#;
+        let (sp, _) = connected(Arc::new(move |r| {
             match (r.method.as_str(), r.target.split('?').next().unwrap()) {
                 ("POST", "/api/token") => (
                     200,
@@ -1906,17 +1976,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(f.uri, "spotify:track:4u7EnebtmKWzUH433cf5Qv");
-        let search = log
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|r| r.target.starts_with("/v1/search"))
-            .cloned()
-            .unwrap();
-        assert!(
-            search.target.contains("market=from_token"),
-            "{}",
-            search.target
+        assert_eq!(
+            f.album_uri.as_deref(),
+            Some("spotify:album:6i6folBtxKV28WX3msQ4FE")
         );
         assert!(
             sp.last_trace()
@@ -1924,31 +1986,120 @@ mod tests {
         );
     }
 
+    #[test]
+    fn only_well_formed_album_addresses_are_kept() {
+        assert!(valid_id(
+            "spotify:album:6i6folBtxKV28WX3msQ4FE",
+            "spotify:album:"
+        ));
+        for bad in [
+            "",
+            "spotify:album:",
+            "spotify:album:6i6folBtxKV28WX3msQ4F",
+            "spotify:track:6i6folBtxKV28WX3msQ4FE",
+            "spotify:album:6i6folBtxKV28WX3msQ4F\"}",
+            "https://open.spotify.com/album/6i6folBtxKV28WX3msQ4FE",
+        ] {
+            assert!(!valid_id(bad, "spotify:album:"), "{bad:?}");
+        }
+    }
+
     #[tokio::test]
-    async fn if_spotify_will_not_take_the_country_the_plain_search_is_used() {
+    async fn if_the_track_alone_never_starts_it_is_played_inside_its_album() {
+        let in_album = Arc::new(AtomicBool::new(false));
+        let flag = in_album.clone();
+        let (sp, log) = connected(Arc::new(move |r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/me/player/devices") => (
+                    200,
+                    r#"{"devices":[{"id":"pc1","type":"Computer","is_active":true}]}"#.into(),
+                ),
+                ("PUT", "/v1/me/player/play") => {
+                    if r.body.contains("context_uri") {
+                        flag.store(true, Ordering::SeqCst);
+                    }
+                    (204, String::new())
+                }
+                ("PUT", _) => (204, String::new()),
+                ("GET", "/v1/me/player") if flag.load(Ordering::SeqCst) => (
+                    200,
+                    r#"{"is_playing":true,"device":{"name":"My PC","is_active":true},"progress_ms":900}"#.into(),
+                ),
+                ("GET", "/v1/me/player") => (
+                    200,
+                    r#"{"is_playing":false,"device":{"name":"My PC","is_active":true},"progress_ms":0}"#.into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let p = sp
+            .play_found(&found(), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(p.device.as_deref(), Some("My PC"));
+        assert!(in_album.load(Ordering::SeqCst));
+        let album_call = log
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.body.contains("context_uri"))
+            .cloned()
+            .unwrap();
+        assert!(
+            album_call
+                .body
+                .contains("spotify:album:6i6folBtxKV28WX3msQ4FE")
+        );
+        assert!(
+            album_call
+                .body
+                .contains(r#""offset":{"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv"}"#)
+        );
+        assert!(album_call.target.contains("device_id=pc1"));
+        assert!(
+            sp.last_trace()
+                .contains("trying the track inside its album")
+        );
+    }
+
+    #[tokio::test]
+    async fn without_an_album_address_nothing_is_tried_inside_an_album() {
         let (sp, log) = connected(Arc::new(|r| {
             match (r.method.as_str(), r.target.split('?').next().unwrap()) {
                 ("POST", "/api/token") => (
                     200,
                     r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
                 ),
-                ("GET", "/v1/search") if r.target.contains("market=") => (400, "{}".into()),
-                ("GET", "/v1/search") => (200, SEARCH_HIT.into()),
+                ("GET", "/v1/me/player/devices") => (
+                    200,
+                    r#"{"devices":[{"id":"pc1","type":"Computer","is_active":true}]}"#.into(),
+                ),
+                ("PUT", _) => (204, String::new()),
+                ("GET", "/v1/me/player") => (
+                    200,
+                    r#"{"is_playing":false,"device":{"name":"PC","is_active":true}}"#.into(),
+                ),
                 _ => (404, "{}".into()),
             }
         }))
         .await;
-        let f = sp.find("queen", &CancellationToken::new()).await.unwrap();
-        assert_eq!(f.title, "Bohemian Rhapsody");
-        assert!(sp.last_trace().contains("search without a country"));
-        assert!(sp.last_trace().contains("playable=unknown"));
-        let searches = log
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|r| r.target.starts_with("/v1/search"))
-            .count();
-        assert_eq!(searches, 2);
+        let mut f = found();
+        f.album_uri = None;
+        assert_eq!(
+            sp.play_found(&f, &CancellationToken::new()).await,
+            Err(SpotifyError::NotPlaying)
+        );
+        assert!(
+            !log.lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.body.contains("context_uri"))
+        );
     }
 
     #[tokio::test]
