@@ -400,6 +400,10 @@ pub struct VoiceSettingsPatch {
 pub struct AudioDevices {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
+    /// The name of the microphone the system default points at right now, so the window can say
+    /// which input is really used when `inputDevice` is `null`. `null` when there is none or it is
+    /// not known yet. Names are not unique: see the limitations in `docs/contracts.md`.
+    pub default_input: Option<String>,
 }
 
 /// Text heard from the microphone, as the `transcript.partial` and `transcript.final` events.

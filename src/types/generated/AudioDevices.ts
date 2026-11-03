@@ -3,4 +3,10 @@
 /**
  * The audio devices this computer has, by the name the system gives them.
  */
-export type AudioDevices = { inputs: Array<string>, outputs: Array<string>, };
+export type AudioDevices = { inputs: Array<string>, outputs: Array<string>, 
+/**
+ * The name of the microphone the system default points at right now, so the window can say
+ * which input is really used when `inputDevice` is `null`. `null` when there is none or it is
+ * not known yet. Names are not unique: see the limitations in `docs/contracts.md`.
+ */
+defaultInput: string | null, };

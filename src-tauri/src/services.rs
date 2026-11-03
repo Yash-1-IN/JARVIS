@@ -198,6 +198,7 @@ impl Services {
         AudioDevices {
             inputs: Vec::new(),
             outputs: Vec::new(),
+            default_input: None,
         }
     }
 
@@ -605,6 +606,6 @@ mod tests {
         );
         svc.voice_capture_stop(); // safe when nothing is capturing
         let d = svc.voice_devices();
-        assert!(d.inputs.is_empty() && d.outputs.is_empty());
+        assert!(d.inputs.is_empty() && d.outputs.is_empty() && d.default_input.is_none());
     }
 }
