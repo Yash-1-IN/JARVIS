@@ -47,3 +47,31 @@ export function energyFor(motion: OrbMotion, t: number): number {
 export function sparkle(seed: number, t: number): number {
   return 0.5 + 0.5 * Math.sin(t * (3 + hash(seed) * 6) + hash(seed + 7) * 6.28);
 }
+
+/**
+ * Moves `current` toward `target` by the time that has passed (`dt` seconds), so a change of state
+ * eases in instead of jumping. `rate` is how fast it closes the gap: about 1 / rate seconds to
+ * cover most of it. Frame-rate independent.
+ */
+export function ease(
+  current: number,
+  target: number,
+  dt: number,
+  rate = 7,
+): number {
+  return current + (target - current) * (1 - Math.exp(-rate * Math.max(0, dt)));
+}
+
+/** The one-off flare decays like this per second. */
+const FLARE_DECAY = 4.5;
+/** After this many seconds the flare is below 1% and the scene can stop rendering. */
+export const FLARE_SECONDS = Math.log(100) / FLARE_DECAY;
+
+/**
+ * The flare when the state changes: 1 at the moment of change, then fading away. The scene adds
+ * it to the energy, so the core flares, the rings jolt and the sparks burst, once.
+ * `since` is the time in seconds since the change; before it (or never) there is no flare.
+ */
+export function flareAt(since: number): number {
+  return since < 0 ? 0 : Math.exp(-FLARE_DECAY * since);
+}

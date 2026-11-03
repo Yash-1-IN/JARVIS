@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useDocumentHidden } from "../hooks/useDocumentHidden";
 import type { AssistantPhase } from "../types/generated/AssistantPhase";
 import type { MicState } from "../types/generated/MicState";
@@ -42,6 +43,16 @@ export function Orb2D({
 }) {
   const hidden = useDocumentHidden();
   const motion = orbMotion(phase, mic);
+  // Counts changes of state (not the first render), so the core can flare once for each.
+  const [flares, setFlares] = useState(0);
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    setFlares((n) => n + 1);
+  }, [phase, mic]);
   return (
     <div
       className={`orb orb-${motion} orb-phase-${phase}${hidden ? " orb-paused" : ""}${
@@ -52,7 +63,10 @@ export function Orb2D({
       aria-hidden="true"
     >
       <svg viewBox="0 0 100 100" width="120" height="120">
-        <circle className="orb-core" cx="50" cy="50" r="28" />
+        {/* A fresh element for each change restarts its one-off flare animation. */}
+        <g key={flares} className={flares > 0 ? "orb-flare" : undefined}>
+          <circle className="orb-core" cx="50" cy="50" r="28" />
+        </g>
         <circle className="orb-ring" cx="50" cy="50" r="40" />
         {phase === "error" && (
           <path className="orb-mark" d="M50 36 v18 M50 60 v4" />

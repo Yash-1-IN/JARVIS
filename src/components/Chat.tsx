@@ -52,7 +52,7 @@ export function Chat({ turns, busy, onSubmit }: Props) {
             </p>
             {/* Polite live region: replies are read once they settle, not per token. */}
             <div
-              className="chat-reply"
+              className={`chat-reply${t.stopReason === null ? " chat-reply-streaming" : ""}`}
               aria-live="polite"
               aria-busy={t.stopReason === null}
             >

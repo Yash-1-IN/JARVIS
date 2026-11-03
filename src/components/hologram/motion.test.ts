@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { energyFor, sparkle } from "./motion";
+import { ease, energyFor, FLARE_SECONDS, flareAt, sparkle } from "./motion";
 
 const samples = (m: Parameters<typeof energyFor>[0]) =>
   Array.from({ length: 600 }, (_, i) => energyFor(m, i / 60));
@@ -43,5 +43,52 @@ describe("sparkle", () => {
       expect(v).toBeLessThanOrEqual(1);
     }
     expect(sparkle(1, 2)).not.toBe(sparkle(2, 2));
+  });
+});
+
+describe("ease", () => {
+  it("closes the gap smoothly and never overshoots", () => {
+    let v = 0;
+    let last = 0;
+    for (let i = 0; i < 120; i++) {
+      v = ease(v, 1, 1 / 60);
+      expect(v).toBeGreaterThanOrEqual(last);
+      expect(v).toBeLessThanOrEqual(1);
+      last = v;
+    }
+    expect(v).toBeGreaterThan(0.99);
+  });
+  it("does not jump on the first frame, and works downward too", () => {
+    expect(ease(0, 1, 1 / 60)).toBeLessThan(0.2);
+    expect(ease(1, 0, 1 / 60)).toBeGreaterThan(0.8);
+  });
+  it("is frame-rate independent and a zero or negative step changes nothing", () => {
+    let a = 0;
+    for (let i = 0; i < 60; i++) a = ease(a, 1, 1 / 60);
+    let b = 0;
+    for (let i = 0; i < 30; i++) b = ease(b, 1, 1 / 30);
+    expect(a).toBeCloseTo(b, 6);
+    expect(ease(0.4, 1, 0)).toBe(0.4);
+    expect(ease(0.4, 1, -1)).toBe(0.4);
+  });
+});
+
+describe("flareAt", () => {
+  it("is full at the change, fades monotonically, and is gone after FLARE_SECONDS", () => {
+    expect(flareAt(0)).toBe(1);
+    let last = 1;
+    for (let i = 1; i <= 100; i++) {
+      const f = flareAt(i / 50);
+      expect(f).toBeLessThan(last);
+      expect(f).toBeGreaterThan(0);
+      last = f;
+    }
+    expect(flareAt(FLARE_SECONDS)).toBeLessThanOrEqual(0.0100001);
+    expect(FLARE_SECONDS).toBeGreaterThan(0.5);
+    expect(FLARE_SECONDS).toBeLessThan(2);
+  });
+  it("is nothing before a change", () => {
+    expect(flareAt(-1)).toBe(0);
+    expect(flareAt(Number.NEGATIVE_INFINITY)).toBe(0);
   });
 });
