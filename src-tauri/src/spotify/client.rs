@@ -16,6 +16,10 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(180);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// All of "search, play, check" together; the `music.play` tool allows a little longer.
 pub const PLAY_DEADLINE: Duration = Duration::from_secs(20);
+/// How many times (one second apart) to look at the player to see a song start.
+const NORMAL_POLLS: u32 = 4;
+/// The same right after the Spotify app was started, which is slower to begin.
+const FRESH_POLLS: u32 = 8;
 /// Least time worth spending on the final "play" after the Spotify app was started.
 const MIN_PLAY_AFTER_START: Duration = Duration::from_secs(4);
 /// The search alone.
@@ -500,7 +504,8 @@ impl Spotify {
         found: &Found,
         cancel: &CancellationToken,
     ) -> Result<Played, SpotifyError> {
-        self.play_found_within(found, cancel, PLAY_DEADLINE).await
+        self.play_found_within(found, cancel, PLAY_DEADLINE, NORMAL_POLLS)
+            .await
     }
 
     async fn play_found_within(
@@ -508,8 +513,9 @@ impl Spotify {
         found: &Found,
         cancel: &CancellationToken,
         deadline: Duration,
+        polls: u32,
     ) -> Result<Played, SpotifyError> {
-        match tokio::time::timeout(deadline, self.play_found_steps(found, cancel)).await {
+        match tokio::time::timeout(deadline, self.play_found_steps(found, cancel, polls)).await {
             Ok(r) => r,
             Err(_) => {
                 self.note(format!("gave up after {} s", deadline.as_secs()));
@@ -532,14 +538,12 @@ impl Spotify {
     ) -> Result<Played, SpotifyError> {
         let began = Instant::now();
         let first = self
-            .play_found_within(found, cancel, budget.min(PLAY_DEADLINE))
+            .play_found_within(found, cancel, budget.min(PLAY_DEADLINE), NORMAL_POLLS)
             .await;
-        // Only "nothing to play on" (or a device that took the song and stayed silent) is worth
-        // starting the app for. A refusal, a sign-in problem or no network is not.
-        if !matches!(
-            first,
-            Err(SpotifyError::NoDevice | SpotifyError::NotPlaying)
-        ) {
+        // Only "nothing to play on" is worth starting the app for. A device that took the song and
+        // stayed silent is already running, a refusal and a sign-in problem are not about the app,
+        // and no network will not be fixed by it.
+        if first != Err(SpotifyError::NoDevice) {
             return first;
         }
         if cancel.is_cancelled() {
@@ -574,8 +578,15 @@ impl Spotify {
             }
             return Err(SpotifyError::NoDevice);
         }
+        // A freshly started app registers as a device before it is ready to play: give it a few
+        // seconds more, and watch the player for longer.
+        let ready = Duration::from_millis(self.ep.settle_ms.saturating_mul(3));
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(SpotifyError::Cancelled),
+            _ = tokio::time::sleep(ready) => {}
+        }
         let left = budget.saturating_sub(began.elapsed());
-        self.play_found_within(found, cancel, left.max(min_after))
+        self.play_found_within(found, cancel, left.max(min_after), FRESH_POLLS)
             .await
     }
 
@@ -657,6 +668,7 @@ impl Spotify {
         &self,
         found: &Found,
         cancel: &CancellationToken,
+        polls: u32,
     ) -> Result<Played, SpotifyError> {
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
@@ -695,11 +707,11 @@ impl Spotify {
                 map_status(s)
             });
         }
-        let device = match self.confirm_playing(cancel).await {
+        let device = match self.confirm_playing(cancel, polls).await {
             Err(SpotifyError::NotPlaying) => {
                 // Spotify took the request but nothing started: the device may be asleep.
                 // Move playback to it explicitly, then ask for the song again.
-                self.wake_device_and_retry(&body, cancel).await?
+                self.wake_device_and_retry(&body, cancel, polls).await?
             }
             other => other?,
         };
@@ -714,6 +726,7 @@ impl Spotify {
         &self,
         body: &str,
         cancel: &CancellationToken,
+        polls: u32,
     ) -> Result<Option<String>, SpotifyError> {
         let devs: Devices = self.get_json("/v1/me/player/devices", &[]).await?;
         self.note(format!(
@@ -721,7 +734,8 @@ impl Spotify {
             devs.devices
                 .iter()
                 .map(|d| format!(
-                    "{}{}",
+                    "{}:{}{}",
+                    clip(&d.kind, 12),
                     if d.is_active { "active" } else { "idle" },
                     if d.is_restricted { "+restricted" } else { "" }
                 ))
@@ -751,17 +765,19 @@ impl Spotify {
         if !s.is_success() {
             return Err(map_status(s));
         }
-        self.confirm_playing(cancel).await
+        self.confirm_playing(cancel, polls).await
     }
 
-    /// Asks Spotify whether something is really playing, up to four times. A 204 or
+    /// Asks Spotify whether something is really playing, up to `polls` times, one second apart. A 204 or
     /// `is_playing: false` means no. Any other answer is "cannot tell", which is not a
     /// failure (the play request itself was accepted).
     async fn confirm_playing(
         &self,
         cancel: &CancellationToken,
+        polls: u32,
     ) -> Result<Option<String>, SpotifyError> {
-        for attempt in 0..4 {
+        let last = polls.saturating_sub(1);
+        for attempt in 0..polls {
             if self.ep.settle_ms > 0 {
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(SpotifyError::Cancelled),
@@ -772,7 +788,7 @@ impl Spotify {
                 .call(reqwest::Method::GET, "/v1/me/player", &[], None)
                 .await?;
             if s == StatusCode::NO_CONTENT {
-                if attempt == 3 {
+                if attempt == last {
                     return Err(SpotifyError::NotPlaying);
                 }
                 continue;
@@ -783,10 +799,23 @@ impl Spotify {
             let Ok(state) = serde_json::from_str::<PlayerState>(&text) else {
                 return Ok(None);
             };
+            // What the player says, as yes and no only: never the track, the device's name or any
+            // text. Repeated identical lines collapse in the trace.
+            self.note(format!(
+                "player playing={} track={} progress={}s device={}",
+                state.is_playing,
+                state.item.is_some(),
+                state.progress_ms.unwrap_or(0) / 1000,
+                match &state.device {
+                    Some(d) if d.is_active => "active",
+                    Some(_) => "idle",
+                    None => "none",
+                }
+            ));
             if state.is_playing {
                 return Ok(state.device.map(|d| clip(&d.name, 60)));
             }
-            if attempt == 3 {
+            if attempt == last {
                 return Err(SpotifyError::NotPlaying);
             }
         }
@@ -825,10 +854,17 @@ struct Artist {
 struct PlayerState {
     is_playing: bool,
     device: Option<PlayerDevice>,
+    /// Whether Spotify has a current track at all (the track itself is never read or logged).
+    #[serde(default)]
+    item: Option<serde::de::IgnoredAny>,
+    #[serde(default)]
+    progress_ms: Option<u64>,
 }
 #[derive(Deserialize)]
 struct PlayerDevice {
     name: String,
+    #[serde(default)]
+    is_active: bool,
 }
 #[derive(Deserialize)]
 struct Devices {
@@ -837,6 +873,9 @@ struct Devices {
 #[derive(Deserialize)]
 struct Device {
     id: Option<String>,
+    /// "Computer", "Smartphone", "Speaker": what kind of device, never its name.
+    #[serde(rename = "type", default)]
+    kind: String,
     #[serde(default)]
     is_active: bool,
     #[serde(default)]
@@ -1375,10 +1414,7 @@ mod tests {
                 t.contains("search 200") && t.contains("player/play 204"),
                 "{t}"
             );
-            assert!(
-                t.contains("devices idle") && t.contains("player 204"),
-                "{t}"
-            );
+            assert!(t.contains(":idle") && t.contains("player 204"), "{t}");
             assert!(
                 !t.contains("acc-") && !t.contains("ref-"),
                 "no token in the trace"
@@ -1674,5 +1710,60 @@ mod tests {
         sp.note("a".into());
         sp.note("a".into());
         assert!(sp.last_trace().ends_with("a ×2"));
+    }
+
+    #[tokio::test]
+    async fn a_device_that_takes_the_song_and_stays_silent_does_not_get_the_app_started() {
+        // Spotify says 204 to every play, a device is listed, but the player never plays.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let (sp, _) = connected(Arc::new(|r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("PUT", _) => (204, String::new()),
+                ("GET", "/v1/me/player/devices") => (
+                    200,
+                    r#"{"devices":[{"id":"pc1","type":"Computer","is_active":true}]}"#.into(),
+                ),
+                ("GET", "/v1/me/player") => (
+                    200,
+                    r#"{"is_playing":false,"device":{"name":"PC","is_active":true},"progress_ms":0}"#
+                        .into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let out = sp
+            .play_found_or_start_app(
+                &found(),
+                &CancellationToken::new(),
+                Arc::new(move || {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    true
+                }),
+                Duration::from_secs(8),
+            )
+            .await;
+        assert_eq!(out, Err(SpotifyError::NotPlaying));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a running app is not started again"
+        );
+        // The trace says what the player reported, in yes and no only, and what kind of device.
+        let t = sp.last_trace();
+        assert!(
+            t.contains("player playing=false track=false progress=0s device=active"),
+            "{t}"
+        );
+        assert!(t.contains("Computer:active"), "{t}");
+        assert!(
+            !t.contains("PC"),
+            "a device's name never goes into the trace: {t}"
+        );
     }
 }
