@@ -1,5 +1,5 @@
-import { Canvas, useFrame } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { useEffect, useMemo, useRef } from "react";
 import {
   AdditiveBlending,
   type Blending,
@@ -16,7 +16,7 @@ import {
 import type { AssistantPhase } from "../../types/generated/AssistantPhase";
 import type { MicState } from "../../types/generated/MicState";
 import type { OrbMotion } from "../Orb2D";
-import { energyFor, sparkle } from "./motion";
+import { ease, energyFor, FLARE_SECONDS, flareAt, sparkle } from "./motion";
 import { contextLostHandler } from "./renderer";
 
 /**
@@ -82,6 +82,22 @@ function Scene({ phase, mic, motion, still, dark }: SceneProps) {
   const core = useRef<Mesh>(null);
   const rings = useRef<(Mesh | null)[]>([]);
   const sparks = useRef<Points>(null);
+  // The energy eased toward its target, and when the state last changed (for the flare).
+  const smooth = useRef(0);
+  const changedAt = useRef(Number.NEGATIVE_INFINITY);
+  const { clock, invalidate } = useThree();
+  const first = useRef(true);
+  // A change of state (not the first one on screen) flares once and renders a few frames to let
+  // it play out, even when idle, where the scene otherwise renders on demand and then stops.
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    if (still) return;
+    changedAt.current = clock.getElapsedTime();
+    invalidate();
+  }, [phase, mic, still, clock, invalidate]);
 
   const error = phase === "error";
   const muted = mic === "muted";
@@ -107,10 +123,21 @@ function Scene({ phase, mic, motion, still, dark }: SceneProps) {
 
   // Runs only on rendered frames: every frame while animating, one per change
   // when idle (frameloop "demand"), none while hidden.
-  useFrame((state) => {
+  useFrame((state, delta) => {
     const t = still ? 0 : state.clock.getElapsedTime();
-    const e = still ? 0 : energyFor(motion, t);
+    const target = still ? 0 : energyFor(motion, t);
+    const flare = still ? 0 : flareAt(t - changedAt.current);
+    smooth.current = still ? 0 : ease(smooth.current, target, delta);
+    const e = Math.min(1, smooth.current + 0.65 * flare);
     if (!group.current || !core.current) return;
+    // Idle renders on demand, so keep asking for frames only until the change has settled.
+    if (
+      !still &&
+      (t - changedAt.current < FLARE_SECONDS ||
+        Math.abs(smooth.current - target) > 0.005)
+    ) {
+      state.invalidate();
+    }
 
     // The whole hologram shivers and swells with the energy: the jolt.
     const jolt =

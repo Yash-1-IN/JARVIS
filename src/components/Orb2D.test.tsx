@@ -52,4 +52,30 @@ describe("Orb2D", () => {
     rerender(<Orb2D phase="idle" mic="muted" />);
     expect(container.querySelector(".orb-mark")).not.toBeNull();
   });
+
+  it("flares once for each change of state, and not when it first appears", () => {
+    const { container, rerender } = render(
+      <Orb2D phase="idle" mic="standby" />,
+    );
+    expect(container.querySelector(".orb-flare")).toBeNull();
+    rerender(<Orb2D phase="thinking" mic="standby" />);
+    const first = container.querySelector(".orb-flare");
+    expect(first).not.toBeNull();
+    // The same state again is not a change.
+    rerender(<Orb2D phase="thinking" mic="standby" />);
+    expect(container.querySelector(".orb-flare")).toBe(first);
+    // A new change is a new element, which restarts the animation.
+    rerender(<Orb2D phase="idle" mic="standby" />);
+    const second = container.querySelector(".orb-flare");
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+    // A mic change flares too.
+    rerender(<Orb2D phase="idle" mic="muted" />);
+    expect(container.querySelector(".orb-flare")).not.toBe(second);
+    // The flare never adds text or changes what screen readers get.
+    expect(container.querySelector(".orb")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(container.textContent).toBe("");
+  });
 });

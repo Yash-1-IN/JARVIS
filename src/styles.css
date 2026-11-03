@@ -334,6 +334,37 @@ kbd {
   color: var(--muted);
 }
 
+/* A reply eases in, and a soft bar marks the end of text that is still arriving. The bar is
+   drawn with CSS, not text, so a screen reader never reads it. */
+.chat-reply {
+  animation: reply-in 0.18s ease-out;
+}
+
+.chat-reply-streaming > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 0.15em;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  opacity: 0.7;
+  animation: reply-caret 1s steps(2, start) infinite;
+}
+
+@keyframes reply-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes reply-caret {
+  to {
+    opacity: 0;
+  }
+}
+
 .chat-form {
   position: sticky;
   bottom: 0;
@@ -468,9 +499,37 @@ kbd {
   }
 }
 
+/* One flare when the state changes: the core swells and brightens, then settles. */
+.orb-flare {
+  transform-origin: 50px 50px;
+  animation: orb-flare 0.9s ease-out 1;
+}
+
+@keyframes orb-flare {
+  0% {
+    transform: scale(1.45);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.orb-core,
+.orb-ring {
+  transition: opacity 0.4s ease;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .orb * {
+  .orb *,
+  .chat-reply,
+  .chat-reply-streaming > :last-child::after {
     animation: none !important;
+    transition: none !important;
+  }
+  .chat-reply-streaming > :last-child::after {
+    opacity: 0.7;
   }
 }
 
