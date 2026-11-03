@@ -312,12 +312,25 @@ impl Tool for MusicPlay {
         if cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
-        let p = ctx
-            .ports
-            .music
-            .play(&q, &cancel)
-            .await
-            .map_err(play_error)?;
+        let p = match ctx.ports.music.play(&q, &cancel).await {
+            Ok(p) => p,
+            Err(e) => {
+                let mut te = play_error(e);
+                // Failures that Spotify caused say what it answered, so they can be diagnosed.
+                if matches!(
+                    e,
+                    PlayError::Failed | PlayError::NotPlaying | PlayError::NoDevice
+                ) && let Some(d) = ctx.ports.music.detail()
+                {
+                    te = match te {
+                        ToolError::Failed(m) => ToolError::Failed(format!("{m} ({d})")),
+                        ToolError::Unavailable(m) => ToolError::Unavailable(format!("{m} ({d})")),
+                        other => other,
+                    };
+                }
+                return Err(te);
+            }
+        };
         let (title, artist) = (clean_for_summary(&p.title), clean_for_summary(&p.artist));
         let by = if artist.is_empty() {
             String::new()

@@ -1265,6 +1265,10 @@ struct FakePlayer {
     answer: Result<PlayedTrack, PlayError>,
 }
 
+impl FakePlayer {
+    const DETAIL: &'static str = "search 200 · play 204 · player 204";
+}
+
 #[async_trait::async_trait]
 impl MusicPlayer for FakePlayer {
     async fn play(
@@ -1274,6 +1278,9 @@ impl MusicPlayer for FakePlayer {
     ) -> Result<PlayedTrack, PlayError> {
         self.asked.lock().unwrap().push(words.to_owned());
         self.answer.clone()
+    }
+    fn detail(&self) -> Option<String> {
+        Some(Self::DETAIL.into())
     }
 }
 
@@ -1361,4 +1368,27 @@ async fn music_play_says_plainly_what_is_missing() {
     // With no Spotify wired at all, it is "not connected", not a crash.
     let r = run(&MusicPlay, json!({ "query": "x" }), &ctx_for(&[])).await;
     assert!(matches!(r, Err(ToolError::Unavailable(_))), "{r:?}");
+}
+
+#[tokio::test]
+async fn a_failed_play_ends_with_what_spotify_answered_but_a_refusal_does_not() {
+    for (e, shows) in [
+        (PlayError::NotPlaying, true),
+        (PlayError::Failed, true),
+        (PlayError::NoDevice, true),
+        (PlayError::Forbidden, false),
+        (PlayError::NoResults, false),
+        (PlayError::NotConnected, false),
+    ] {
+        let p = player(Err(e));
+        let r = run(&MusicPlay, json!({ "query": "x" }), &player_ctx(&p)).await;
+        let msg = match r {
+            Err(ToolError::Unavailable(m) | ToolError::Failed(m)) => m,
+            other => panic!("{e:?}: {other:?}"),
+        };
+        assert_eq!(msg.contains(FakePlayer::DETAIL), shows, "{e:?}: {msg}");
+        if shows {
+            assert!(msg.ends_with(&format!("({})", FakePlayer::DETAIL)), "{msg}");
+        }
+    }
 }
