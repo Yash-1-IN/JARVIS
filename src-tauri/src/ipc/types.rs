@@ -312,6 +312,21 @@ pub struct SettingsPatch {
     pub auto_allow_medium: Option<bool>,
 }
 
+/// Where the Spotify sign-in stands (music step 2, issue #68). It never carries a token, a code or
+/// any secret: those stay in the Rust backend and the OS keychain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpotifyStatus {
+    /// The Client ID the person pasted from their Spotify developer app: 32 characters, 0-9 and
+    /// a-f. Not a secret (the sign-in uses PKCE, so there is no client secret). `null` until set.
+    pub client_id: Option<String>,
+    /// True once the person has signed in and the backend holds a token.
+    pub connected: bool,
+    /// The Spotify account's display name while connected. Shown to the person only.
+    pub display_name: Option<String>,
+}
+
 /// Distinguishes a missing field (`None`) from an explicit `null` (`Some(None)`).
 fn tri_state<'de, D>(d: D) -> Result<Option<Option<u64>>, D::Error>
 where
@@ -719,5 +734,30 @@ mod tests {
         assert_eq!(msg["role"], "tool");
         let h: HistorySettings = serde_json::from_str(r#"{"retention":"off"}"#).unwrap();
         assert_eq!(h.retention, HistoryRetention::Off);
+    }
+
+    #[test]
+    fn spotify_status_is_camel_case_and_carries_no_secret_fields() {
+        let s = SpotifyStatus {
+            client_id: Some("0123456789abcdef0123456789abcdef".into()),
+            connected: false,
+            display_name: None,
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "clientId": "0123456789abcdef0123456789abcdef",
+                "connected": false,
+                "displayName": null
+            })
+        );
+        let back: SpotifyStatus = serde_json::from_value(v).unwrap();
+        assert_eq!(back, s);
+        // Exactly these three fields: a token or code can never be added by accident.
+        assert_eq!(
+            serde_json::to_value(&s).unwrap().as_object().unwrap().len(),
+            3
+        );
     }
 }

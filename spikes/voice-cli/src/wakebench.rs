@@ -13,9 +13,9 @@ use std::io::BufRead;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-struct Take {
-    label: &'static str,
-    samples: Vec<f32>,
+pub(crate) struct Take {
+    pub(crate) label: &'static str,
+    pub(crate) samples: Vec<f32>,
 }
 
 fn parse_list(s: &str) -> Result<Vec<f32>, String> {
@@ -75,15 +75,8 @@ fn wait_enter(prompt: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn run(a: &Args) -> Result<(), String> {
-    let dir = PathBuf::from(a.need("kws-dir")?);
-    let keywords = a.need("keywords")?;
-    let thresholds = parse_list(a.get("thresholds").unwrap_or("0.25,0.15,0.1,0.05,0.02"))?;
-    let scores = parse_list(a.get("scores").unwrap_or("1,2,3,4"))?;
-    if thresholds.is_empty() || scores.is_empty() {
-        return Err("--thresholds and --scores need at least one number".into());
-    }
-
+/// Records (or loads) the positive takes and the background used by both wake-word benchmarks.
+pub(crate) fn collect(a: &Args) -> Result<(Vec<Take>, Vec<f32>), String> {
     let mut positives: Vec<Take> = Vec::new();
     let mut negative: Vec<f32> = Vec::new();
     if a.get("pos-wav").is_some() || a.get("neg-wav").is_some() {
@@ -136,6 +129,19 @@ pub fn run(a: &Args) -> Result<(), String> {
         negative = record_for(&cap, neg_secs);
         println!("   recorded\n");
     }
+    Ok((positives, negative))
+}
+
+pub fn run(a: &Args) -> Result<(), String> {
+    let dir = PathBuf::from(a.need("kws-dir")?);
+    let keywords = a.need("keywords")?;
+    let thresholds = parse_list(a.get("thresholds").unwrap_or("0.25,0.15,0.1,0.05,0.02"))?;
+    let scores = parse_list(a.get("scores").unwrap_or("1,2,3,4"))?;
+    if thresholds.is_empty() || scores.is_empty() {
+        return Err("--thresholds and --scores need at least one number".into());
+    }
+
+    let (positives, negative) = collect(a)?;
     let neg_secs = negative.len() as f64 / 16_000.0;
     let n_jarvis = positives.iter().filter(|t| t.label != "hey jarvis").count();
     let n_hey = positives.iter().filter(|t| t.label == "hey jarvis").count();

@@ -110,6 +110,37 @@ the background minute. Lower threshold and higher score make it more sensitive: 
 more false triggers. Audio is kept in memory only. Without a microphone: `--pos-wav A.wav,B.wav
 --neg-wav C.wav`.
 
+## openWakeWord "hey Jarvis" (personal use only, decision D-23)
+
+A model trained for exactly this phrase, tried next to the general one above. **Licence:
+CC BY-NC-SA 4.0 (openWakeWord by David Scripka): private, non-commercial use by the two developers only.
+Never commit, bundle or publish these files.** The downloaded `voice-cli` zip already holds the ONNX
+Runtime library it needs (`onnxruntime.dll`, `libonnxruntime.so` or `libonnxruntime.dylib`).
+
+```powershell
+mkdir models\oww -ErrorAction SilentlyContinue
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$b = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
+foreach ($f in "melspectrogram.onnx","embedding_model.onnx","hey_jarvis_v0.1.onnx") { Invoke-WebRequest "$b/$f" -OutFile "models\oww\$f" }
+dir models\oww
+
+.\voice-cli.exe oww-bench --models-dir models\oww --device Realtek --takes 20 --neg-seconds 300
+```
+
+Same recording session as `wake-bench`: say "Jarvis" / "hey Jarvis" alternately, then record background.
+This model is built for **"hey Jarvis"**, so judge it on the "hey" column; plain "Jarvis" scores low by
+design. You also get the peak score of every take. Live listening: `.\voice-cli.exe oww --models-dir models\oww`.
+Check without a microphone: `oww-selftest --models-dir models\oww --tts-dir models\kokoro10` (the voice
+speaks the phrases and the detector scores them).
+
+**The voice and its own name.** Kokoro silently skips words missing from its dictionary, including
+"Jarvis". Add one line to the voice folder (D-24) and it says it correctly:
+
+```powershell
+$line = "jarvis " + [char]0x02A4 + " " + [char]0x02C8 + " " + [char]0x0251 + " " + [char]0x02D0 + " v " + [char]0x026A + " s`n"
+[IO.File]::WriteAllText("$PWD\models\kokoro10\lexicon-zz-jarvis.txt", $line, (New-Object Text.UTF8Encoding $false))
+```
+
 ## What to paste back (issue #14 or the S1 report)
 
 1. Your laptop model, CPU, RAM, Windows version, microphone and speakers.

@@ -5,6 +5,8 @@
 mod audio;
 mod bench;
 mod models;
+mod oww;
+mod owwcmd;
 mod wakebench;
 
 use sherpa_onnx::{GenerationConfig, LinearResampler, Wave};
@@ -30,6 +32,10 @@ voice-cli <command> [--flag value ...]
              [--thresholds 0.25,0.15,0.1,0.05,0.02] [--scores 1,2,3,4] [--device NAME]
              you say the phrase 10 times and make 60 s of background noise once; every
              sensitivity setting is tried on the same audio (or --pos-wav A.wav,B.wav --neg-wav C.wav)
+  oww-bench  --models-dir DIR [--takes 10] [--neg-seconds 60] [--thresholds 0.7,0.5,0.4,0.3,0.2,0.1,0.05]
+             openWakeWord 'hey jarvis' (personal use only, see D-23): same recording session as wake-bench
+  oww        --models-dir DIR [--threshold 0.5] [--seconds 120] [--device NAME]    listen live
+  oww-selftest --models-dir DIR --tts-dir DIR [--sid 26] [--phrases 'a|b|c']   speak phrases, print the scores (no mic)
   say        --tts-dir DIR --text TEXT [--sid 24,26] [--speed 1.0] [--threads 2] [--provider cpu] [--no-play]
              (ids are for Kokoro v1.0: 24 bm_daniel, 25 bm_fable, 26 bm_george, 27 bm_lewis)
 ";
@@ -384,17 +390,21 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let result = match argv.first().map(String::as_str) {
         Some("devices") => audio::list_devices(),
-        Some(cmd @ ("mic" | "transcribe" | "listen" | "wake" | "say" | "bench" | "wake-bench")) => {
-            Args::parse(&argv[1..]).and_then(|a| match cmd {
-                "mic" => cmd_mic(&a),
-                "transcribe" => cmd_transcribe(&a),
-                "listen" => cmd_listen(&a),
-                "wake" => cmd_wake(&a),
-                "bench" => bench::run(&a),
-                "wake-bench" => wakebench::run(&a),
-                _ => cmd_say(&a),
-            })
-        }
+        Some(
+            cmd @ ("mic" | "transcribe" | "listen" | "wake" | "say" | "bench" | "wake-bench"
+            | "oww-bench" | "oww" | "oww-selftest"),
+        ) => Args::parse(&argv[1..]).and_then(|a| match cmd {
+            "mic" => cmd_mic(&a),
+            "transcribe" => cmd_transcribe(&a),
+            "listen" => cmd_listen(&a),
+            "wake" => cmd_wake(&a),
+            "bench" => bench::run(&a),
+            "wake-bench" => wakebench::run(&a),
+            "oww-bench" => owwcmd::bench(&a),
+            "oww" => owwcmd::live(&a),
+            "oww-selftest" => owwcmd::selftest(&a),
+            _ => cmd_say(&a),
+        }),
         _ => Err(USAGE.into()),
     };
     if let Err(e) = result {

@@ -37,10 +37,41 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release
+      - name: ONNX Runtime library (Linux and macOS; the oww commands load it from next to the program)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          V=1.31.0
+          B=https://github.com/microsoft/onnxruntime/releases/download/v$V
+          mkdir -p ort
+          case "$RUNNER_OS" in
+            Linux)
+              curl -sSL -o ort/p.tgz "$B/onnxruntime-linux-x64-$V.tgz"
+              tar xzf ort/p.tgz -C ort
+              cp "ort/onnxruntime-linux-x64-$V/lib/libonnxruntime.so.$V" target/release/libonnxruntime.so ;;
+            macOS)
+              curl -sSL -o ort/p.tgz "$B/onnxruntime-osx-arm64-$V.tgz"
+              tar xzf ort/p.tgz -C ort
+              cp "ort/onnxruntime-osx-arm64-$V/lib/libonnxruntime.$V.dylib" target/release/libonnxruntime.dylib ;;
+          esac
+      - name: ONNX Runtime library (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $V = "1.31.0"
+          New-Item -ItemType Directory -Force ort | Out-Null
+          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$V/onnxruntime-win-x64-$V.zip" -OutFile ort/p.zip
+          Expand-Archive ort/p.zip -DestinationPath ort -Force
+          Copy-Item "ort/onnxruntime-win-x64-$V/lib/onnxruntime.dll", "ort/onnxruntime-win-x64-$V/lib/onnxruntime_providers_shared.dll" -Destination target/release/
       - uses: actions/upload-artifact@v4
         with:
           name: voice-cli-${{ runner.os }}
           path: |
             spikes/voice-cli/target/release/voice-cli
             spikes/voice-cli/target/release/voice-cli.exe
+            spikes/voice-cli/target/release/libonnxruntime.so
+            spikes/voice-cli/target/release/libonnxruntime.dylib
+            spikes/voice-cli/target/release/onnxruntime.dll
+            spikes/voice-cli/target/release/onnxruntime_providers_shared.dll
           if-no-files-found: error

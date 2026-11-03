@@ -9,5 +9,8 @@ description = "Throwaway spike A-08: cpal capture -> sherpa-onnx KWS/VAD/STT/TTS
 [dependencies]
 sherpa-onnx = "2.0.1"
 cpal = "0.15"
+# openWakeWord's three ONNX models need a second runtime next to sherpa-onnx; the library is
+# loaded at run time from Microsoft's official onnxruntime build (no build-time download).
+ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-31"] }
 
 [workspace]
