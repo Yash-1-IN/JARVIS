@@ -43,6 +43,36 @@ Developer C may change:
 - A small, named piece of code that an issue assigns to it explicitly, such as the `spawn_blocking`
   change for the SQLite calls.
 
+## Implementation work under an agreed spec (the second tier)
+
+Beyond the lane above, Developer C can take **well-specified implementation work**, so Developers A and
+B spend their time on design, contracts, security and review. The split is:
+
+- **Developer A or B writes the spec in the issue first**: the interface or function signatures, the
+  behaviour, the errors, the limits, and the tests that must pass (ideally already written as failing
+  tests or a test list). A contract change, if one is needed, goes in its own PR first, as always.
+- **Developer C implements to that spec** on a `c/<issue>-<slug>` branch, makes the listed tests pass, and
+  adds the ones the spec missed.
+- **The spec's author reviews the PR line by line** and merges. A PR that changes behaviour the spec did
+  not describe is sent back, not merged.
+
+This is for work where the design is already decided and the risk is in typing it correctly. Candidates
+(each only after its spec is written, and only the ones not marked held):
+
+| Work | Spec comes from | Note |
+| --- | --- | --- |
+| Voice model manager: manifest, resumable download, SHA-256 check, import from folder (M3 step 2) | `docs/m3-plan.md`, §6.8 | Network and file writes: reviewer checks paths and checksums first. |
+| Audio device listing, input and output (M3 step 3, the listing part) | contract `voice_devices` | The capture callback itself stays with A (no allocation or locks in it). |
+| Linux media control through MPRIS (`platform/media.rs`) | the Windows and macOS adapters | Fixed calls only; no text from the user or model in a command. |
+| Mic permission detection per OS (M3 step 3) | spec §6.7 | Reports `granted`, `denied` or `unknown` only. |
+| History and memory plumbing, migrations, retention purge (M5) | spec §8, the M5 acceptance list | A reviews migrations and deletion tests carefully. |
+| Settings → pieces of mock transport parity for new commands | `docs/contracts.md` | Mock only in `src/transport/mock/` with the MOCK badge; B reviews. |
+| Boilerplate for new tools after the first is reviewed | the tool contract, spec §9.5 | **Held**: each tool needs a risk level and gateway tests decided by A. |
+
+Held until the owner and Developer A agree otherwise: the permission gateway, the approval logic, the
+OAuth sign-in and token storage, the wake-word and capture pipeline's real-time parts, and anything
+that touches a secret. Those stay with A and B.
+
 ## Off limits (ask Developer A or B)
 
 | Path or topic | Why |
@@ -86,7 +116,8 @@ Ordered by value. None touches the off-limits list.
 ## Not for Developer C
 
 Anything that decides product behaviour, the wake-word engine, licences, the product name (D-19), or
-how permissions work. Those are the owner's and the two developers' decisions.
+how permissions work. Those are the owner's and the two developers' decisions. Developer C implements
+decisions; it does not make them.
 
 ## How it starts
 
@@ -95,3 +126,5 @@ how permissions work. Those are the owner's and the two developers' decisions.
 3. A follow-up PR adds Developer C to `CLAUDE.md` (Ownership and Workflow) and `.github/CODEOWNERS`.
 4. Developer C is given one starter task at a time, and the first PR is reviewed line by line to check
    the process works before the next task starts.
+5. The second tier (implementation under a spec) opens only after two starter PRs have merged without
+   rework, so we know how well it follows the rules before it touches the app's code.
