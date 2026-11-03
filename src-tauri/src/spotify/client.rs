@@ -1008,10 +1008,10 @@ mod tests {
         assert_eq!(search_queries("bohemian rhapsody"), ["bohemian rhapsody"]);
         // Quotes in the words cannot break out of the filter.
         let q = search_queries("a\" artist:\"evil by b");
-        assert!(
-            !q[0].contains("evil\"") && q[0].matches('"').count() == 4,
-            "{q:?}"
-        );
+        // The words' own quotes are removed, so only the filter's four remain and the
+        // injected text stays inside the track value.
+        assert_eq!(q[0].matches('"').count(), 4, "{q:?}");
+        assert!(q[0].starts_with("track:\"a artist:evil\""), "{q:?}");
     }
 
     fn playing_answer(state: &'static str, searches: Arc<Mutex<Vec<String>>>) -> Answer {
