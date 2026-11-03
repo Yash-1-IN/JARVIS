@@ -11,6 +11,7 @@ import type { PingResponse } from "../types/generated/PingResponse";
 import type { Settings } from "../types/generated/Settings";
 import type { SettingsPatch } from "../types/generated/SettingsPatch";
 import type { Snapshot } from "../types/generated/Snapshot";
+import type { SpotifyStatus } from "../types/generated/SpotifyStatus";
 import type { TurnInterrupted } from "../types/generated/TurnInterrupted";
 import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
 import type { UsageSummary } from "../types/generated/UsageSummary";
@@ -82,6 +83,19 @@ export interface Transport {
   onActivity(listener: ActivityListener): () => void;
   /** `usage.updated` broadcasts. Returns an unsubscribe function. */
   onUsage(listener: UsageListener): () => void;
+
+  // Spotify (music step 2, docs/contracts.md "Spotify"). No call ever returns a token.
+  /** Contract `spotify_status`: the saved Client ID and whether a sign-in is held. */
+  spotifyStatus(): Promise<SpotifyStatus>;
+  /** Contract `spotify_set_client_id`: `null` or an empty string clears it. */
+  spotifySetClientId(clientId: string | null): Promise<SpotifyStatus>;
+  /**
+   * Contract `spotify_connect`: opens the sign-in in the system browser and resolves when
+   * it ends, times out (about 3 minutes) or is cancelled by `spotifyDisconnect`.
+   */
+  spotifyConnect(): Promise<SpotifyStatus>;
+  /** Contract `spotify_disconnect`: forgets the sign-in and cancels one in progress. */
+  spotifyDisconnect(): Promise<SpotifyStatus>;
 
   // Memory (M5, docs/contracts.md "Memory and history").
   /** Contract `memory_list`: newest change first, optionally one status only. */
