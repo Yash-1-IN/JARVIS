@@ -7,8 +7,8 @@ use crate::intelligence::pricing::{DEFAULT_MODEL, PriceTable};
 use crate::intelligence::provider::{ModelProvider, ProviderError};
 use crate::intelligence::spend::{Caps, Day, SpendMeter};
 use crate::ipc::types::{
-    AllowedApp, ApiKeyStatus, ErrorCode, JarvisError, KeyStorage, Settings, SettingsPatch,
-    SpotifyStatus, UsageSummary,
+    AllowedApp, ApiKeyStatus, AudioDevices, ErrorCode, JarvisError, KeyStorage, MicPermission,
+    Settings, SettingsPatch, SpotifyStatus, UsageSummary, VoiceSettingsPatch, VoiceStatus,
 };
 use crate::orchestrator::turn::TurnConfig;
 use crate::platform::keychain::{ApiKeyVault, KeyStorage as VaultStorage, SecretString};
@@ -109,6 +109,8 @@ impl Services {
                 | SettingsError::BadFolder(_)
                 | SettingsError::UnknownApp(_)
                 | SettingsError::BadClientId
+                | SettingsError::BadVoice
+                | SettingsError::BadDevice
                 | SettingsError::TooMany => err(ErrorCode::Internal, &e.to_string(), false),
                 SettingsError::Save => {
                     err(ErrorCode::Internal, "Settings could not be saved.", true)
@@ -162,6 +164,62 @@ impl Services {
     /// The `spotify_disconnect` command. Safe to call when not connected.
     pub fn spotify_disconnect(&self) -> SpotifyStatus {
         self.spotify_status()
+    }
+
+    /// The `voice_status` command. Nothing is installed and the microphone has not been asked,
+    /// because the voice pipeline is not built yet; the saved choices are real.
+    pub fn voice_status(&self) -> VoiceStatus {
+        let v = self.settings.get().voice;
+        VoiceStatus {
+            wake_enabled: v.wake_enabled,
+            follow_up_window: v.follow_up_window,
+            voice: v.voice,
+            available_voices: Vec::new(),
+            input_device: v.input_device,
+            mic_permission: MicPermission::Unknown,
+            models_ready: false,
+        }
+    }
+
+    /// The `voice_settings_set` command. Validates, saves, and returns the new status.
+    pub fn voice_settings_set(
+        &self,
+        patch: &VoiceSettingsPatch,
+    ) -> Result<VoiceStatus, JarvisError> {
+        self.settings.apply_voice(patch).map_err(|e| match e {
+            SettingsError::Save => err(ErrorCode::Internal, "Settings could not be saved.", true),
+            other => err(ErrorCode::Internal, &other.to_string(), false),
+        })?;
+        Ok(self.voice_status())
+    }
+
+    /// The `voice_devices` command. Empty until audio capture is built.
+    pub fn voice_devices(&self) -> AudioDevices {
+        AudioDevices {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+
+    /// The `voice_capture_start` command (push to talk, key down). Not built yet.
+    pub fn voice_capture_start(&self) -> Result<(), JarvisError> {
+        Err(err(
+            ErrorCode::Internal,
+            "Voice input is not built yet.",
+            false,
+        ))
+    }
+
+    /// The `voice_capture_stop` command (key up, or cancel). Safe when nothing is capturing.
+    pub fn voice_capture_stop(&self) {}
+
+    /// The `voice_models_install` command. Not built yet.
+    pub fn voice_models_install(&self) -> Result<VoiceStatus, JarvisError> {
+        Err(err(
+            ErrorCode::Internal,
+            "Installing the voice models is not built yet.",
+            false,
+        ))
     }
 
     /// The `apps_installed` command: the only ids `settings_set` will accept.
@@ -491,5 +549,62 @@ mod tests {
         let s = svc.spotify_disconnect();
         assert!(!s.connected);
         assert_eq!(s.client_id.as_deref(), Some(SPOTIFY_ID));
+    }
+
+    #[test]
+    fn voice_status_starts_with_the_wake_word_off_and_follows_the_saved_choices() {
+        let svc = services("http://127.0.0.1:1");
+        let s = svc.voice_status();
+        assert!(!s.wake_enabled && s.follow_up_window && !s.models_ready);
+        assert_eq!(s.mic_permission, MicPermission::Unknown);
+        assert!(s.available_voices.is_empty() && s.input_device.is_none());
+        let s = svc
+            .voice_settings_set(&VoiceSettingsPatch {
+                wake_enabled: Some(true),
+                input_device: Some(Some("Realtek".into())),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(s.wake_enabled);
+        assert_eq!(s.input_device.as_deref(), Some("Realtek"));
+        assert_eq!(svc.voice_status(), s);
+        // The voice choices are not part of Settings, so the settings contract is untouched.
+        assert!(
+            !serde_json::to_string(&svc.settings())
+                .unwrap()
+                .contains("wakeEnabled")
+        );
+    }
+
+    #[test]
+    fn a_bad_voice_setting_is_an_internal_error_that_never_echoes_the_input() {
+        let svc = services("http://127.0.0.1:1");
+        let bad = "../../etc/passwd";
+        let e = svc
+            .voice_settings_set(&VoiceSettingsPatch {
+                voice: Some(bad.into()),
+                wake_enabled: Some(true),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert!(!e.message.contains(bad) && !e.retryable);
+        assert!(!svc.voice_status().wake_enabled, "nothing changed");
+    }
+
+    #[test]
+    fn voice_input_and_model_install_say_they_are_not_built_yet() {
+        let svc = services("http://127.0.0.1:1");
+        assert_eq!(
+            svc.voice_capture_start().unwrap_err().message,
+            "Voice input is not built yet."
+        );
+        assert_eq!(
+            svc.voice_models_install().unwrap_err().code,
+            ErrorCode::Internal
+        );
+        svc.voice_capture_stop(); // safe when nothing is capturing
+        let d = svc.voice_devices();
+        assert!(d.inputs.is_empty() && d.outputs.is_empty());
     }
 }

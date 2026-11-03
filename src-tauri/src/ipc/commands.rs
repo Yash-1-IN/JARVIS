@@ -229,6 +229,47 @@ pub fn spotify_disconnect(svc: tauri::State<'_, Arc<Services>>) -> SpotifyStatus
     svc.spotify_disconnect()
 }
 
+/// Voice settings and state (M3). Text and settings only, never audio.
+#[tauri::command]
+pub fn voice_status(svc: tauri::State<'_, Arc<Services>>) -> VoiceStatus {
+    svc.voice_status()
+}
+
+/// Saves voice choices. A bad value is an `INTERNAL` error with a plain message and nothing changes.
+#[tauri::command]
+pub fn voice_settings_set(
+    svc: tauri::State<'_, Arc<Services>>,
+    patch: VoiceSettingsPatch,
+) -> Result<VoiceStatus, JarvisError> {
+    svc.voice_settings_set(&patch)
+}
+
+/// The microphones and speakers the system has, by name. Empty until audio capture is built.
+#[tauri::command]
+pub fn voice_devices(svc: tauri::State<'_, Arc<Services>>) -> AudioDevices {
+    svc.voice_devices()
+}
+
+/// Push to talk, key down: starts listening. Until voice input is built this answers with an error.
+#[tauri::command]
+pub fn voice_capture_start(svc: tauri::State<'_, Arc<Services>>) -> Result<(), JarvisError> {
+    svc.voice_capture_start()
+}
+
+/// Push to talk, key up, or cancel. Safe to call when nothing is capturing.
+#[tauri::command]
+pub fn voice_capture_stop(svc: tauri::State<'_, Arc<Services>>) {
+    svc.voice_capture_stop()
+}
+
+/// Downloads the voice models (progress arrives as `voice.models_progress`). Not built yet.
+#[tauri::command]
+pub fn voice_models_install(
+    svc: tauri::State<'_, Arc<Services>>,
+) -> Result<VoiceStatus, JarvisError> {
+    svc.voice_models_install()
+}
+
 /// Apps that can be put on the allow-list (`AllowedApp.id` is what is checked and launched).
 #[tauri::command]
 pub fn apps_installed(svc: tauri::State<'_, Arc<Services>>) -> Vec<AllowedApp> {
