@@ -35,8 +35,16 @@ fn opener(url: &str) -> Command {
 
 #[cfg(target_os = "windows")]
 fn opener(url: &str) -> Command {
-    // rundll32 takes the address as one argument; `cmd /c start` would let `&` end it.
-    let mut c = Command::new("rundll32.exe");
+    // rundll32 takes the address as one argument; `cmd /c start` would let `&` end it. It is
+    // run by its full path under the Windows folder, so a program of that name in the current
+    // folder or on the path is never run instead.
+    let exe = match std::env::var_os("SystemRoot") {
+        Some(root) => std::path::Path::new(&root)
+            .join("System32")
+            .join("rundll32.exe"),
+        None => "rundll32.exe".into(),
+    };
+    let mut c = Command::new(exe);
     c.arg("url.dll,FileProtocolHandler").arg(url);
     c
 }
