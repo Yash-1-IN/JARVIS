@@ -172,17 +172,6 @@ impl SpotifyPlayer {
         tokio::task::spawn_blocking(move || crate::platform::media::play_spotify_uri(&uri)).await
     }
 
-    /// The Spotify app plays a song inside its album. In the background, once it has started, ask
-    /// Spotify to play just that song from where it is, so the album does not carry on and
-    /// Spotify's own "similar music" does instead. Never delays the reply.
-    fn one_song(&self, found: &Found) {
-        if found.context {
-            return;
-        }
-        let (spotify, found) = (self.spotify.clone(), found.clone());
-        tokio::spawn(async move { spotify.keep_to_one_song(&found).await });
-    }
-
     fn here(f: &Found) -> super::ports::PlayedTrack {
         super::ports::PlayedTrack {
             title: f.title.clone(),
@@ -205,7 +194,6 @@ impl SpotifyPlayer {
         self.spotify
             .note(format!("this computer's Spotify app: {first:?}"));
         if matches!(first, Ok(Ok(()))) {
-            self.one_song(&found);
             return Ok(Self::here(&found));
         }
         // Closed, and this computer can start it (macOS; Windows is handled below): the person
@@ -229,7 +217,6 @@ impl SpotifyPlayer {
                 )
                 .await;
                 if taken {
-                    self.one_song(&found);
                     return Ok(Self::here(&found));
                 }
                 self.spotify

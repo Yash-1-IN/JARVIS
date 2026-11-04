@@ -882,48 +882,6 @@ impl Spotify {
 
     /// Searches for tracks. (A search for the account's country, `market=from_token`, is refused
     /// with 403 for apps in Spotify's development mode, so the plain search is the one used.)
-    /// After the Spotify app on this computer started a song (it plays it inside its album), asks
-    /// Spotify's servers to play **just that song** from where it is now. Spotify's autoplay then
-    /// carries on with similar music when it ends, instead of the album's next track. It changes
-    /// nothing unless the same song is playing right then (the person may have paused or skipped
-    /// meanwhile), and any failure is ignored: the song already plays. Not for playlists or artists.
-    pub async fn keep_to_one_song(&self, found: &Found) {
-        if found.context {
-            return;
-        }
-        // Give the player a moment to show the song.
-        let wait = Duration::from_millis(self.ep.settle_ms.saturating_mul(7) / 10);
-        tokio::time::sleep(wait).await;
-        let Ok((status, text)) = self
-            .call(reqwest::Method::GET, "/v1/me/player", &[], None)
-            .await
-        else {
-            return;
-        };
-        if !status.is_success() {
-            return;
-        }
-        let Ok(state) = serde_json::from_str::<PlayerState>(&text) else {
-            return;
-        };
-        let same = state
-            .item
-            .as_ref()
-            .and_then(|i| i.uri.as_deref())
-            .is_some_and(|u| u == found.uri);
-        if !state.is_playing || !same {
-            return;
-        }
-        let body = serde_json::json!({
-            "uris": [found.uri],
-            "position_ms": state.progress_ms.unwrap_or(0)
-        })
-        .to_string();
-        let _ = self
-            .call(reqwest::Method::PUT, "/v1/me/player/play", &[], Some(body))
-            .await;
-    }
-
     async fn search_all(&self, query: &str, types: &str) -> Result<Search, SpotifyError> {
         self.get_json(
             "/v1/search",
@@ -2753,66 +2711,5 @@ mod tests {
         // A plain song title is still that song.
         let f = sp.find("bohemian rhapsody", &c).await.unwrap();
         assert!(!f.context && f.title == "Bohemian Rhapsody");
-    }
-
-    fn player_answer(playing: bool, uri: &'static str, puts: Arc<Mutex<Vec<String>>>) -> Answer {
-        Arc::new(move |r| {
-            let path = r.target.split('?').next().unwrap();
-            match (r.method.as_str(), path) {
-                ("POST", "/api/token") => (
-                    200,
-                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
-                ),
-                ("GET", "/v1/me/player") => (
-                    200,
-                    format!(
-                        r#"{{"is_playing":{playing},"progress_ms":4321,"item":{{"uri":"{uri}"}},"device":{{"name":"Mac","is_active":true}}}}"#
-                    ),
-                ),
-                ("PUT", "/v1/me/player/play") => {
-                    puts.lock().unwrap().push(r.body.clone());
-                    (204, String::new())
-                }
-                _ => (404, "{}".into()),
-            }
-        })
-    }
-
-    #[tokio::test]
-    async fn after_the_app_starts_a_song_only_that_song_is_asked_for_from_where_it_is() {
-        let uri = "spotify:track:4u7EnebtmKWzUH433cf5Qv";
-        // The same song is playing: play just it, from the current position.
-        let puts = Arc::new(Mutex::new(vec![]));
-        let (sp, _) = connected(player_answer(true, uri, puts.clone())).await;
-        sp.keep_to_one_song(&found()).await;
-        assert_eq!(
-            *puts.lock().unwrap(),
-            [r#"{"position_ms":4321,"uris":["spotify:track:4u7EnebtmKWzUH433cf5Qv"]}"#]
-        );
-        // Paused meanwhile: nothing is started again.
-        let puts = Arc::new(Mutex::new(vec![]));
-        let (sp, _) = connected(player_answer(false, uri, puts.clone())).await;
-        sp.keep_to_one_song(&found()).await;
-        assert!(puts.lock().unwrap().is_empty(), "a pause is not undone");
-        // A different song is playing (skipped meanwhile): left alone.
-        let puts = Arc::new(Mutex::new(vec![]));
-        let (sp, _) = connected(player_answer(
-            true,
-            "spotify:track:0000000000000000000000",
-            puts.clone(),
-        ))
-        .await;
-        sp.keep_to_one_song(&found()).await;
-        assert!(puts.lock().unwrap().is_empty());
-        // A playlist or an artist is not made into one song.
-        let puts = Arc::new(Mutex::new(vec![]));
-        let (sp, _) = connected(player_answer(true, uri, puts.clone())).await;
-        let mut ctx = found();
-        ctx.context = true;
-        sp.keep_to_one_song(&ctx).await;
-        assert!(puts.lock().unwrap().is_empty());
-        // Spotify unreachable: no panic, no change.
-        let (sp, _) = connected(Arc::new(|_| (500, "{}".into()))).await;
-        sp.keep_to_one_song(&found()).await;
     }
 }
