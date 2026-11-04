@@ -1345,18 +1345,12 @@ struct Artist {
     name: String,
 }
 #[derive(Deserialize)]
-struct ItemRef {
-    /// The current track's address (public); compared, never logged.
-    #[serde(default)]
-    uri: Option<String>,
-}
-#[derive(Deserialize)]
 struct PlayerState {
     is_playing: bool,
     device: Option<PlayerDevice>,
     /// Whether Spotify has a current track at all (the track itself is never read or logged).
     #[serde(default)]
-    item: Option<ItemRef>,
+    item: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     progress_ms: Option<u64>,
 }
