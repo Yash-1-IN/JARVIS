@@ -326,7 +326,7 @@ impl Tool for MusicPlay {
         "music.play"
     }
     fn description(&self) -> &'static str {
-        "Play a song, artist or album on the person's Spotify. Give the words to search for, for example \"Bohemian Rhapsody Queen\". It plays the best match. Needs Spotify Premium and the Spotify app open."
+        "Play a song, an artist, or music for a mood or genre on the person's Spotify. Give the words to search for: a song (\"Bohemian Rhapsody Queen\"), an artist (\"Queen\"), or a kind of music (\"21 savage mix\", \"sad songs\"). It plays the best match; an artist or a mood plays a playlist. Needs Spotify Premium; the Spotify app is started if it is closed."
     }
     fn input_schema(&self) -> Value {
         json!({

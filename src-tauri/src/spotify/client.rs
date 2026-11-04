@@ -808,17 +808,165 @@ impl Spotify {
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
         }
-        let mut hit = None;
-        for query in search_queries(&q) {
-            let items = self.search_tracks(&query).await?;
-            // The first result that can be played where this person is. The Spotify app clears
-            // its player when it is asked for a track it cannot play (reported on Windows).
+        let queries = search_queries(&q);
+        // "X by Y": the filtered search (track and artist) finds the right song far more often.
+        if queries.len() > 1 {
+            let items = self.search_tracks(&queries[0]).await?;
             if let Some(t) = items.into_iter().find(|t| t.is_playable != Some(false)) {
-                hit = Some(t);
-                break;
+                return self.track_found(t);
             }
         }
-        let track = hit.ok_or(SpotifyError::NoResults)?;
+        let words = words_of(&q);
+        // "21 savage mix", "chill vibes": a generic word at the end asks for a playlist.
+        if ends_with_generic_word(&words)
+            && let Some(f) = self.search_playlist(&q).await?
+        {
+            return Ok(f);
+        }
+        let s = self.search_all(&q, "track,artist").await?;
+        let tracks: Vec<Track> = s
+            .tracks
+            .map(|t| t.items)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .filter(|t| t.is_playable != Some(false))
+            .collect();
+        let artists: Vec<ArtistItem> = s
+            .artists
+            .map(|a| a.items)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .filter(|a| valid_id(&a.uri, "spotify:artist:"))
+            .collect();
+        let songs: Vec<(String, String)> = tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    t.artists
+                        .first()
+                        .map(|a| a.name.clone())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        let names: Vec<String> = artists.iter().map(|a| a.name.clone()).collect();
+        match choose_kind(&words, &songs, &names) {
+            Pick::Artist(i) => {
+                let a = artists.into_iter().nth(i).ok_or(SpotifyError::Failed)?;
+                self.note("search: an artist".into());
+                Ok(Found {
+                    uri: a.uri,
+                    title: clip(&a.name, 120),
+                    artist: String::new(),
+                    album_uri: None,
+                    context: true,
+                })
+            }
+            Pick::Track(i) => {
+                let t = tracks.into_iter().nth(i).ok_or(SpotifyError::Failed)?;
+                self.track_found(t)
+            }
+            // Words that describe a mood or a kind of music and match no song well: a playlist.
+            Pick::Playlist => {
+                if let Some(f) = self.search_playlist(&q).await? {
+                    return Ok(f);
+                }
+                let t = tracks.into_iter().next().ok_or(SpotifyError::NoResults)?;
+                self.track_found(t)
+            }
+        }
+    }
+
+    /// Searches for tracks. (A search for the account's country, `market=from_token`, is refused
+    /// with 403 for apps in Spotify's development mode, so the plain search is the one used.)
+    /// After the Spotify app on this computer started a song (it plays it inside its album), asks
+    /// Spotify's servers to play **just that song** from where it is now. Spotify's autoplay then
+    /// carries on with similar music when it ends, instead of the album's next track. It changes
+    /// nothing unless the same song is playing right then (the person may have paused or skipped
+    /// meanwhile), and any failure is ignored: the song already plays. Not for playlists or artists.
+    pub async fn keep_to_one_song(&self, found: &Found) {
+        if found.context {
+            return;
+        }
+        // Give the player a moment to show the song.
+        let wait = Duration::from_millis(self.ep.settle_ms.saturating_mul(7) / 10);
+        tokio::time::sleep(wait).await;
+        let Ok((status, text)) = self
+            .call(reqwest::Method::GET, "/v1/me/player", &[], None)
+            .await
+        else {
+            return;
+        };
+        if !status.is_success() {
+            return;
+        }
+        let Ok(state) = serde_json::from_str::<PlayerState>(&text) else {
+            return;
+        };
+        let same = state
+            .item
+            .as_ref()
+            .and_then(|i| i.uri.as_deref())
+            .is_some_and(|u| u == found.uri);
+        if !state.is_playing || !same {
+            return;
+        }
+        let body = serde_json::json!({
+            "uris": [found.uri],
+            "position_ms": state.progress_ms.unwrap_or(0)
+        })
+        .to_string();
+        let _ = self
+            .call(reqwest::Method::PUT, "/v1/me/player/play", &[], Some(body))
+            .await;
+    }
+
+    async fn search_all(&self, query: &str, types: &str) -> Result<Search, SpotifyError> {
+        self.get_json(
+            "/v1/search",
+            &[("q", query), ("type", types), ("limit", "5")],
+        )
+        .await
+    }
+
+    async fn search_tracks(&self, query: &str) -> Result<Vec<Track>, SpotifyError> {
+        let s = self.search_all(query, "track").await?;
+        Ok(s.tracks
+            .map(|t| t.items)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
+    /// The first playlist the search returns whose address is well formed. (The account's own
+    /// playlists and others' public ones; Spotify's own algorithmic playlists are not in a search
+    /// for apps like this one.)
+    async fn search_playlist(&self, query: &str) -> Result<Option<Found>, SpotifyError> {
+        let s = self.search_all(query, "playlist").await?;
+        let first = s
+            .playlists
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .find(|p| valid_id(&p.uri, "spotify:playlist:"));
+        Ok(first.map(|p| {
+            self.note("search: a playlist".into());
+            Found {
+                uri: p.uri,
+                title: clip(&p.name, 120),
+                artist: String::new(),
+                album_uri: None,
+                context: true,
+            }
+        }))
+    }
+
+    fn track_found(&self, track: Track) -> Result<Found, SpotifyError> {
         if !track.uri.starts_with("spotify:track:") || track.uri.len() > 64 {
             return Err(SpotifyError::Failed);
         }
@@ -837,7 +985,7 @@ impl Spotify {
             .album
             .map(|a| a.uri)
             .filter(|u| valid_id(u, "spotify:album:"));
-        let found = Found {
+        Ok(Found {
             context: false,
             album_uri,
             uri: track.uri,
@@ -846,20 +994,7 @@ impl Spotify {
                 track.artists.first().map(|a| a.name.as_str()).unwrap_or(""),
                 120,
             ),
-        };
-        Ok(found)
-    }
-
-    /// Searches for tracks. (A search for the account's country, `market=from_token`, is refused
-    /// with 403 for apps in Spotify's development mode, so the plain search is the one used.)
-    async fn search_tracks(&self, query: &str) -> Result<Vec<Track>, SpotifyError> {
-        let s: Search = self
-            .get_json(
-                "/v1/search",
-                &[("q", query), ("type", "track"), ("limit", "5")],
-            )
-            .await?;
-        Ok(s.tracks.items)
+        })
     }
 
     async fn play_found_steps(
@@ -1128,6 +1263,64 @@ pub fn best_playlist_match(said: &str, names: &[&str]) -> Option<usize> {
     best.map(|(_, _, i)| usize::MAX - i)
 }
 
+/// Words that, as the last word, ask for a playlist and not one song.
+const PLAYLIST_WORDS: &[&str] = &[
+    "mix",
+    "playlist",
+    "vibes",
+    "vibe",
+    "radio",
+    "hits",
+    "mood",
+    "music",
+    "songs",
+    "beats",
+    "essentials",
+    "tracks",
+];
+
+fn ends_with_generic_word(words: &[String]) -> bool {
+    words.len() >= 2
+        && words
+            .last()
+            .is_some_and(|w| PLAYLIST_WORDS.contains(&w.as_str()))
+}
+
+/// What a plain request most likely means.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pick {
+    Track(usize),
+    Artist(usize),
+    Playlist,
+}
+
+/// Chooses between a song, an artist and a playlist from what the search returned. The whole
+/// request equal to an artist's name means the artist ("play queen"); a song whose title and artist
+/// cover at least half of a longer request means that song; a short request (one or two words) is a
+/// song if there is one; anything else ("melancholic midnight swim") is a mood: a playlist.
+pub fn choose_kind(words: &[String], songs: &[(String, String)], artists: &[String]) -> Pick {
+    let said = words.join(" ");
+    if let Some(i) = artists.iter().position(|a| words_of(a).join(" ") == said) {
+        return Pick::Artist(i);
+    }
+    let Some((title, artist)) = songs.first() else {
+        return Pick::Playlist;
+    };
+    if words.len() <= 2 {
+        return Pick::Track(0);
+    }
+    let have: Vec<String> = words_of(title)
+        .into_iter()
+        .chain(words_of(artist))
+        .collect();
+    let covered = words.iter().filter(|w| have.contains(w)).count();
+    if covered * 2 >= words.len() {
+        Pick::Track(0)
+    } else {
+        Pick::Playlist
+    }
+}
+
 fn map_status(s: StatusCode) -> SpotifyError {
     match s {
         StatusCode::UNAUTHORIZED => SpotifyError::NotConnected,
@@ -1150,11 +1343,29 @@ struct PlaylistItem {
 
 #[derive(Deserialize)]
 struct Search {
-    tracks: Items,
+    #[serde(default)]
+    tracks: Option<Items>,
+    #[serde(default)]
+    artists: Option<ArtistItems>,
+    #[serde(default)]
+    playlists: Option<PlaylistItems>,
+}
+#[derive(Deserialize)]
+struct ArtistItems {
+    items: Vec<Option<ArtistItem>>,
+}
+#[derive(Deserialize)]
+struct ArtistItem {
+    uri: String,
+    name: String,
+}
+#[derive(Deserialize)]
+struct PlaylistItems {
+    items: Vec<Option<PlaylistItem>>,
 }
 #[derive(Deserialize)]
 struct Items {
-    items: Vec<Track>,
+    items: Vec<Option<Track>>,
 }
 #[derive(Deserialize)]
 struct Track {
@@ -1176,12 +1387,18 @@ struct Artist {
     name: String,
 }
 #[derive(Deserialize)]
+struct ItemRef {
+    /// The current track's address (public); compared, never logged.
+    #[serde(default)]
+    uri: Option<String>,
+}
+#[derive(Deserialize)]
 struct PlayerState {
     is_playing: bool,
     device: Option<PlayerDevice>,
     /// Whether Spotify has a current track at all (the track itself is never read or logged).
     #[serde(default)]
-    item: Option<serde::de::IgnoredAny>,
+    item: Option<ItemRef>,
     #[serde(default)]
     progress_ms: Option<u64>,
 }
@@ -2425,5 +2642,177 @@ mod tests {
             put.body,
             r#"{"context_uri":"spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"}"#
         );
+    }
+
+    fn w(s: &str) -> Vec<String> {
+        words_of(s)
+    }
+    fn song(t: &str, a: &str) -> (String, String) {
+        (t.into(), a.into())
+    }
+
+    #[test]
+    fn a_request_is_an_artist_a_song_or_a_mood() {
+        let songs = [song("Midnight City", "M83")];
+        // The whole request is an artist's name.
+        assert_eq!(
+            choose_kind(
+                &w("Queen"),
+                &[song("Bohemian Rhapsody", "Queen")],
+                &["Queen".into()]
+            ),
+            Pick::Artist(0)
+        );
+        // A short request is a song when there is one ("breaking dishes" for "Breakin' Dishes").
+        assert_eq!(
+            choose_kind(
+                &w("breaking dishes"),
+                &[song("Breakin' Dishes", "Rihanna")],
+                &[]
+            ),
+            Pick::Track(0)
+        );
+        // A longer request the song's title and artist cover is that song.
+        assert_eq!(
+            choose_kind(
+                &w("shut up and drive"),
+                &[song("Shut Up and Drive", "Rihanna")],
+                &[]
+            ),
+            Pick::Track(0)
+        );
+        // A mood that shares one word with a song is not that song.
+        assert_eq!(
+            choose_kind(&w("melancholic midnight swim"), &songs, &[]),
+            Pick::Playlist
+        );
+        // Nothing found as a song or artist: a playlist.
+        assert_eq!(choose_kind(&w("rainy day jazz"), &[], &[]), Pick::Playlist);
+        assert!(ends_with_generic_word(&w("21 savage mix")));
+        assert!(ends_with_generic_word(&w("white girl music")));
+        assert!(!ends_with_generic_word(&w("music sounds better with you")));
+        assert!(
+            !ends_with_generic_word(&w("mix")),
+            "a single word is a title, not a request"
+        );
+    }
+
+    fn search_answer(log_types: Arc<Mutex<Vec<String>>>) -> Answer {
+        Arc::new(move |r| {
+            let path = r.target.split('?').next().unwrap();
+            match (r.method.as_str(), path) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/search") => {
+                    let ty = r
+                        .target
+                        .split("type=")
+                        .nth(1)
+                        .unwrap_or("")
+                        .split('&')
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+                    log_types.lock().unwrap().push(ty.clone());
+                    if ty == "playlist" {
+                        (200, r#"{"playlists":{"items":[null,{"uri":"spotify:playlist:bad","name":"x"},{"uri":"spotify:playlist:37i9dQZF1DXcBWIGoYBM5M","name":"21 Savage Mix"}]}}"#.into())
+                    } else if r.target.contains("queen") && !r.target.contains("bohemian") {
+                        (200, r#"{"tracks":{"items":[{"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv","name":"Bohemian Rhapsody","artists":[{"name":"Queen"}]}]},"artists":{"items":[{"uri":"spotify:artist:1dfeR4HaWDbWqFHLkxsg1d","name":"Queen"}]}}"#.into())
+                    } else if r.target.contains("midnight") {
+                        (200, r#"{"tracks":{"items":[{"uri":"spotify:track:6GyFP1nfCDB8lbD2bG0Hq9","name":"Midnight City","artists":[{"name":"M83"}]}]},"artists":{"items":[]}}"#.into())
+                    } else {
+                        (200, SEARCH_HIT.into())
+                    }
+                }
+                _ => (404, "{}".into()),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn a_mix_a_mood_and_an_artist_are_playlists_and_artists_not_one_song() {
+        let types = Arc::new(Mutex::new(vec![]));
+        let (sp, _) = connected(search_answer(types.clone())).await;
+        let c = CancellationToken::new();
+        // "... mix": a playlist, found without searching songs first.
+        let f = sp.find("21 savage mix", &c).await.unwrap();
+        assert_eq!((f.title.as_str(), f.context), ("21 Savage Mix", true));
+        assert_eq!(f.uri, "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M");
+        assert_eq!(*types.lock().unwrap(), ["playlist"]);
+        // The artist's name: the artist, played as a whole.
+        let f = sp.find("queen", &c).await.unwrap();
+        assert_eq!((f.title.as_str(), f.context), ("Queen", true));
+        assert_eq!(f.uri, "spotify:artist:1dfeR4HaWDbWqFHLkxsg1d");
+        // A mood that matches a song badly: songs and artists are searched, then a playlist.
+        types.lock().unwrap().clear();
+        let f = sp.find("melancholic midnight swim", &c).await.unwrap();
+        assert!(f.context && f.title == "21 Savage Mix", "{f:?}");
+        assert_eq!(*types.lock().unwrap(), ["track%2Cartist", "playlist"]);
+        // A plain song title is still that song.
+        let f = sp.find("bohemian rhapsody", &c).await.unwrap();
+        assert!(!f.context && f.title == "Bohemian Rhapsody");
+    }
+
+    fn player_answer(playing: bool, uri: &'static str, puts: Arc<Mutex<Vec<String>>>) -> Answer {
+        Arc::new(move |r| {
+            let path = r.target.split('?').next().unwrap();
+            match (r.method.as_str(), path) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/me/player") => (
+                    200,
+                    format!(
+                        r#"{{"is_playing":{playing},"progress_ms":4321,"item":{{"uri":"{uri}"}},"device":{{"name":"Mac","is_active":true}}}}"#
+                    ),
+                ),
+                ("PUT", "/v1/me/player/play") => {
+                    puts.lock().unwrap().push(r.body.clone());
+                    (204, String::new())
+                }
+                _ => (404, "{}".into()),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn after_the_app_starts_a_song_only_that_song_is_asked_for_from_where_it_is() {
+        let uri = "spotify:track:4u7EnebtmKWzUH433cf5Qv";
+        // The same song is playing: play just it, from the current position.
+        let puts = Arc::new(Mutex::new(vec![]));
+        let (sp, _) = connected(player_answer(true, uri, puts.clone())).await;
+        sp.keep_to_one_song(&found()).await;
+        assert_eq!(
+            *puts.lock().unwrap(),
+            [r#"{"position_ms":4321,"uris":["spotify:track:4u7EnebtmKWzUH433cf5Qv"]}"#]
+        );
+        // Paused meanwhile: nothing is started again.
+        let puts = Arc::new(Mutex::new(vec![]));
+        let (sp, _) = connected(player_answer(false, uri, puts.clone())).await;
+        sp.keep_to_one_song(&found()).await;
+        assert!(puts.lock().unwrap().is_empty(), "a pause is not undone");
+        // A different song is playing (skipped meanwhile): left alone.
+        let puts = Arc::new(Mutex::new(vec![]));
+        let (sp, _) = connected(player_answer(
+            true,
+            "spotify:track:0000000000000000000000",
+            puts.clone(),
+        ))
+        .await;
+        sp.keep_to_one_song(&found()).await;
+        assert!(puts.lock().unwrap().is_empty());
+        // A playlist or an artist is not made into one song.
+        let puts = Arc::new(Mutex::new(vec![]));
+        let (sp, _) = connected(player_answer(true, uri, puts.clone())).await;
+        let mut ctx = found();
+        ctx.context = true;
+        sp.keep_to_one_song(&ctx).await;
+        assert!(puts.lock().unwrap().is_empty());
+        // Spotify unreachable: no panic, no change.
+        let (sp, _) = connected(Arc::new(|_| (500, "{}".into()))).await;
+        sp.keep_to_one_song(&found()).await;
     }
 }

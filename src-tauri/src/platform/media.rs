@@ -430,14 +430,16 @@ mod applescript {
         uri.strip_prefix("spotify:track:").is_some_and(id22)
     }
 
-    /// What may be passed to the play script: a track, a playlist (`spotify:playlist:` and 22
-    /// letters or digits), or a person's liked songs (`spotify:user:<id>:collection`, the id made
+    /// What may be passed to the play script: a track, a playlist or an artist (`spotify:playlist:` or
+    /// `spotify:artist:` and 22 letters or digits), or a person's liked songs (`spotify:user:<id>:collection`, the id made
     /// of letters, digits, dots, dashes and underscores). Nothing else.
     pub fn valid_play_uri(uri: &str) -> bool {
         if valid_track_uri(uri) {
             return true;
         }
-        if uri.strip_prefix("spotify:playlist:").is_some_and(id22) {
+        if uri.strip_prefix("spotify:playlist:").is_some_and(id22)
+            || uri.strip_prefix("spotify:artist:").is_some_and(id22)
+        {
             return true;
         }
         uri.strip_prefix("spotify:user:")
@@ -845,6 +847,8 @@ mod play_track_tests {
     fn playlists_and_liked_songs_are_accepted_and_nothing_near_them() {
         assert!(valid_play_uri("spotify:track:4u7EnebtmKWzUH433cf5Qv"));
         assert!(valid_play_uri("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"));
+        assert!(valid_play_uri("spotify:artist:1Xyo4u8uXC1ZmMpatF05PJ"));
+        assert!(!valid_play_uri("spotify:artist:1Xyo4u8uXC1ZmMpatF05"));
         assert!(valid_play_uri("spotify:user:some.user-name_1:collection"));
         for bad in [
             "",
