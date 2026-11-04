@@ -42,6 +42,11 @@ sysinfo = { version = "0.40.1", default-features = false, features = ["system", 
 starship-battery = "0.12.0"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 tauri-plugin-dialog = "2"
+# Microphone capture, audio/cpal_backend.rs (Apache-2.0). Same major version the S1 spike proved on all three OSes.
+cpal = "0.15"
+# Lock-free single-producer single-consumer ring between the audio callback and the voice thread,
+# audio/capture.rs (MIT OR Apache-2.0, no dependencies): nothing allocates or locks in the callback.
+rtrb = "0.4"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
