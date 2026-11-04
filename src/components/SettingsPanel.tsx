@@ -8,6 +8,7 @@ import {
 } from "react";
 import { describeError } from "../state/errors";
 import { DisplaySettings } from "./DisplaySettings";
+import { MusicSettings } from "./MusicSettings";
 import { PolicySettings } from "./PolicySettings";
 import {
   capToInput,
@@ -69,6 +70,7 @@ const TABS = {
   account: "Key and model",
   spending: "Spending",
   permissions: "Permissions",
+  music: "Music",
   display: "Display",
 } as const;
 type TabId = keyof typeof TABS;
@@ -341,6 +343,7 @@ export function SettingsPanel({ transport }: { transport: Transport }) {
                 busy={busy}
               />
             ),
+            music: <MusicSettings transport={transport} />,
             display: <DisplaySettings />,
           }}
         </SettingsTabs>

@@ -1684,7 +1684,7 @@ async fn sentences_that_only_mention_music_words_still_go_to_the_model() {
         vec![],
         media.clone(),
     );
-    let s = ask_fresh(&t, "play me something by the Beatles").await;
+    let s = ask_fresh(&t, "I want to play some chess tonight").await;
     assert_eq!(s.text(), "cloud");
     assert_eq!(*lock(&fake.calls), 1);
     assert!(lock(&media.acts).is_empty());

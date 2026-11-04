@@ -200,33 +200,60 @@ pub fn settings_set(
     Ok(out)
 }
 
-/// The Spotify sign-in state (music step 2). Never carries a token.
+/// Runs a call that reads or writes the OS keychain on a blocking thread. macOS can show a
+/// permission question while a keychain item is read; that must not freeze the window, which a
+/// plain command (it runs on the main thread) would.
+async fn off_main<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, JarvisError> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|_| JarvisError {
+            code: ErrorCode::Internal,
+            message: "Spotify settings could not be read. Try again.".into(),
+            retryable: true,
+            request_id: None,
+        })
+}
+
+/// The Spotify sign-in state (music step 2). Never carries a token. Off the main thread because
+/// it reads the keychain; it fails only if that task cannot run.
 #[tauri::command]
-pub fn spotify_status(svc: tauri::State<'_, Arc<Services>>) -> SpotifyStatus {
-    svc.spotify_status()
+pub async fn spotify_status(
+    svc: tauri::State<'_, Arc<Services>>,
+) -> Result<SpotifyStatus, JarvisError> {
+    let svc = svc.inner().clone();
+    off_main(move || svc.spotify_status()).await
 }
 
 /// Saves the Client ID from the person's Spotify developer app (32 characters, 0-9 and a-f);
 /// `null` or an empty string clears it. A bad value is an `INTERNAL` error with a plain message.
 #[tauri::command]
-pub fn spotify_set_client_id(
+pub async fn spotify_set_client_id(
     svc: tauri::State<'_, Arc<Services>>,
     client_id: Option<String>,
 ) -> Result<SpotifyStatus, JarvisError> {
-    svc.set_spotify_client_id(client_id.as_deref())
+    // Changing the Client ID also forgets the old sign-in, which clears the keychain.
+    let svc = svc.inner().clone();
+    off_main(move || svc.set_spotify_client_id(client_id.as_deref())).await?
 }
 
-/// Starts the sign-in in the person's browser and returns when it ends. Until the sign-in is
-/// built this answers with an error saying so.
+/// Starts the sign-in in the person's browser and returns when it ends, times out (about 3
+/// minutes) or is cancelled by `spotify_disconnect`. Async, so the window stays responsive.
 #[tauri::command]
-pub fn spotify_connect(svc: tauri::State<'_, Arc<Services>>) -> Result<SpotifyStatus, JarvisError> {
-    svc.spotify_connect()
+pub async fn spotify_connect(
+    svc: tauri::State<'_, Arc<Services>>,
+) -> Result<SpotifyStatus, JarvisError> {
+    svc.spotify_connect().await
 }
 
 /// Forgets the Spotify sign-in (and cancels one in progress). Safe to call when not connected.
 #[tauri::command]
-pub fn spotify_disconnect(svc: tauri::State<'_, Arc<Services>>) -> SpotifyStatus {
-    svc.spotify_disconnect()
+pub async fn spotify_disconnect(
+    svc: tauri::State<'_, Arc<Services>>,
+) -> Result<SpotifyStatus, JarvisError> {
+    let svc = svc.inner().clone();
+    off_main(move || svc.spotify_disconnect()).await
 }
 
 /// Voice settings and state (M3). Text and settings only, never audio.

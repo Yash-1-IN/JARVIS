@@ -16,6 +16,7 @@ import type { PingResponse } from "../types/generated/PingResponse";
 import type { Settings } from "../types/generated/Settings";
 import type { SettingsPatch } from "../types/generated/SettingsPatch";
 import type { Snapshot } from "../types/generated/Snapshot";
+import type { SpotifyStatus } from "../types/generated/SpotifyStatus";
 import type { TurnInterrupted } from "../types/generated/TurnInterrupted";
 import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
 import type { UsageSummary } from "../types/generated/UsageSummary";
@@ -147,6 +148,22 @@ export class TauriTransport implements Transport {
 
   setHistorySettings(settings: HistorySettings): Promise<HistorySettings> {
     return invoke<HistorySettings>("history_settings_set", { settings });
+  }
+
+  spotifyStatus(): Promise<SpotifyStatus> {
+    return invoke<SpotifyStatus>("spotify_status");
+  }
+
+  spotifySetClientId(clientId: string | null): Promise<SpotifyStatus> {
+    return invoke<SpotifyStatus>("spotify_set_client_id", { clientId });
+  }
+
+  spotifyConnect(): Promise<SpotifyStatus> {
+    return invoke<SpotifyStatus>("spotify_connect");
+  }
+
+  spotifyDisconnect(): Promise<SpotifyStatus> {
+    return invoke<SpotifyStatus>("spotify_disconnect");
   }
 
   pickFolder(): Promise<string | null> {

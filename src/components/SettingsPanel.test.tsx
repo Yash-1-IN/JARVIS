@@ -132,6 +132,7 @@ describe("SettingsPanel", () => {
       "Key and model",
       "Spending",
       "Permissions",
+      "Music",
       "Display",
     ]);
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
@@ -150,8 +151,8 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("button", { name: "Save caps" })).toBeVisible();
 
     fireEvent.keyDown(tabs[1], { key: "End" });
-    expect(tabs[3]).toHaveFocus();
-    fireEvent.keyDown(tabs[3], { key: "ArrowRight" });
+    expect(tabs[4]).toHaveFocus();
+    fireEvent.keyDown(tabs[4], { key: "ArrowRight" });
     expect(tabs[0]).toHaveFocus();
   });
 

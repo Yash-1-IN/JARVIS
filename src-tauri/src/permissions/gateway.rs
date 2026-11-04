@@ -31,6 +31,7 @@ pub const ALPHA_TOOLS: &[&str] = &[
     "memory.propose",
     "music.control",
     "music.now_playing",
+    "music.play",
 ];
 
 /// Never available in alpha (spec §3.2, §9.4), whatever the model asks.

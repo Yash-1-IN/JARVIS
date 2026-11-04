@@ -207,6 +207,16 @@ describe("TauriTransport", () => {
     expect(invoke).toHaveBeenLastCalledWith("history_settings_set", {
       settings: { retention: "days7" },
     });
+    await t.spotifyStatus();
+    expect(invoke).toHaveBeenLastCalledWith("spotify_status");
+    await t.spotifySetClientId("0123456789abcdef0123456789abcdef");
+    expect(invoke).toHaveBeenLastCalledWith("spotify_set_client_id", {
+      clientId: "0123456789abcdef0123456789abcdef",
+    });
+    await t.spotifyConnect();
+    expect(invoke).toHaveBeenLastCalledWith("spotify_connect");
+    await t.spotifyDisconnect();
+    expect(invoke).toHaveBeenLastCalledWith("spotify_disconnect");
     await t.exportData();
     expect(invoke).toHaveBeenLastCalledWith("memory_export");
   });

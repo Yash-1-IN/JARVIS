@@ -17,6 +17,7 @@ import type { PingResponse } from "../../types/generated/PingResponse";
 import type { Settings } from "../../types/generated/Settings";
 import type { SettingsPatch } from "../../types/generated/SettingsPatch";
 import type { Snapshot } from "../../types/generated/Snapshot";
+import type { SpotifyStatus } from "../../types/generated/SpotifyStatus";
 import type { StopReason } from "../../types/generated/StopReason";
 import type { InterruptReason } from "../../types/generated/InterruptReason";
 import type { TurnInterrupted } from "../../types/generated/TurnInterrupted";
@@ -436,6 +437,49 @@ export class MockTransport implements Transport {
   ): Promise<HistorySettings> {
     this.history.setRetention(settings.retention);
     return { retention: this.history.retention };
+  }
+
+  // Spotify. MOCK: nothing is contacted; Connect "signs in" as a made-up account.
+  private spotify: SpotifyStatus = {
+    clientId: null,
+    connected: false,
+    displayName: null,
+  };
+
+  async spotifyStatus(): Promise<SpotifyStatus> {
+    return { ...this.spotify };
+  }
+
+  async spotifySetClientId(clientId: string | null): Promise<SpotifyStatus> {
+    const id = (clientId ?? "").trim().toLowerCase();
+    if (id !== "" && !/^[0-9a-f]{32}$/.test(id)) {
+      throw jarvisError(
+        "INTERNAL",
+        "That does not look like a Spotify Client ID (32 characters, 0-9 and a-f)",
+      );
+    }
+    const next = id === "" ? null : id;
+    if (next !== this.spotify.clientId) {
+      this.spotify = { clientId: next, connected: false, displayName: null };
+    }
+    return { ...this.spotify };
+  }
+
+  async spotifyConnect(): Promise<SpotifyStatus> {
+    if (this.spotify.clientId === null) {
+      throw jarvisError("INTERNAL", "Add your Spotify Client ID first.");
+    }
+    this.spotify = {
+      ...this.spotify,
+      connected: true,
+      displayName: "Mock listener",
+    };
+    return { ...this.spotify };
+  }
+
+  async spotifyDisconnect(): Promise<SpotifyStatus> {
+    this.spotify = { ...this.spotify, connected: false, displayName: null };
+    return { ...this.spotify };
   }
 
   /** The next `pickFolder` answer; `null` acts like Cancel. */

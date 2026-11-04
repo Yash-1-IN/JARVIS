@@ -52,6 +52,7 @@ fn convert_error(e: media::MediaError) -> MediaError {
         media::MediaError::Unsupported => MediaError::Unsupported,
         media::MediaError::NothingPlaying => MediaError::NothingPlaying,
         media::MediaError::Refused => MediaError::Refused,
+        media::MediaError::NotAllowed => MediaError::NotAllowed,
         media::MediaError::Failed => MediaError::Failed,
     }
 }
@@ -82,12 +83,112 @@ pub fn convert(s: &status::SystemStatus) -> SystemStatus {
 }
 
 /// The real adapters; `memory` is where proposed memories go.
-pub fn platform_ports(memory: Arc<dyn super::ports::MemoryInbox>) -> Ports {
+pub fn platform_ports(
+    memory: Arc<dyn super::ports::MemoryInbox>,
+    music: Arc<dyn super::ports::MusicPlayer>,
+) -> Ports {
     Ports {
         launcher: Arc::new(PlatformLauncher),
         status: Arc::new(PlatformStatus),
         memory,
         media: Arc::new(PlatformMedia),
+        music,
+    }
+}
+
+/// "Play X" through the Spotify client.
+pub struct SpotifyPlayer {
+    spotify: Arc<crate::spotify::client::Spotify>,
+    /// Starts the Spotify app on this computer (Windows) when Spotify lists no device. Answers
+    /// whether it was started.
+    start_app: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl SpotifyPlayer {
+    /// The real one: starts the installed Spotify app on Windows, does nothing elsewhere.
+    pub fn new(spotify: Arc<crate::spotify::client::Spotify>) -> Self {
+        Self {
+            spotify,
+            start_app: Arc::new(|| media::start_spotify_app().is_ok()),
+        }
+    }
+}
+
+/// Everything "play X" may take, as the `music.play` tool allows 30 s. Kept under it so a slow
+/// Spotify ends with a trace of what it answered, not a bare timeout.
+const PLAY_BUDGET: std::time::Duration = std::time::Duration::from_secs(26);
+
+#[async_trait::async_trait]
+impl super::ports::MusicPlayer for SpotifyPlayer {
+    fn detail(&self) -> Option<String> {
+        Some(self.spotify.last_trace()).filter(|t| !t.is_empty())
+    }
+
+    async fn play(
+        &self,
+        words: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<super::ports::PlayedTrack, super::ports::PlayError> {
+        use super::ports::PlayError as P;
+        use crate::spotify::client::SpotifyError as E;
+        let map = |e: E| match e {
+            E::NotConfigured | E::NotConnected => P::NotConnected,
+            E::Offline => P::Offline,
+            E::Forbidden => P::Forbidden,
+            E::NoDevice => P::NoDevice,
+            E::NoResults => P::NoResults,
+            E::NotPlaying => P::NotPlaying,
+            E::Cancelled => P::Cancelled,
+            E::TimedOut | E::Denied | E::PortBusy | E::Failed => P::Failed,
+        };
+        // Search first, then prefer the Spotify app on this computer when it is open: it
+        // starts at once and needs neither Premium nor a device from Spotify's servers.
+        let began = std::time::Instant::now();
+        let found = self.spotify.find(words, cancel).await.map_err(map)?;
+        let local = |uri: String| async move {
+            tokio::task::spawn_blocking(move || crate::platform::media::play_spotify_uri(&uri))
+                .await
+        };
+        let here = |f: &crate::spotify::client::Found| super::ports::PlayedTrack {
+            title: f.title.clone(),
+            artist: f.artist.clone(),
+            device: Some("the Spotify app on this computer".into()),
+        };
+        let first = local(found.uri.clone()).await;
+        self.spotify
+            .note(format!("this computer's Spotify app: {first:?}"));
+        if matches!(first, Ok(Ok(()))) {
+            return Ok(here(&found));
+        }
+        // Not open here (or not a Mac): ask Spotify's servers, which can wake a device.
+        // The account route also starts the Spotify app first when nothing is open (Windows).
+        let budget = PLAY_BUDGET
+            .saturating_sub(began.elapsed())
+            .max(std::time::Duration::from_secs(8));
+        let p = match self
+            .spotify
+            .play_found_or_start_app(&found, cancel, self.start_app.clone(), budget)
+            .await
+        {
+            Ok(p) => p,
+            // The servers took the song but could not start it. The cloud route may have
+            // just opened the app, so ask the app on this computer once more.
+            Err(e @ (E::NotPlaying | E::NoDevice)) => {
+                let again = local(found.uri.clone()).await;
+                self.spotify
+                    .note(format!("this computer's Spotify app again: {again:?}"));
+                if matches!(again, Ok(Ok(()))) {
+                    return Ok(here(&found));
+                }
+                return Err(map(e));
+            }
+            Err(e) => return Err(map(e)),
+        };
+        Ok(super::ports::PlayedTrack {
+            title: p.title,
+            artist: p.artist,
+            device: p.device,
+        })
     }
 }
 

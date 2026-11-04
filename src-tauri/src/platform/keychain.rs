@@ -14,7 +14,11 @@ use std::sync::Mutex;
 use zeroize::{Zeroize, Zeroizing};
 
 const SERVICE: &str = "dev.jarvis.app";
-const ACCOUNT: &str = "anthropic-api-key";
+/// The credential-store accounts JARVIS uses. One secret per account; a new
+/// secret gets a new constant here, never a shared slot.
+pub const ACCOUNT_API_KEY: &str = "anthropic-api-key";
+/// The Spotify refresh token (issue #68). Only the platform code reads it.
+pub const ACCOUNT_SPOTIFY: &str = "spotify-refresh-token";
 /// Longest key we accept; real keys are ~100 chars.
 const MAX_KEY_LEN: usize = 512;
 /// Keys shorter than this get no hint, so a hint never reveals a large share.
@@ -82,19 +86,21 @@ pub enum BackendError {
     Other(String),
 }
 
-pub struct OsKeychain;
+pub struct OsKeychain {
+    account: &'static str,
+}
 
 impl OsKeychain {
     /// `Ok` if the platform credential store initialised.
-    pub fn probe() -> Result<Self, BackendError> {
+    pub fn probe(account: &'static str) -> Result<Self, BackendError> {
         keyring::Entry::store_status()
             .as_ref()
-            .map(|_| Self)
+            .map(|_| Self { account })
             .map_err(|e| BackendError::Unavailable(e.to_string()))
     }
 
-    fn entry() -> Result<keyring::Entry, BackendError> {
-        keyring::Entry::new(SERVICE, ACCOUNT).map_err(map_keyring)
+    fn entry(&self) -> Result<keyring::Entry, BackendError> {
+        keyring::Entry::new(SERVICE, self.account).map_err(map_keyring)
     }
 }
 
@@ -110,7 +116,7 @@ fn map_keyring(e: keyring::Error) -> BackendError {
 
 impl SecretBackend for OsKeychain {
     fn get(&self) -> Result<Option<SecretString>, BackendError> {
-        match Self::entry()?.get_password() {
+        match self.entry()?.get_password() {
             Ok(mut s) => {
                 let key = SecretString::parse(&s).ok();
                 s.zeroize(); // the store's copy, not just ours
@@ -122,13 +128,13 @@ impl SecretBackend for OsKeychain {
     }
 
     fn set(&self, key: &SecretString) -> Result<(), BackendError> {
-        Self::entry()?
+        self.entry()?
             .set_password(key.expose())
             .map_err(map_keyring)
     }
 
     fn delete(&self) -> Result<(), BackendError> {
-        match Self::entry()?.delete_credential() {
+        match self.entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(map_keyring(e)),
         }
@@ -165,12 +171,19 @@ struct VaultInner {
 }
 
 impl ApiKeyVault {
-    /// Uses the OS store when it initialises, otherwise session-only.
+    /// The API key's vault: the OS store when it initialises, otherwise session-only.
     pub fn open() -> Self {
-        match OsKeychain::probe() {
+        Self::open_account(ACCOUNT_API_KEY)
+    }
+
+    /// A vault for one named secret (for example `ACCOUNT_SPOTIFY`). Every account
+    /// is its own slot, so deleting one never touches another.
+    pub fn open_account(account: &'static str) -> Self {
+        match OsKeychain::probe(account) {
             Ok(os) => Self::with_backend(Box::new(os), KeyStorage::Keychain),
             Err(e) => {
-                tracing::warn!(error = ?e, "OS credential store unavailable; API key will be session-only");
+                tracing::warn!(error = ?e, account,
+                    "OS credential store unavailable; secret will be session-only");
                 Self::with_backend(Box::<SessionMemory>::default(), KeyStorage::SessionOnly)
             }
         }
@@ -331,6 +344,33 @@ mod tests {
             serde_json::to_value(KeyStorage::Keychain).unwrap(),
             "keychain"
         );
+    }
+
+    #[test]
+    fn accounts_are_distinct_slots() {
+        assert_ne!(ACCOUNT_API_KEY, ACCOUNT_SPOTIFY);
+        let key =
+            ApiKeyVault::with_backend(Box::<SessionMemory>::default(), KeyStorage::SessionOnly);
+        let tok =
+            ApiKeyVault::with_backend(Box::<SessionMemory>::default(), KeyStorage::SessionOnly);
+        key.set(&SecretString::parse(KEY).unwrap()).unwrap();
+        assert_eq!(tok.get().unwrap(), None);
+        tok.set(&SecretString::parse("spotify-refresh-token-0123456789").unwrap())
+            .unwrap();
+        key.clear().unwrap();
+        assert!(
+            tok.get().unwrap().is_some(),
+            "clearing one must not clear the other"
+        );
+    }
+
+    #[test]
+    fn open_account_never_panics() {
+        let v = ApiKeyVault::open_account(ACCOUNT_SPOTIFY);
+        assert!(matches!(
+            v.storage(),
+            KeyStorage::Keychain | KeyStorage::SessionOnly
+        ));
     }
 
     #[test]

@@ -42,6 +42,8 @@ pub struct Services {
     /// `https://api.anthropic.com` in the app; a fake server in tests.
     pub api_base_url: String,
     pub installed: Arc<dyn InstalledApps>,
+    /// Spotify sign-in and "play X" (music step 2, issue #68).
+    pub spotify: Arc<crate::spotify::client::Spotify>,
 }
 
 fn err(code: ErrorCode, message: &str, retryable: bool) -> JarvisError {
@@ -120,20 +122,26 @@ impl Services {
         Ok(self.settings())
     }
 
-    /// The `spotify_status` command. No token is held yet (the sign-in is not built), so it
-    /// is never connected; it already reports the saved Client ID.
+    /// The `spotify_status` command: the saved Client ID and whether a sign-in is held.
     pub fn spotify_status(&self) -> SpotifyStatus {
+        let connected = self.spotify.connected();
         SpotifyStatus {
             client_id: self.settings.get().spotify_client_id,
-            connected: false,
-            display_name: None,
+            connected,
+            display_name: if connected {
+                self.spotify.display_name()
+            } else {
+                None
+            },
         }
     }
 
     /// The `spotify_set_client_id` command. A new or cleared Client ID also drops any sign-in
-    /// made with the old one (nothing to drop until the sign-in exists).
+    /// made with the old one.
     pub fn set_spotify_client_id(&self, id: Option<&str>) -> Result<SpotifyStatus, JarvisError> {
-        self.settings
+        let before = self.settings.get().spotify_client_id;
+        let after = self
+            .settings
             .set_spotify_client_id(id)
             .map_err(|e| match e {
                 SettingsError::Save => {
@@ -141,28 +149,43 @@ impl Services {
                 }
                 other => err(ErrorCode::Internal, &other.to_string(), false),
             })?;
+        if before != after {
+            self.spotify.disconnect();
+        }
         Ok(self.spotify_status())
     }
 
-    /// The `spotify_connect` command. The sign-in is not built yet, so after the Client ID check
-    /// it says so plainly instead of pretending.
-    pub fn spotify_connect(&self) -> Result<SpotifyStatus, JarvisError> {
-        if self.settings.get().spotify_client_id.is_none() {
-            return Err(err(
+    /// The `spotify_connect` command: the browser sign-in. Returns when it ends, times out or
+    /// is cancelled (by `spotify_disconnect`).
+    pub async fn spotify_connect(&self) -> Result<SpotifyStatus, JarvisError> {
+        use crate::spotify::client::SpotifyError as E;
+        self.spotify.connect().await.map_err(|e| match e {
+            E::NotConfigured => err(ErrorCode::Internal, "Add your Spotify Client ID first.", false),
+            E::Offline => err(ErrorCode::NetworkOffline, "Spotify could not be reached.", true),
+            E::TimedOut => err(
                 ErrorCode::Internal,
-                "Add your Spotify Client ID first.",
-                false,
-            ));
-        }
-        Err(err(
-            ErrorCode::Internal,
-            "Signing in to Spotify is not built yet.",
-            false,
-        ))
+                "The Spotify sign-in was not finished in time. Try again.",
+                true,
+            ),
+            E::Denied => err(ErrorCode::Internal, "Spotify sign-in was cancelled.", false),
+            E::Cancelled => err(ErrorCode::Internal, "Spotify sign-in was cancelled.", false),
+            E::PortBusy => err(
+                ErrorCode::Internal,
+                "Another program is using port 43597, which the Spotify sign-in needs. Close it and try again.",
+                true,
+            ),
+            _ => err(
+                ErrorCode::Internal,
+                "Signing in to Spotify failed. Check the Client ID and that http://127.0.0.1:43597/callback is its Redirect URI.",
+                true,
+            ),
+        })?;
+        Ok(self.spotify_status())
     }
 
     /// The `spotify_disconnect` command. Safe to call when not connected.
     pub fn spotify_disconnect(&self) -> SpotifyStatus {
+        self.spotify.disconnect();
         self.spotify_status()
     }
 
@@ -333,8 +356,10 @@ mod tests {
             .join(format!("jarvis-svc-{}", uuid::Uuid::now_v7()))
             .join("settings.json");
         let prices = Arc::new(PriceTable::embedded().unwrap());
+        let settings = Arc::new(SettingsStore::load(path, &prices));
+        let for_id = settings.clone();
         Services {
-            settings: Arc::new(SettingsStore::load(path, &prices)),
+            settings,
             prices,
             vault: Arc::new(ApiKeyVault::with_backend(
                 Box::<SessionMemory>::default(),
@@ -343,6 +368,19 @@ mod tests {
             spend: Arc::new(SpendMeter::new(Caps::default(), DAY)),
             api_base_url: api.into(),
             installed: Arc::new(FakeApps),
+            spotify: Arc::new(crate::spotify::client::Spotify::new(
+                crate::spotify::client::Endpoints {
+                    redirect_port: 0,
+                    settle_ms: 0,
+                    ..crate::spotify::client::Endpoints::real()
+                },
+                Arc::new(ApiKeyVault::with_backend(
+                    Box::<SessionMemory>::default(),
+                    VS::SessionOnly,
+                )),
+                Arc::new(move || for_id.get().spotify_client_id),
+                Arc::new(|_| false),
+            )),
         }
     }
 
@@ -526,17 +564,22 @@ mod tests {
         assert_eq!(svc.spotify_status().client_id.as_deref(), Some(SPOTIFY_ID));
     }
 
-    #[test]
-    fn connecting_says_what_is_missing_and_that_the_sign_in_is_not_built_yet() {
+    #[tokio::test]
+    async fn connecting_says_what_is_missing_and_what_to_check_when_it_fails() {
         let svc = services("http://127.0.0.1:1");
-        let e = svc.spotify_connect().unwrap_err();
+        let e = svc.spotify_connect().await.unwrap_err();
         assert_eq!(
             (e.code, e.message.as_str()),
             (ErrorCode::Internal, "Add your Spotify Client ID first.")
         );
+        // The test "browser" cannot open, so the sign-in fails with advice, never a hang.
         svc.set_spotify_client_id(Some(SPOTIFY_ID)).unwrap();
-        let e = svc.spotify_connect().unwrap_err();
-        assert_eq!(e.message, "Signing in to Spotify is not built yet.");
+        let e = svc.spotify_connect().await.unwrap_err();
+        assert!(
+            e.message.contains("127.0.0.1:43597/callback"),
+            "{}",
+            e.message
+        );
         // Disconnecting is safe at any time and keeps the Client ID.
         let s = svc.spotify_disconnect();
         assert!(!s.connected);
