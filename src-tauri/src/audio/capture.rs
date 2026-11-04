@@ -49,11 +49,29 @@ pub struct Opened {
 /// Opens the microphone. `device` is a name from the device list, or `None` for the system default.
 pub trait Backend: Send + 'static {
     fn open(&mut self, device: Option<&str>) -> Result<Opened, AudioError>;
+
+    /// The name the system default microphone has right now. Used to notice that the default
+    /// changed (a headset was plugged in or the person switched) while the capture is following
+    /// the default. `None` means unknown, and then nothing is reopened.
+    fn default_input_name(&mut self) -> Option<String> {
+        None
+    }
+
+    /// How often to look at the default while following it.
+    fn default_check_every(&self) -> Duration {
+        Duration::from_secs(3)
+    }
 }
 
 impl Backend for Box<dyn Backend> {
     fn open(&mut self, device: Option<&str>) -> Result<Opened, AudioError> {
         (**self).open(device)
+    }
+    fn default_input_name(&mut self) -> Option<String> {
+        (**self).default_input_name()
+    }
+    fn default_check_every(&self) -> Duration {
+        (**self).default_check_every()
     }
 }
 
@@ -221,6 +239,11 @@ fn run(
         }
         let mut resampler = Resampler::new(open.rate, STT_RATE);
         let mut reported_overruns = 0u64;
+        // Only a capture that follows the system default notices the default changing; a named
+        // microphone stays on that microphone.
+        let following = device.is_none();
+        let mut last_look = Instant::now();
+        let mut switched = false;
         loop {
             // Read the flag before draining, so what the device wrote before it vanished is kept.
             let lost = open.lost.load(Ordering::Acquire);
@@ -246,9 +269,22 @@ fn run(
             if lost {
                 break;
             }
+            if following && last_look.elapsed() >= backend.default_check_every() {
+                last_look = Instant::now();
+                if let Some(now) = backend.default_input_name()
+                    && now != open.device_name
+                {
+                    tracing::info!("the system default microphone changed; reopening on it");
+                    switched = true;
+                    break;
+                }
+            }
             std::thread::sleep(POLL);
         }
-        drop(open); // close the dead stream before opening a new one
+        drop(open); // close the old stream before opening a new one
+        if switched {
+            continue; // the new default is opened at once: no loss, no retry wait
+        }
         tracing::warn!("microphone lost, will retry");
         set(CaptureStatus::Unavailable(AudioError::DeviceLost));
         if sleep_unless_cancelled(token, retry) {
@@ -292,15 +328,34 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct Fake {
+        /// The name of the system default microphone; `None` means unknown.
+        default: Arc<Mutex<Option<String>>>,
         /// Errors to return from the next opens, front first; empty means open succeeds.
         failures: Arc<Mutex<VecDeque<AudioError>>>,
         streams: Arc<Mutex<Vec<FakeStream>>>,
         asked: Arc<Mutex<Vec<Option<String>>>>,
     }
 
+    impl Default for Fake {
+        fn default() -> Self {
+            Self {
+                default: Arc::new(Mutex::new(Some("Fake mic".into()))),
+                failures: Arc::default(),
+                streams: Arc::default(),
+                asked: Arc::default(),
+            }
+        }
+    }
+
     impl Backend for Fake {
+        fn default_input_name(&mut self) -> Option<String> {
+            self.default.lock().unwrap().clone()
+        }
+        fn default_check_every(&self) -> Duration {
+            Duration::from_millis(30)
+        }
         fn open(&mut self, device: Option<&str>) -> Result<Opened, AudioError> {
             self.asked.lock().unwrap().push(device.map(String::from));
             if let Some(e) = self.failures.lock().unwrap().pop_front() {
@@ -317,7 +372,12 @@ mod tests {
             Ok(Opened {
                 guard: Box::new(CloseFlag(closed)),
                 rate: 48_000,
-                device_name: "Fake mic".into(),
+                device_name: self
+                    .default
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(|| "Fake mic".into()),
                 ring,
                 lost,
                 overruns: Arc::new(AtomicU64::new(0)),
@@ -519,5 +579,73 @@ mod tests {
         let mut cap = Capture::start(Boom, None, Duration::from_millis(10), |_| {}, |_| {});
         assert!(cap.join(Duration::from_secs(2)));
         assert_eq!(cap.status(), CaptureStatus::Stopped);
+    }
+
+    #[test]
+    fn following_the_default_reopens_on_the_new_default_at_once_without_a_loss() {
+        let fake = Fake::default();
+        let (mut cap, got, log) = start(&fake, None);
+        wait_for("first stream", || fake.streams.lock().unwrap().len() == 1);
+        let first_closed = fake.streams.lock().unwrap()[0].closed.clone();
+        // The system default switches to another microphone (a headset was plugged in).
+        *fake.default.lock().unwrap() = Some("Headset".into());
+        wait_for("a second stream", || {
+            fake.streams.lock().unwrap().len() == 2
+        });
+        assert!(
+            first_closed.load(Ordering::SeqCst),
+            "the old stream was closed"
+        );
+        wait_for("running on the headset", || {
+            cap.status()
+                == CaptureStatus::Running {
+                    device: "Headset".into(),
+                    rate: 48_000,
+                }
+        });
+        // It was a switch, not a loss: no "unavailable", and the audio flows from the new one.
+        assert!(
+            !log.lock()
+                .unwrap()
+                .iter()
+                .any(|s| matches!(s, CaptureStatus::Unavailable(_)))
+        );
+        {
+            let mut s = fake.streams.lock().unwrap();
+            for _ in 0..960 {
+                s[1].producer.push(0.5).unwrap();
+            }
+        }
+        wait_for("audio from the headset", || !got.lock().unwrap().is_empty());
+        cap.stop();
+        assert!(cap.join(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn a_named_microphone_stays_put_when_the_default_changes() {
+        let fake = Fake::default();
+        let (mut cap, _got, _log) = start(&fake, Some("Fake mic"));
+        wait_for("first stream", || fake.streams.lock().unwrap().len() == 1);
+        *fake.default.lock().unwrap() = Some("Headset".into());
+        std::thread::sleep(Duration::from_millis(400)); // many checks' worth
+        assert_eq!(fake.streams.lock().unwrap().len(), 1);
+        cap.stop();
+        assert!(cap.join(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn an_unchanged_or_unknown_default_never_reopens() {
+        for unknown in [false, true] {
+            let fake = Fake::default();
+            let (mut cap, _got, _log) = start(&fake, None);
+            wait_for("first stream", || fake.streams.lock().unwrap().len() == 1);
+            if unknown {
+                *fake.default.lock().unwrap() = None;
+            }
+            std::thread::sleep(Duration::from_millis(400));
+            assert_eq!(fake.streams.lock().unwrap().len(), 1, "unknown {unknown}");
+            cap.stop();
+            assert!(cap.join(Duration::from_secs(2)));
+        }
     }
 }

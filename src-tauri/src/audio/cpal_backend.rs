@@ -40,6 +40,12 @@ fn failed(e: impl std::fmt::Display) -> AudioError {
 }
 
 impl Backend for CpalBackend {
+    fn default_input_name(&mut self) -> Option<String> {
+        cpal::default_host()
+            .default_input_device()
+            .and_then(|d| d.name().ok())
+    }
+
     fn open(&mut self, device: Option<&str>) -> Result<Opened, AudioError> {
         let host = cpal::default_host();
         // A saved name that is no longer there falls back to the system default, as the contract
