@@ -160,6 +160,8 @@ pub enum PlayError {
     NoResults,
     /// Spotify accepted the song but nothing is playing.
     NotPlaying,
+    /// Signed in before JARVIS asked to read playlists: sign in again to allow it.
+    NeedsReconnect,
     Cancelled,
     Failed,
 }
@@ -172,6 +174,21 @@ pub trait MusicPlayer: Send + Sync {
         words: &str,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<PlayedTrack, PlayError>;
+    /// "Play my workout playlist": one of the person's own playlists, found by name.
+    async fn play_playlist(
+        &self,
+        _name: &str,
+        _cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<PlayedTrack, PlayError> {
+        Err(PlayError::NotConnected)
+    }
+    /// "Play my liked songs".
+    async fn play_liked(
+        &self,
+        _cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<PlayedTrack, PlayError> {
+        Err(PlayError::NotConnected)
+    }
     /// A short, secret-free account of the last attempt (steps and HTTP statuses), appended
     /// to failures so they can be diagnosed.
     fn detail(&self) -> Option<String> {

@@ -313,8 +313,13 @@ impl TurnRunner {
         // actions, not conversation: they go straight through the tools and the permission
         // gateway, online or not, with no model round trip. If tools are not wired they fall
         // through to the model as before.
-        if let Some(i @ (Intent::Music(_) | Intent::NowPlaying | Intent::PlayQuery(_))) =
-            intents::route(&text)
+        if let Some(
+            i @ (Intent::Music(_)
+            | Intent::NowPlaying
+            | Intent::PlayQuery(_)
+            | Intent::PlayPlaylist(_)
+            | Intent::PlayLiked),
+        ) = intents::route(&text)
             && self.answer_with_tools(id, &i, &cancel, sink).await
         {
             return;

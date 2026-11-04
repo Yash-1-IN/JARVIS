@@ -418,6 +418,8 @@ fn registry_only_holds_tools_the_gateway_knows_and_schemas_are_strict() {
             "music.control",
             "music.now_playing",
             "music.play",
+            "music.play_liked",
+            "music.play_playlist",
             "system.status",
             "time.now"
         ]
@@ -1285,6 +1287,21 @@ impl MusicPlayer for FakePlayer {
         self.asked.lock().unwrap().push(words.to_owned());
         self.answer.clone()
     }
+    async fn play_playlist(
+        &self,
+        name: &str,
+        _: &tokio_util::sync::CancellationToken,
+    ) -> Result<PlayedTrack, PlayError> {
+        self.asked.lock().unwrap().push(format!("playlist:{name}"));
+        self.answer.clone()
+    }
+    async fn play_liked(
+        &self,
+        _: &tokio_util::sync::CancellationToken,
+    ) -> Result<PlayedTrack, PlayError> {
+        self.asked.lock().unwrap().push("liked".into());
+        self.answer.clone()
+    }
     fn detail(&self) -> Option<String> {
         Some(Self::DETAIL.into())
     }
@@ -1397,4 +1414,62 @@ async fn a_failed_play_ends_with_what_spotify_answered_but_a_refusal_does_not() 
             assert!(msg.ends_with(&format!("({})", FakePlayer::DETAIL)), "{msg}");
         }
     }
+}
+
+#[tokio::test]
+async fn playlists_and_liked_songs_play_by_name_and_taint_the_conversation() {
+    use super::music::{MusicPlayLiked, MusicPlayPlaylist};
+    let p = player(Ok(PlayedTrack {
+        title: "Workout Mix".into(),
+        artist: String::new(),
+        device: Some("the Spotify app on this computer".into()),
+    }));
+    let ctx = player_ctx(&p);
+    let out = run(
+        &MusicPlayPlaylist,
+        json!({ "name": "  workout\u{0} " }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out.text,
+        "Playing Workout Mix on the Spotify app on this computer."
+    );
+    assert!(out.external_content, "a playlist's name comes from outside");
+    let out = run(&MusicPlayLiked, json!({}), &ctx).await.unwrap();
+    assert!(out.external_content);
+    assert_eq!(*p.asked.lock().unwrap(), ["playlist:workout", "liked"]);
+    assert_eq!(MusicPlayPlaylist.base_risk(), ToolRisk::Low);
+    assert_eq!(MusicPlayLiked.base_risk(), ToolRisk::Low);
+    // Strict arguments.
+    for bad in [
+        json!({}),
+        json!({ "name": "" }),
+        json!({ "name": "x", "id": 1 }),
+    ] {
+        let r = run(&MusicPlayPlaylist, bad.clone(), &ctx).await;
+        assert!(matches!(r, Err(ToolError::Invalid(_))), "{bad}: {r:?}");
+    }
+    let r = run(&MusicPlayLiked, json!({ "x": 1 }), &ctx).await;
+    assert!(matches!(r, Err(ToolError::Invalid(_))), "{r:?}");
+}
+
+#[tokio::test]
+async fn a_sign_in_without_playlist_permission_says_how_to_fix_it() {
+    use super::music::MusicPlayPlaylist;
+    let p = player(Err(PlayError::NeedsReconnect));
+    let r = run(&MusicPlayPlaylist, json!({ "name": "x" }), &player_ctx(&p)).await;
+    let msg = match r {
+        Err(ToolError::Unavailable(m)) => m,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        msg.contains("Disconnect") && msg.contains("Connect Spotify"),
+        "{msg}"
+    );
+    assert!(
+        !msg.contains(FakePlayer::DETAIL),
+        "no trace for a permission message"
+    );
 }

@@ -147,6 +147,12 @@ export function MusicSettings({ transport }: { transport: Transport }) {
         here. Choosing a song needs Spotify Premium and the Spotify app open.
       </p>
       <p className="hint">
+        Playlists: JARVIS also asks to see the names of your playlists so “play
+        my workout playlist” works. If you connected before this was added,
+        press Disconnect and then Connect again. JARVIS starts the Spotify app
+        if it is closed when you ask for a song.
+      </p>
+      <p className="hint">
         What is shared: the words you ask to play go to Spotify, and nothing is
         sent to Anthropic for “play …” commands. The sign-in is kept in your
         system keychain and can be removed with Disconnect.

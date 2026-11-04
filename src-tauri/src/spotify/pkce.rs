@@ -7,9 +7,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::Url;
 use sha2::{Digest, Sha256};
 
-/// What JARVIS asks Spotify for: control playback and see what is playing. Nothing that
-/// reads the library, the email address or the playlists.
-pub const SCOPES: &str = "user-modify-playback-state user-read-playback-state";
+/// What JARVIS asks Spotify for: control playback, see what is playing, and list the person's
+/// playlists (their names and addresses, to find "my workout playlist"). Nothing that reads the
+/// email address, the saved songs, the listening history, or what is inside a playlist.
+pub const SCOPES: &str = "user-modify-playback-state user-read-playback-state playlist-read-private playlist-read-collaborative";
 
 /// A one-time pair for one sign-in attempt.
 pub struct Pkce {
@@ -163,7 +164,20 @@ mod tests {
             u.as_str()
                 .contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A51234%2Fcallback")
         );
-        assert!(!SCOPES.contains("playlist") && !SCOPES.contains("email"));
+        // Exactly these four; nothing that reads email, saved songs or listening history, and
+        // nothing that can change a playlist.
+        let mut asked: Vec<&str> = SCOPES.split(' ').collect();
+        asked.sort_unstable();
+        assert_eq!(
+            asked,
+            [
+                "playlist-read-collaborative",
+                "playlist-read-private",
+                "user-modify-playback-state",
+                "user-read-playback-state"
+            ]
+        );
+        assert!(!SCOPES.contains("modify-private") && !SCOPES.contains("library"));
     }
 
     #[test]

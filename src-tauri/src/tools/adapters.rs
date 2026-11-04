@@ -118,6 +118,146 @@ impl SpotifyPlayer {
 /// Spotify ends with a trace of what it answered, not a bare timeout.
 const PLAY_BUDGET: std::time::Duration = std::time::Duration::from_secs(26);
 
+use crate::platform::media::MediaError as LocalError;
+use crate::spotify::client::{Found, SpotifyError as E};
+
+fn map_error(e: E) -> super::ports::PlayError {
+    use super::ports::PlayError as P;
+    match e {
+        E::NotConfigured | E::NotConnected => P::NotConnected,
+        E::Offline => P::Offline,
+        E::Forbidden => P::Forbidden,
+        E::NoDevice => P::NoDevice,
+        E::NoResults => P::NoResults,
+        E::NotPlaying => P::NotPlaying,
+        E::NeedsReconnect => P::NeedsReconnect,
+        E::Cancelled => P::Cancelled,
+        E::TimedOut | E::Denied | E::PortBusy | E::Failed => P::Failed,
+    }
+}
+
+/// How long to wait for the Spotify app on this computer to start and take a song (macOS), and
+/// how often to ask it meanwhile.
+const LOCAL_START_WAIT: std::time::Duration = std::time::Duration::from_secs(12);
+const LOCAL_POLL: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// Calls `attempt` until it says yes, up to `total`, `every` apart. A cancel ends it at once.
+pub(crate) async fn retry_until<F, Fut>(
+    mut attempt: F,
+    total: std::time::Duration,
+    every: std::time::Duration,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let end = std::time::Instant::now() + total;
+    loop {
+        if attempt().await {
+            return true;
+        }
+        if cancel.is_cancelled() || std::time::Instant::now() + every >= end {
+            return false;
+        }
+        tokio::select! {
+            _ = cancel.cancelled() => return false,
+            _ = tokio::time::sleep(every) => {}
+        }
+    }
+}
+
+impl SpotifyPlayer {
+    async fn local(uri: String) -> Result<Result<(), LocalError>, tokio::task::JoinError> {
+        tokio::task::spawn_blocking(move || crate::platform::media::play_spotify_uri(&uri)).await
+    }
+
+    fn here(f: &Found) -> super::ports::PlayedTrack {
+        super::ports::PlayedTrack {
+            title: f.title.clone(),
+            artist: f.artist.clone(),
+            device: Some("the Spotify app on this computer".into()),
+        }
+    }
+
+    /// Plays what a search or lookup found: in the Spotify app on this computer when that is
+    /// possible, and otherwise through Spotify's servers.
+    async fn play_found(
+        &self,
+        found: Found,
+        began: std::time::Instant,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<super::ports::PlayedTrack, super::ports::PlayError> {
+        // The app on this computer first: it starts at once and needs neither Premium nor a device
+        // from Spotify's servers.
+        let first = Self::local(found.uri.clone()).await;
+        self.spotify
+            .note(format!("this computer's Spotify app: {first:?}"));
+        if matches!(first, Ok(Ok(()))) {
+            return Ok(Self::here(&found));
+        }
+        // Closed, and this computer can start it (macOS; Windows is handled below): the person
+        // asked for a song, so start the app, give it a few seconds to load, and play.
+        if matches!(first, Ok(Err(LocalError::NothingPlaying))) {
+            let start = self.start_app.clone();
+            let started = tokio::task::spawn_blocking(move || start())
+                .await
+                .unwrap_or(false);
+            if started {
+                self.spotify.note("started the Spotify app".into());
+                let uri = found.uri.clone();
+                let taken = retry_until(
+                    || {
+                        let uri = uri.clone();
+                        async move { matches!(Self::local(uri).await, Ok(Ok(()))) }
+                    },
+                    LOCAL_START_WAIT,
+                    LOCAL_POLL,
+                    cancel,
+                )
+                .await;
+                if taken {
+                    return Ok(Self::here(&found));
+                }
+                self.spotify
+                    .note("the Spotify app did not take the song in time".into());
+            }
+        }
+        if cancel.is_cancelled() {
+            return Err(super::ports::PlayError::Cancelled);
+        }
+        // Not open here (or not a Mac): ask Spotify's servers, which can wake a device. The
+        // account route also starts the Spotify app first when nothing is open (Windows).
+        let budget = PLAY_BUDGET
+            .saturating_sub(began.elapsed())
+            .max(std::time::Duration::from_secs(8));
+        let p = match self
+            .spotify
+            .play_found_or_start_app(&found, cancel, self.start_app.clone(), budget)
+            .await
+        {
+            Ok(p) => p,
+            // The servers took it but could not start it. The cloud route may have just opened
+            // the app, so ask the app on this computer once more.
+            Err(e @ (E::NotPlaying | E::NoDevice)) => {
+                let again = Self::local(found.uri.clone()).await;
+                self.spotify
+                    .note(format!("this computer's Spotify app again: {again:?}"));
+                if matches!(again, Ok(Ok(()))) {
+                    return Ok(Self::here(&found));
+                }
+                return Err(map_error(e));
+            }
+            Err(e) => return Err(map_error(e)),
+        };
+        Ok(super::ports::PlayedTrack {
+            title: p.title,
+            artist: p.artist,
+            device: p.device,
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl super::ports::MusicPlayer for SpotifyPlayer {
     fn detail(&self) -> Option<String> {
@@ -129,66 +269,32 @@ impl super::ports::MusicPlayer for SpotifyPlayer {
         words: &str,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<super::ports::PlayedTrack, super::ports::PlayError> {
-        use super::ports::PlayError as P;
-        use crate::spotify::client::SpotifyError as E;
-        let map = |e: E| match e {
-            E::NotConfigured | E::NotConnected => P::NotConnected,
-            E::Offline => P::Offline,
-            E::Forbidden => P::Forbidden,
-            E::NoDevice => P::NoDevice,
-            E::NoResults => P::NoResults,
-            E::NotPlaying => P::NotPlaying,
-            E::Cancelled => P::Cancelled,
-            E::TimedOut | E::Denied | E::PortBusy | E::Failed => P::Failed,
-        };
-        // Search first, then prefer the Spotify app on this computer when it is open: it
-        // starts at once and needs neither Premium nor a device from Spotify's servers.
         let began = std::time::Instant::now();
-        let found = self.spotify.find(words, cancel).await.map_err(map)?;
-        let local = |uri: String| async move {
-            tokio::task::spawn_blocking(move || crate::platform::media::play_spotify_uri(&uri))
-                .await
-        };
-        let here = |f: &crate::spotify::client::Found| super::ports::PlayedTrack {
-            title: f.title.clone(),
-            artist: f.artist.clone(),
-            device: Some("the Spotify app on this computer".into()),
-        };
-        let first = local(found.uri.clone()).await;
-        self.spotify
-            .note(format!("this computer's Spotify app: {first:?}"));
-        if matches!(first, Ok(Ok(()))) {
-            return Ok(here(&found));
-        }
-        // Not open here (or not a Mac): ask Spotify's servers, which can wake a device.
-        // The account route also starts the Spotify app first when nothing is open (Windows).
-        let budget = PLAY_BUDGET
-            .saturating_sub(began.elapsed())
-            .max(std::time::Duration::from_secs(8));
-        let p = match self
+        let found = self.spotify.find(words, cancel).await.map_err(map_error)?;
+        self.play_found(found, began, cancel).await
+    }
+
+    async fn play_playlist(
+        &self,
+        name: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<super::ports::PlayedTrack, super::ports::PlayError> {
+        let began = std::time::Instant::now();
+        let found = self
             .spotify
-            .play_found_or_start_app(&found, cancel, self.start_app.clone(), budget)
+            .find_playlist(name, cancel)
             .await
-        {
-            Ok(p) => p,
-            // The servers took the song but could not start it. The cloud route may have
-            // just opened the app, so ask the app on this computer once more.
-            Err(e @ (E::NotPlaying | E::NoDevice)) => {
-                let again = local(found.uri.clone()).await;
-                self.spotify
-                    .note(format!("this computer's Spotify app again: {again:?}"));
-                if matches!(again, Ok(Ok(()))) {
-                    return Ok(here(&found));
-                }
-                return Err(map(e));
-            }
-            Err(e) => return Err(map(e)),
-        };
-        Ok(super::ports::PlayedTrack {
-            title: p.title,
-            artist: p.artist,
-            device: p.device,
-        })
+            .map_err(map_error)?;
+        self.play_found(found, began, cancel).await
+    }
+
+    async fn play_liked(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<super::ports::PlayedTrack, super::ports::PlayError> {
+        let began = std::time::Instant::now();
+        let found = self.spotify.find_liked(cancel).await.map_err(map_error)?;
+        self.play_found(found, began, cancel).await
     }
 }
 
@@ -196,6 +302,61 @@ impl super::ports::MusicPlayer for SpotifyPlayer {
 mod tests {
     use super::*;
     use crate::platform::status::Battery;
+
+    #[tokio::test]
+    async fn retrying_stops_on_success_on_cancel_and_at_the_end_of_the_time() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::time::Duration;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let n = Arc::new(AtomicU32::new(0));
+        let c = n.clone();
+        // Succeeds on the third try.
+        assert!(
+            retry_until(
+                || {
+                    let c = c.clone();
+                    async move { c.fetch_add(1, Ordering::SeqCst) >= 2 }
+                },
+                Duration::from_secs(5),
+                Duration::from_millis(5),
+                &cancel
+            )
+            .await
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 3);
+        // Never succeeds: gives up when the time is up, not before trying.
+        let tries = Arc::new(AtomicU32::new(0));
+        let t = tries.clone();
+        assert!(
+            !retry_until(
+                || {
+                    let t = t.clone();
+                    async move {
+                        t.fetch_add(1, Ordering::SeqCst);
+                        false
+                    }
+                },
+                Duration::from_millis(60),
+                Duration::from_millis(20),
+                &cancel
+            )
+            .await
+        );
+        assert!(tries.load(Ordering::SeqCst) >= 2);
+        // A cancel ends it after the current try.
+        cancel.cancel();
+        let started = std::time::Instant::now();
+        assert!(
+            !retry_until(
+                || async { false },
+                Duration::from_secs(30),
+                Duration::from_secs(10),
+                &cancel
+            )
+            .await
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn conversion_maps_units_and_battery_states() {

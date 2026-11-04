@@ -169,6 +169,8 @@ impl Registry {
         r.register(Arc::new(music::MusicControl));
         r.register(Arc::new(music::MusicNowPlaying));
         r.register(Arc::new(music::MusicPlay));
+        r.register(Arc::new(music::MusicPlayPlaylist));
+        r.register(Arc::new(music::MusicPlayLiked));
         r
     }
 

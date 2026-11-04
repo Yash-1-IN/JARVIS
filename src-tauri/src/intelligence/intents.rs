@@ -23,6 +23,10 @@ pub enum Intent {
     NowPlaying,
     /// "Play Bohemian Rhapsody": the words after "play", for Spotify (music step 2).
     PlayQuery(String),
+    /// "Play my workout playlist": one of the person's own playlists, by name.
+    PlayPlaylist(String),
+    /// "Play my liked songs".
+    PlayLiked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +197,14 @@ fn music(s: &str) -> Option<Intent> {
     } else if one_of(s, NOW_PLAYING) {
         return Some(Intent::NowPlaying);
     } else {
+        // The person's own things come before a search: "play my liked songs" and "play my workout
+        // playlist" are not songs to look for.
+        if one_of(s, LIKED) {
+            return Some(Intent::PlayLiked);
+        }
+        if let Some(name) = playlist_name(s) {
+            return Some(Intent::PlayPlaylist(name));
+        }
         return play_query(s).map(Intent::PlayQuery);
     };
     Some(Intent::Music(cmd))
@@ -201,6 +213,53 @@ fn music(s: &str) -> Option<Intent> {
 /// "play <words>" with a few words after it: something to look for on Spotify. The bare
 /// resume phrases ("play", "play music") were matched before this. A long sentence that
 /// merely starts with "play" is left to the model.
+const LIKED: &[&str] = &[
+    "play my liked songs",
+    "play liked songs",
+    "play my liked tracks",
+    "play my saved songs",
+    "play my saved tracks",
+    "play my likes",
+    "play the songs i liked",
+    "play songs i liked",
+    "play my favourite songs",
+    "play my favorite songs",
+];
+
+/// "play my workout playlist", "play the road trip playlist", "play playlist chill",
+/// "play my playlist called chill": the name between the words, one to five words, or `None`.
+fn playlist_name(s: &str) -> Option<String> {
+    const MAX_WORDS: usize = 5;
+    let rest = s.strip_prefix("play ")?;
+    let name = if let Some(n) = rest
+        .strip_suffix(" playlist")
+        .or_else(|| rest.strip_suffix(" playlist on spotify"))
+    {
+        n.strip_prefix("my ")
+            .or_else(|| n.strip_prefix("the "))
+            .or_else(|| n.strip_prefix("a "))
+            .unwrap_or(n)
+    } else {
+        let n = rest
+            .strip_prefix("my playlist called ")
+            .or_else(|| rest.strip_prefix("my playlist named "))
+            .or_else(|| rest.strip_prefix("the playlist called "))
+            .or_else(|| rest.strip_prefix("the playlist named "))
+            .or_else(|| rest.strip_prefix("my playlist "))
+            .or_else(|| rest.strip_prefix("the playlist "))
+            .or_else(|| rest.strip_prefix("playlist "))?;
+        n.strip_suffix(" on spotify").unwrap_or(n)
+    }
+    .trim();
+    let words = name.split_whitespace().count();
+    // A bare "my" or "the" is not a name, and a long sentence is not either.
+    if name.is_empty() || words > MAX_WORDS || matches!(name, "my" | "the" | "a" | "this" | "that")
+    {
+        return None;
+    }
+    Some(name.to_owned())
+}
+
 fn play_query(s: &str) -> Option<String> {
     const MAX_WORDS: usize = 8;
     const VAGUE: &[&str] = &[
@@ -630,5 +689,49 @@ mod tests {
         }
         assert_eq!(route("play"), Some(Intent::Music(MusicCmd::Play)));
         assert_eq!(route("play music"), Some(Intent::Music(MusicCmd::Play)));
+    }
+
+    #[test]
+    fn my_playlists_and_liked_songs_are_not_searches() {
+        let playlist = |t: &str| match route(t) {
+            Some(Intent::PlayPlaylist(n)) => Some(n),
+            _ => None,
+        };
+        assert_eq!(playlist("play my workout playlist"), Some("workout".into()));
+        assert_eq!(
+            playlist("Play the road trip playlist"),
+            Some("road trip".into())
+        );
+        assert_eq!(playlist("play playlist chill"), Some("chill".into()));
+        assert_eq!(
+            playlist("play my playlist called Sunday morning"),
+            Some("sunday morning".into())
+        );
+        assert_eq!(
+            playlist("hey jarvis play chill playlist on spotify"),
+            Some("chill".into())
+        );
+        for liked in [
+            "play my liked songs",
+            "Play liked songs!",
+            "play my saved songs",
+        ] {
+            assert_eq!(route(liked), Some(Intent::PlayLiked), "{liked}");
+        }
+        // Not playlists: a search, a bare resume, or a long sentence.
+        for other in [
+            "play my playlist",
+            "play the playlist",
+            "play a",
+            "play bohemian rhapsody",
+            "play the best songs of the nineties and some more playlist",
+        ] {
+            assert!(playlist(other).is_none(), "{other}");
+        }
+        assert_eq!(
+            route("play bohemian rhapsody"),
+            Some(Intent::PlayQuery("bohemian rhapsody".into()))
+        );
+        assert_eq!(route("play"), Some(Intent::Music(MusicCmd::Play)));
     }
 }

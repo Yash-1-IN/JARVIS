@@ -59,17 +59,19 @@ pub fn send(cmd: Command) -> Result<(), MediaError> {
 }
 
 /// Starts one Spotify track in the Spotify desktop app on this computer, without the
-/// internet account route. `uri` must be a plain `spotify:track:` address; anything else is
-/// refused before a script is run. macOS only; other systems say `Unsupported`. Never starts
-/// Spotify itself: if it is not running the answer is `NothingPlaying`. Blocking.
+/// internet account route. `uri` must be a plain track, playlist or liked-songs address
+/// (`valid_play_uri`); anything else is refused before a script is run. macOS only; other systems
+/// say `Unsupported`. This call never starts Spotify itself: if it is not running the answer is
+/// `NothingPlaying`, and the caller decides whether to start it (`start_spotify_app`). Blocking.
 pub fn play_spotify_uri(uri: &str) -> Result<(), MediaError> {
     imp::play_spotify_uri(uri)
 }
 
-/// Starts the Spotify desktop app on this computer so it can show up as a device to play on.
-/// Windows only (macOS never starts Spotify, by design; other systems say `Unsupported`). It
-/// refuses, without opening any dialog, when Spotify is not installed. The only thing ever passed
-/// to the system is the fixed address `spotify:`. Blocking.
+/// Starts the Spotify desktop app on this computer, because the person asked for a song and it is
+/// closed (decision D-25; before it, macOS never started it). Windows opens the fixed address
+/// `spotify:`; macOS opens the app by its fixed bundle id in the background. Either refuses,
+/// without opening any dialog, when Spotify is not installed; other systems say `Unsupported`.
+/// Nothing from the person, the model or Spotify is ever passed to the system. Blocking.
 pub fn start_spotify_app() -> Result<(), MediaError> {
     spotify_start::start()
 }
@@ -134,7 +136,33 @@ mod spotify_start {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod spotify_start {
+    use super::MediaError;
+    use std::process::{Command, Stdio};
+
+    /// Spotify's bundle id. A fixed value: `open -b` looks the app up by it and, when it is not
+    /// installed, fails with a message and no dialog (unlike naming the app in a script).
+    const BUNDLE_ID: &str = "com.spotify.client";
+
+    pub fn start() -> Result<(), MediaError> {
+        // `-g`: in the background, so JARVIS keeps the focus. Absolute path, no shell.
+        let status = Command::new("/usr/bin/open")
+            .args(["-g", "-b", BUNDLE_ID])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            // A non-zero answer means the app is not installed (or could not be opened).
+            Ok(_) => Err(MediaError::Unsupported),
+            Err(_) => Err(MediaError::Failed),
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod spotify_start {
     use super::MediaError;
 
@@ -393,11 +421,34 @@ mod applescript {
         )
     }
 
-    /// A Spotify track address: `spotify:track:` and exactly 22 letters or digits. Nothing
-    /// else can be passed to the play-a-track script.
+    fn id22(id: &str) -> bool {
+        id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+    }
+
+    /// A Spotify track address: `spotify:track:` and exactly 22 letters or digits.
     pub fn valid_track_uri(uri: &str) -> bool {
-        uri.strip_prefix("spotify:track:")
-            .is_some_and(|id| id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric()))
+        uri.strip_prefix("spotify:track:").is_some_and(id22)
+    }
+
+    /// What may be passed to the play script: a track, a playlist (`spotify:playlist:` and 22
+    /// letters or digits), or a person's liked songs (`spotify:user:<id>:collection`, the id made
+    /// of letters, digits, dots, dashes and underscores). Nothing else.
+    pub fn valid_play_uri(uri: &str) -> bool {
+        if valid_track_uri(uri) {
+            return true;
+        }
+        if uri.strip_prefix("spotify:playlist:").is_some_and(id22) {
+            return true;
+        }
+        uri.strip_prefix("spotify:user:")
+            .and_then(|rest| rest.strip_suffix(":collection"))
+            .is_some_and(|id| {
+                !id.is_empty()
+                    && id.len() <= 64
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+            })
     }
 
     /// Plays one track in Spotify. The address is **an argument** of the script (`argv`),
@@ -715,7 +766,7 @@ mod imp {
     }
 
     pub fn play_spotify_uri(uri: &str) -> Result<(), MediaError> {
-        if !script::valid_track_uri(uri) {
+        if !script::valid_play_uri(uri) {
             return Err(MediaError::Failed);
         }
         if !running(Player::Spotify)? {
@@ -770,7 +821,7 @@ mod tests {
 
 #[cfg(test)]
 mod play_track_tests {
-    use super::applescript::{PLAY_TRACK_SCRIPT, valid_track_uri};
+    use super::applescript::{PLAY_TRACK_SCRIPT, valid_play_uri, valid_track_uri};
 
     #[test]
     fn only_plain_spotify_track_addresses_reach_the_play_script() {
@@ -788,6 +839,31 @@ mod play_track_tests {
         ] {
             assert!(!valid_track_uri(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn playlists_and_liked_songs_are_accepted_and_nothing_near_them() {
+        assert!(valid_play_uri("spotify:track:4u7EnebtmKWzUH433cf5Qv"));
+        assert!(valid_play_uri("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"));
+        assert!(valid_play_uri("spotify:user:some.user-name_1:collection"));
+        for bad in [
+            "",
+            "spotify:playlist:",
+            "spotify:playlist:37i9dQZF1DXcBWIGoYBM5",
+            "spotify:playlist:37i9dQZF1DXcBWIGoYBM5MM",
+            "spotify:playlist:37i9dQZF1DXcBWIGoYBM5\"",
+            "spotify:album:6i6folBtxKV28WX3msQ4FE",
+            "spotify:user::collection",
+            "spotify:user:a b:collection",
+            "spotify:user:a\":collection",
+            "spotify:user:abc:playlist:37i9dQZF1DXcBWIGoYBM5M",
+            "spotify:user:abc:collection ",
+            "spotify:user:abc:collection\n",
+        ] {
+            assert!(!valid_play_uri(bad), "{bad:?}");
+        }
+        // The old track-only check is unchanged.
+        assert!(!valid_track_uri("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"));
     }
 
     #[test]

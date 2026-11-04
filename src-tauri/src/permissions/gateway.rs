@@ -32,6 +32,8 @@ pub const ALPHA_TOOLS: &[&str] = &[
     "music.control",
     "music.now_playing",
     "music.play",
+    "music.play_playlist",
+    "music.play_liked",
 ];
 
 /// Never available in alpha (spec §3.2, §9.4), whatever the model asks.

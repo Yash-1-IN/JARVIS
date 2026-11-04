@@ -261,9 +261,58 @@ fn play_error(e: PlayError) -> ToolError {
             "Spotify accepted the song but nothing started. Open the Spotify app, press play on any song once, then ask again."
                 .into(),
         ),
+        PlayError::NeedsReconnect => ToolError::Unavailable(
+            "JARVIS needs your permission to read your playlists. Open Settings, Music, press Disconnect, then Connect Spotify again."
+                .into(),
+        ),
         PlayError::Cancelled => ToolError::Cancelled,
         PlayError::Failed => ToolError::Failed("Playing that on Spotify failed.".into()),
     }
+}
+
+/// Turns what the Spotify port answered into the tool's result. A failure Spotify caused ends
+/// with the steps it went through, so it can be diagnosed.
+fn finish_play(
+    ctx: &ToolContext,
+    result: Result<super::ports::PlayedTrack, PlayError>,
+) -> Result<ToolOutput, ToolError> {
+    let p = match result {
+        Ok(p) => p,
+        Err(e) => {
+            let mut te = play_error(e);
+            if matches!(
+                e,
+                PlayError::Failed
+                    | PlayError::NotPlaying
+                    | PlayError::NoDevice
+                    | PlayError::Offline
+            ) && let Some(d) = ctx.ports.music.detail()
+            {
+                te = match te {
+                    ToolError::Failed(m) => ToolError::Failed(format!("{m} ({d})")),
+                    ToolError::Unavailable(m) => ToolError::Unavailable(format!("{m} ({d})")),
+                    other => other,
+                };
+            }
+            return Err(te);
+        }
+    };
+    let (title, artist) = (clean_for_summary(&p.title), clean_for_summary(&p.artist));
+    let by = if artist.is_empty() {
+        String::new()
+    } else {
+        format!(" by {artist}")
+    };
+    let on = match p.device.as_deref().map(clean_for_summary) {
+        Some(d) if !d.is_empty() => format!(" on {d}"),
+        _ => String::new(),
+    };
+    Ok(ToolOutput {
+        text: format!("Playing {title}{by}{on}."),
+        // The title comes from Spotify (a playlist's name can be set by other people), so it
+        // counts as outside content.
+        external_content: true,
+    })
 }
 
 /// `music.play`: search Spotify for the words and play the top track on the person's own
@@ -315,39 +364,107 @@ impl Tool for MusicPlay {
         if cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
-        let p = match ctx.ports.music.play(&q, &cancel).await {
-            Ok(p) => p,
-            Err(e) => {
-                let mut te = play_error(e);
-                // Failures that Spotify caused say what it answered, so they can be diagnosed.
-                if matches!(
-                    e,
-                    PlayError::Failed | PlayError::NotPlaying | PlayError::NoDevice
-                ) && let Some(d) = ctx.ports.music.detail()
-                {
-                    te = match te {
-                        ToolError::Failed(m) => ToolError::Failed(format!("{m} ({d})")),
-                        ToolError::Unavailable(m) => ToolError::Unavailable(format!("{m} ({d})")),
-                        other => other,
-                    };
-                }
-                return Err(te);
-            }
-        };
-        let (title, artist) = (clean_for_summary(&p.title), clean_for_summary(&p.artist));
-        let by = if artist.is_empty() {
-            String::new()
-        } else {
-            format!(" by {artist}")
-        };
-        let on = match p.device.as_deref().map(clean_for_summary) {
-            Some(d) if !d.is_empty() => format!(" on {d}"),
-            _ => String::new(),
-        };
-        Ok(ToolOutput {
-            text: format!("Playing {title}{by}{on}."),
-            // The title comes from Spotify, so it counts as outside content.
-            external_content: true,
+        finish_play(ctx, ctx.ports.music.play(&q, &cancel).await)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlaylistArgs {
+    name: String,
+}
+
+/// `music.play_playlist`: one of the person's own playlists, found by name. It reads the list of
+/// their playlists (names and addresses only) and plays the best match. Low risk: it only starts
+/// music; it changes and shares nothing. The names are outside text, so the result taints.
+pub struct MusicPlayPlaylist;
+
+#[async_trait]
+impl Tool for MusicPlayPlaylist {
+    fn name(&self) -> &'static str {
+        "music.play_playlist"
+    }
+    fn description(&self) -> &'static str {
+        "Play one of the person's own saved Spotify playlists by name, for example \"workout\" or \"road trip\". It picks the playlist whose name matches best. Use music.play for a song, artist or album that is not one of their playlists."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "minLength": 1, "maxLength": MAX_QUERY_CHARS }
+            },
+            "required": ["name"],
+            "additionalProperties": false
         })
+    }
+    fn base_risk(&self) -> ToolRisk {
+        ToolRisk::Low
+    }
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(40)
+    }
+    fn prepare(&self, args: &Value, _: &ToolContext) -> Result<Prepared, ToolError> {
+        let a: PlaylistArgs = parse_args(args)?;
+        let n = play_query(&a.name)?;
+        Ok(Prepared {
+            arg_risk: None,
+            targets: vec![clean_for_summary(&n)],
+            summary: format!("Play your \"{}\" playlist", clean_for_summary(&n)),
+        })
+    }
+    async fn run(
+        &self,
+        args: &Value,
+        ctx: &ToolContext,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let a: PlaylistArgs = parse_args(args)?;
+        let n = play_query(&a.name)?;
+        if cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        finish_play(ctx, ctx.ports.music.play_playlist(&n, &cancel).await)
+    }
+}
+
+/// `music.play_liked`: the person's liked songs, as one collection.
+pub struct MusicPlayLiked;
+
+#[async_trait]
+impl Tool for MusicPlayLiked {
+    fn name(&self) -> &'static str {
+        "music.play_liked"
+    }
+    fn description(&self) -> &'static str {
+        "Play the person's liked (saved) songs on Spotify."
+    }
+    fn input_schema(&self) -> Value {
+        empty_schema()
+    }
+    fn base_risk(&self) -> ToolRisk {
+        ToolRisk::Low
+    }
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(40)
+    }
+    fn prepare(&self, args: &Value, _: &ToolContext) -> Result<Prepared, ToolError> {
+        let _: NoArgs = parse_args(args)?;
+        Ok(Prepared {
+            arg_risk: None,
+            targets: vec![],
+            summary: "Play your liked songs".into(),
+        })
+    }
+    async fn run(
+        &self,
+        args: &Value,
+        ctx: &ToolContext,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let _: NoArgs = parse_args(args)?;
+        if cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        finish_play(ctx, ctx.ports.music.play_liked(&cancel).await)
     }
 }

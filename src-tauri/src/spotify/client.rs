@@ -25,6 +25,8 @@ const FRESH_POLLS: u32 = 8;
 const MIN_PLAY_AFTER_START: Duration = Duration::from_secs(4);
 /// The search alone.
 const FIND_DEADLINE: Duration = Duration::from_secs(10);
+/// Listing the person's playlists (up to four pages) and picking one.
+const LIBRARY_DEADLINE: Duration = Duration::from_secs(14);
 /// Longest search words we send. A spoken request is short.
 const MAX_QUERY_CHARS: usize = 100;
 
@@ -49,6 +51,8 @@ pub enum SpotifyError {
     PortBusy,
     /// Spotify accepted the song but nothing started playing.
     NotPlaying,
+    /// The sign-in was made before JARVIS asked to read playlists: sign in again.
+    NeedsReconnect,
     /// Anything else. Details are logged without the response body.
     Failed,
 }
@@ -71,6 +75,8 @@ pub struct Found {
     /// The track's album (`spotify:album:` and 22 letters or digits), used to play the track inside
     /// its album when playing the track alone does not start.
     pub album_uri: Option<String>,
+    /// True for a playlist or the liked-songs collection (played as a context, not as one track).
+    pub context: bool,
 }
 
 #[derive(Clone)]
@@ -142,6 +148,7 @@ enum Stored {
 
 #[derive(Deserialize)]
 struct Me {
+    id: Option<String>,
     display_name: Option<String>,
 }
 
@@ -700,6 +707,98 @@ impl Spotify {
         }
     }
 
+    /// Finds one of the person's own playlists by name, for "play my workout playlist". Lists the
+    /// playlists the account follows or owns (up to 200) and picks the best name match. The names
+    /// come from Spotify and can be set by other people (shared playlists): untrusted text.
+    pub async fn find_playlist(
+        &self,
+        name: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Found, SpotifyError> {
+        self.trace.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let q = clean_query(name).ok_or(SpotifyError::NoResults)?;
+        match tokio::time::timeout(LIBRARY_DEADLINE, self.find_playlist_steps(&q, cancel)).await {
+            Ok(r) => r,
+            Err(_) => {
+                self.note(format!(
+                    "playlist lookup gave up after {} s",
+                    LIBRARY_DEADLINE.as_secs()
+                ));
+                Err(SpotifyError::Failed)
+            }
+        }
+    }
+
+    async fn find_playlist_steps(
+        &self,
+        name: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Found, SpotifyError> {
+        let mut all: Vec<(String, String)> = Vec::new();
+        for page in 0..4u32 {
+            if cancel.is_cancelled() {
+                return Err(SpotifyError::Cancelled);
+            }
+            let offset = (page * 50).to_string();
+            let (status, text) = self
+                .call(
+                    reqwest::Method::GET,
+                    "/v1/me/playlists",
+                    &[("limit", "50"), ("offset", &offset)],
+                    None,
+                )
+                .await?;
+            match status {
+                s if s.is_success() => {}
+                // Allowed to play, but not to read playlists: the sign-in predates that permission.
+                StatusCode::FORBIDDEN => return Err(SpotifyError::NeedsReconnect),
+                s => return Err(map_status(s)),
+            }
+            let page: PlaylistPage =
+                serde_json::from_str(&text).map_err(|_| SpotifyError::Failed)?;
+            let more = page.next.is_some();
+            for p in page.items.into_iter().flatten() {
+                if valid_id(&p.uri, "spotify:playlist:") {
+                    all.push((p.uri, clip(&p.name, 120)));
+                }
+            }
+            if !more {
+                break;
+            }
+        }
+        self.note(format!("playlists {}", all.len()));
+        let names: Vec<&str> = all.iter().map(|(_, n)| n.as_str()).collect();
+        let i = best_playlist_match(name, &names).ok_or(SpotifyError::NoResults)?;
+        let (uri, title) = all.swap_remove(i);
+        Ok(Found {
+            uri,
+            title,
+            artist: String::new(),
+            album_uri: None,
+            context: true,
+        })
+    }
+
+    /// The person's liked songs, played as one collection ("play my liked songs").
+    pub async fn find_liked(&self, cancel: &CancellationToken) -> Result<Found, SpotifyError> {
+        self.trace.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        if cancel.is_cancelled() {
+            return Err(SpotifyError::Cancelled);
+        }
+        let me: Me = self.get_json("/v1/me", &[]).await?;
+        let id = me
+            .id
+            .filter(|i| valid_user_id(i))
+            .ok_or(SpotifyError::Failed)?;
+        Ok(Found {
+            uri: format!("spotify:user:{id}:collection"),
+            title: "your liked songs".into(),
+            artist: String::new(),
+            album_uri: None,
+            context: true,
+        })
+    }
+
     async fn find_steps(
         &self,
         words: &str,
@@ -739,6 +838,7 @@ impl Spotify {
             .map(|a| a.uri)
             .filter(|u| valid_id(u, "spotify:album:"));
         let found = Found {
+            context: false,
             album_uri,
             uri: track.uri,
             title: clip(&track.name, 120),
@@ -776,16 +876,24 @@ impl Spotify {
         // asked for the track alone); the track alone is the fallback, and the only way when the
         // album is not known.
         let alone = serde_json::json!({ "uris": [found.uri] }).to_string();
-        let (body, fallback) = match &found.album_uri {
-            Some(album) => (
-                serde_json::json!({
-                    "context_uri": album,
-                    "offset": { "uri": found.uri }
-                })
-                .to_string(),
-                Some(alone),
-            ),
-            None => (alone, None),
+        let (body, fallback) = if found.context {
+            // A playlist or the liked songs: play it as a whole, from its start.
+            (
+                serde_json::json!({ "context_uri": found.uri }).to_string(),
+                None,
+            )
+        } else {
+            match &found.album_uri {
+                Some(album) => (
+                    serde_json::json!({
+                        "context_uri": album,
+                        "offset": { "uri": found.uri }
+                    })
+                    .to_string(),
+                    Some(alone),
+                ),
+                None => (alone, None),
+            }
         };
         let (mut s, _) = self
             .call(
@@ -973,6 +1081,53 @@ impl Spotify {
     }
 }
 
+/// A Spotify user id: letters, digits, dots, dashes and underscores, up to 64 characters.
+pub fn valid_user_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
+}
+
+fn words_of(s: &str) -> Vec<String> {
+    s.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Which playlist name best matches what was said: the whole name first, then a name that
+/// contains every word said, then the most words in common. `None` if nothing shares a word. Ties
+/// go to the shorter name, then the earlier one, so the answer is the same every time.
+pub fn best_playlist_match(said: &str, names: &[&str]) -> Option<usize> {
+    let want = words_of(said);
+    if want.is_empty() {
+        return None;
+    }
+    let mut best: Option<(u32, usize, usize)> = None; // (score, shorter is larger, index)
+    for (i, name) in names.iter().enumerate() {
+        let have = words_of(name);
+        let common = want.iter().filter(|w| have.contains(w)).count() as u32;
+        if common == 0 {
+            continue;
+        }
+        let score = if have == want {
+            1000
+        } else if common as usize == want.len() {
+            500 + 10 * common
+        } else {
+            10 * common
+        };
+        let key = (score, usize::MAX - have.len(), usize::MAX - i);
+        if best.is_none_or(|b| (b.0, b.1, b.2) < key) {
+            best = Some(key);
+        }
+    }
+    best.map(|(_, _, i)| usize::MAX - i)
+}
+
 fn map_status(s: StatusCode) -> SpotifyError {
     match s {
         StatusCode::UNAUTHORIZED => SpotifyError::NotConnected,
@@ -980,6 +1135,17 @@ fn map_status(s: StatusCode) -> SpotifyError {
         StatusCode::NOT_FOUND => SpotifyError::NoDevice,
         _ => SpotifyError::Failed,
     }
+}
+
+#[derive(Deserialize)]
+struct PlaylistPage {
+    items: Vec<Option<PlaylistItem>>,
+    next: Option<String>,
+}
+#[derive(Deserialize)]
+struct PlaylistItem {
+    uri: String,
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -1674,6 +1840,7 @@ mod tests {
             title: "Bohemian Rhapsody".into(),
             artist: "Queen".into(),
             album_uri: Some("spotify:album:6i6folBtxKV28WX3msQ4FE".into()),
+            context: false,
         }
     }
 
@@ -2136,6 +2303,127 @@ mod tests {
         assert_eq!(
             sp.find("anything", &CancellationToken::new()).await,
             Err(SpotifyError::NoResults)
+        );
+    }
+
+    #[test]
+    fn the_best_playlist_name_wins_the_same_way_every_time() {
+        let names = [
+            "Chill Vibes",
+            "Workout",
+            "Workout Hits 2024",
+            "Sunday Morning Chill",
+            "Road Trip",
+        ];
+        let pick = |said: &str| best_playlist_match(said, &names).map(|i| names[i]);
+        assert_eq!(
+            pick("workout"),
+            Some("Workout"),
+            "the whole name beats a longer one"
+        );
+        assert_eq!(pick("Road trip!"), Some("Road Trip"));
+        assert_eq!(
+            pick("chill"),
+            Some("Chill Vibes"),
+            "the shorter name wins a tie"
+        );
+        assert_eq!(pick("sunday chill"), Some("Sunday Morning Chill"));
+        assert_eq!(pick("hits workout"), Some("Workout Hits 2024"));
+        assert_eq!(pick("jazz"), None);
+        assert_eq!(pick("   "), None);
+        assert_eq!(best_playlist_match("x", &[]), None);
+    }
+
+    fn playlists_answer(page: &'static str, status: u16) -> Answer {
+        Arc::new(move |r| match r.target.split('?').next().unwrap() {
+            "/api/token" => (
+                200,
+                r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+            ),
+            "/v1/me/playlists" => (status, page.into()),
+            "/v1/me" => (200, r#"{"id":"some.user-1","display_name":"Om"}"#.into()),
+            _ => (404, "{}".into()),
+        })
+    }
+
+    const PLAYLISTS: &str = r#"{"items":[null,{"uri":"spotify:playlist:37i9dQZF1DXcBWIGoYBM5M","name":"Workout"},{"uri":"spotify:playlist:bad","name":"Workout Hits"},{"uri":"spotify:playlist:0123456789abcdefABCDEF","name":"Road Trip"}],"next":null}"#;
+
+    #[tokio::test]
+    async fn a_playlist_is_found_by_name_and_played_as_a_whole() {
+        let (sp, _) = connected(playlists_answer(PLAYLISTS, 200)).await;
+        let f = sp
+            .find_playlist("my road trip", &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(f.uri, "spotify:playlist:0123456789abcdefABCDEF");
+        assert_eq!(f.title, "Road Trip");
+        assert!(f.context && f.album_uri.is_none());
+        // A malformed address from Spotify is never used, and a null entry is skipped.
+        assert_eq!(
+            sp.find_playlist("workout hits", &CancellationToken::new())
+                .await
+                .unwrap()
+                .title,
+            "Workout"
+        );
+        assert_eq!(
+            sp.find_playlist("jazz", &CancellationToken::new()).await,
+            Err(SpotifyError::NoResults)
+        );
+    }
+
+    #[tokio::test]
+    async fn without_the_playlist_permission_it_asks_to_sign_in_again() {
+        let (sp, _) = connected(playlists_answer(r#"{"error":{"status":403}}"#, 403)).await;
+        assert_eq!(
+            sp.find_playlist("workout", &CancellationToken::new()).await,
+            Err(SpotifyError::NeedsReconnect)
+        );
+    }
+
+    #[tokio::test]
+    async fn liked_songs_are_the_users_collection_and_a_bad_id_is_refused() {
+        let (sp, _) = connected(playlists_answer(PLAYLISTS, 200)).await;
+        let f = sp.find_liked(&CancellationToken::new()).await.unwrap();
+        assert_eq!(f.uri, "spotify:user:some.user-1:collection");
+        assert!(f.context);
+        assert!(valid_user_id("some.user-1"));
+        for bad in ["", "a b", "a:b", "a\"", &"x".repeat(65)] {
+            assert!(!valid_user_id(bad), "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_context_is_played_with_context_uri_and_nothing_else() {
+        let (sp, log) = connected(Arc::new(|r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("PUT", "/v1/me/player/play") => (204, String::new()),
+                ("GET", "/v1/me/player") => {
+                    (200, r#"{"is_playing":true,"device":{"name":"Mac"}}"#.into())
+                }
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let found = Found {
+            uri: "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M".into(),
+            title: "Workout".into(),
+            artist: String::new(),
+            album_uri: None,
+            context: true,
+        };
+        sp.play_found(&found, &CancellationToken::new())
+            .await
+            .unwrap();
+        let reqs = log.lock().unwrap().clone();
+        let put = reqs.iter().find(|r| r.method == "PUT").unwrap();
+        assert_eq!(
+            put.body,
+            r#"{"context_uri":"spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"}"#
         );
     }
 }
