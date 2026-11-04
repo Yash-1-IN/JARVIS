@@ -310,6 +310,76 @@ describe("App panels (issue #37)", () => {
     expect(settingsBtn).toHaveFocus();
   });
 
+  it("keeps the top bar and the side panel's offset in one sticky block, with approvals inside it", async () => {
+    const { container } = render(<App transport={new MockTransport()} />);
+    await screen.findByTestId("phase");
+    const top = container.querySelector(".app-top");
+    expect(top).not.toBeNull();
+    // The header stays visible with the approval cards under it (CSS: position sticky).
+    expect(top?.querySelector("header.app-header")).not.toBeNull();
+    expect(
+      within(top as HTMLElement).getByRole("navigation", { name: "Panels" }),
+    ).toBeInTheDocument();
+    // The conversation is not inside it, so it scrolls underneath.
+    expect(top?.querySelector(".chat")).toBeNull();
+  });
+
+  it("puts the page back where it was when a panel closes, and does not scroll to the button", async () => {
+    // jsdom does not scroll; give the page a scroll position that we can set and read.
+    let top = 0;
+    Object.defineProperty(document.documentElement, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = v;
+      },
+    });
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    try {
+      render(<App transport={new MockTransport()} />);
+      await screen.findByTestId("phase");
+      top = 640; // scrolled down the conversation
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Settings" })),
+      );
+      // On a narrow window the conversation is hidden and the page loses its place.
+      top = 0;
+      await act(async () =>
+        fireEvent.click(
+          within(screen.getByRole("region", { name: "Settings" })).getByRole(
+            "button",
+            { name: /Close/ },
+          ),
+        ),
+      );
+      expect(top).toBe(640);
+      // Neither moving focus into the panel nor back to its button may scroll the page.
+      const calls = focus.mock.calls.filter(([opts]) => opts !== undefined);
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      for (const [opts] of calls) {
+        expect(opts).toEqual({ preventScroll: true });
+      }
+      // Switching between panels keeps the first saved position, not the one in between.
+      top = 300;
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Activity" })),
+      );
+      top = 0;
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Memory" })),
+      );
+      top = 0;
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Memory" })),
+      );
+      expect(top).toBe(300);
+    } finally {
+      focus.mockRestore();
+      delete (document.documentElement as unknown as Record<string, unknown>)
+        .scrollTop;
+    }
+  });
+
   it("Esc inside a panel closes it and does not cancel the reply; outside it still cancels", async () => {
     vi.useFakeTimers();
     const t = new MockTransport();

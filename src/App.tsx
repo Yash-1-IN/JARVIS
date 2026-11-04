@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { ActivityLog } from "./components/ActivityLog";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
@@ -48,13 +54,43 @@ export default function App({ transport }: { transport: Transport }) {
   const navButtons = useRef<Partial<Record<PanelId, HTMLButtonElement | null>>>(
     {},
   );
-  const togglePanel = (id: PanelId) =>
-    setPanel((open) => (open === id ? null : id));
-  // Closing returns focus to the button that opened the panel.
-  const closePanel = () => {
-    if (panel) navButtons.current[panel]?.focus();
-    setPanel(null);
+  // Where the conversation was scrolled to when a panel was opened. On a narrow window the
+  // conversation is hidden while a panel is open, so the page loses its scroll position; it is
+  // put back when the panel closes, and the person is where they were.
+  const savedScroll = useRef<number | null>(null);
+  const openPanel = (id: PanelId | null) => {
+    if (id !== null && panel === null) {
+      savedScroll.current = document.documentElement.scrollTop;
+    }
+    setPanel(id);
   };
+  const togglePanel = (id: PanelId) => openPanel(panel === id ? null : id);
+  // Closing returns focus to the button that opened the panel, without scrolling to it.
+  const closePanel = () => {
+    if (panel) navButtons.current[panel]?.focus({ preventScroll: true });
+    openPanel(null);
+  };
+  useLayoutEffect(() => {
+    if (panel === null && savedScroll.current !== null) {
+      document.documentElement.scrollTop = savedScroll.current;
+      savedScroll.current = null;
+    }
+  }, [panel]);
+
+  // The top bar (and any approval cards) stay on screen; the side panel sticks just below them.
+  const topRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = topRef.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const set = () =>
+      root.style.setProperty("--app-top-h", `${el.offsetHeight}px`);
+    set();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Read the store at call time so the shortcut listener is bound once.
   const run = useCallback((p: Promise<void>) => {
@@ -133,48 +169,50 @@ export default function App({ transport }: { transport: Transport }) {
   return (
     <div className={`app${panel ? " has-panel" : ""}`}>
       {transport.isMock && <MockBadge />}
-      <header className="app-header">
-        <h1>JARVIS</h1>
-        <nav aria-label="Panels" className="app-nav">
-          {(Object.keys(PANELS) as PanelId[]).map((id) => (
-            <button
-              key={id}
-              type="button"
-              ref={(el) => {
-                navButtons.current[id] = el;
-              }}
-              aria-pressed={panel === id}
-              aria-controls={panel === id ? `${id}-panel` : undefined}
-              onClick={() => togglePanel(id)}
-            >
-              {PANELS[id]}
-            </button>
-          ))}
-        </nav>
-      </header>
+      <div className="app-top" ref={topRef}>
+        <header className="app-header">
+          <h1>JARVIS</h1>
+          <nav aria-label="Panels" className="app-nav">
+            {(Object.keys(PANELS) as PanelId[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                ref={(el) => {
+                  navButtons.current[id] = el;
+                }}
+                aria-pressed={panel === id}
+                aria-controls={panel === id ? `${id}-panel` : undefined}
+                onClick={() => togglePanel(id)}
+              >
+                {PANELS[id]}
+              </button>
+            ))}
+          </nav>
+        </header>
+        {/* Approval and memory cards sit above everything else, so an open panel never hides them. */}
+        {((snapshot && snapshot.pendingApprovals.length > 0) ||
+          proposals.length > 0) && (
+          <div className="approvals">
+            {snapshot?.pendingApprovals.map((r) => (
+              <ApprovalCard
+                key={r.approvalId}
+                request={r}
+                onDecide={(decision) =>
+                  transport.resolveApproval({
+                    approvalId: r.approvalId,
+                    argsDigest: r.argsDigest,
+                    decision,
+                  })
+                }
+              />
+            ))}
+            {proposals.map((m) => (
+              <MemoryProposalCard key={m.id} memory={m} actions={memories} />
+            ))}
+          </div>
+        )}
+      </div>
       <WelcomeNotice transport={transport} />
-      {/* Approval and memory cards sit above everything else, so an open panel never hides them. */}
-      {((snapshot && snapshot.pendingApprovals.length > 0) ||
-        proposals.length > 0) && (
-        <div className="approvals">
-          {snapshot?.pendingApprovals.map((r) => (
-            <ApprovalCard
-              key={r.approvalId}
-              request={r}
-              onDecide={(decision) =>
-                transport.resolveApproval({
-                  approvalId: r.approvalId,
-                  argsDigest: r.argsDigest,
-                  decision,
-                })
-              }
-            />
-          ))}
-          {proposals.map((m) => (
-            <MemoryProposalCard key={m.id} memory={m} actions={memories} />
-          ))}
-        </div>
-      )}
       <div className="app-body">
         <main className="assistant">
           {error && <p role="alert">{error}</p>}

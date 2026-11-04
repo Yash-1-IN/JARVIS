@@ -17,7 +17,7 @@ export function SidePanel({ id, title, onClose, children }: Props) {
   const headingId = `${id}-title`;
 
   useEffect(() => {
-    heading.current?.focus();
+    heading.current?.focus({ preventScroll: true });
   }, [id]);
 
   const onKeyDown = (e: KeyboardEvent) => {
