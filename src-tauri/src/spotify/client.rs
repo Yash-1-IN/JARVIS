@@ -17,6 +17,12 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(180);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// All of "search, play, check" together; the `music.play` tool allows a little longer.
 pub const PLAY_DEADLINE: Duration = Duration::from_secs(20);
+/// How many times (one second apart) to look at the player to see a song start.
+const NORMAL_POLLS: u32 = 4;
+/// The same right after the Spotify app was started, which is slower to begin.
+const FRESH_POLLS: u32 = 8;
+/// Least time worth spending on the final "play" after the Spotify app was started.
+const MIN_PLAY_AFTER_START: Duration = Duration::from_secs(4);
 /// The search alone.
 const FIND_DEADLINE: Duration = Duration::from_secs(10);
 /// Longest search words we send. A spoken request is short.
@@ -62,6 +68,9 @@ pub struct Found {
     pub uri: String,
     pub title: String,
     pub artist: String,
+    /// The track's album (`spotify:album:` and 22 letters or digits), used to play the track inside
+    /// its album when playing the track alone does not start.
+    pub album_uri: Option<String>,
 }
 
 #[derive(Clone)]
@@ -136,6 +145,17 @@ struct Me {
     display_name: Option<String>,
 }
 
+/// `"get devices 200 ×3"` is `("get devices 200", 3)`; a line with no count is one occurrence.
+fn split_repeat(s: &str) -> (&str, u32) {
+    match s.rsplit_once(" ×") {
+        Some((base, n)) => match n.parse::<u32>() {
+            Ok(n) => (base, n),
+            Err(_) => (s, 1),
+        },
+        None => (s, 1),
+    }
+}
+
 fn clip(s: &str, n: usize) -> String {
     s.chars().filter(|c| !c.is_control()).take(n).collect()
 }
@@ -160,6 +180,12 @@ pub fn search_queries(words: &str) -> Vec<String> {
     }
     out.push(plain);
     out
+}
+
+/// `prefix` and then exactly 22 letters or digits, nothing else.
+fn valid_id(uri: &str, prefix: &str) -> bool {
+    uri.strip_prefix(prefix)
+        .is_some_and(|id| id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
 fn form_body(pairs: &[(&str, &str)]) -> String {
@@ -210,9 +236,30 @@ impl Spotify {
 
     pub fn note(&self, step: String) {
         let mut t = self.trace.lock().unwrap_or_else(|e| e.into_inner());
+        // The same step again (a wait that polls) is counted, not repeated, so a long wait cannot
+        // push the lines that matter out of the short trace.
+        if let Some(last) = t.last_mut() {
+            let (base, n) = split_repeat(last);
+            if base == step {
+                *last = format!("{base} ×{}", n + 1);
+                return;
+            }
+        }
         if t.len() < 20 {
             t.push(step);
         }
+    }
+
+    /// Records what the player said, in place of the plain "get player 200" line the request itself
+    /// just recorded, so a run of identical answers collapses to one line with a count.
+    fn note_state(&self, step: String) {
+        {
+            let mut t = self.trace.lock().unwrap_or_else(|e| e.into_inner());
+            if t.last().is_some_and(|l| l.starts_with("get player 200")) {
+                t.pop();
+            }
+        }
+        self.note(step);
     }
 
     /// What the last "play" did, for example `search 200 · play 204 · player 204`.
@@ -524,16 +571,131 @@ impl Spotify {
     /// Plays a track found by `find` through Spotify's servers on the person's devices. Our
     /// own deadline is shorter than the tool's, so a slow Spotify ends here with the trace of
     /// what it answered, instead of the tool timing out with nothing to show.
+    #[cfg(test)]
     pub async fn play_found(
         &self,
         found: &Found,
         cancel: &CancellationToken,
     ) -> Result<Played, SpotifyError> {
-        match tokio::time::timeout(PLAY_DEADLINE, self.play_found_steps(found, cancel)).await {
+        self.play_found_within(found, cancel, PLAY_DEADLINE, NORMAL_POLLS)
+            .await
+    }
+
+    async fn play_found_within(
+        &self,
+        found: &Found,
+        cancel: &CancellationToken,
+        deadline: Duration,
+        polls: u32,
+    ) -> Result<Played, SpotifyError> {
+        match tokio::time::timeout(deadline, self.play_found_steps(found, cancel, polls)).await {
             Ok(r) => r,
             Err(_) => {
-                self.note(format!("gave up after {} s", PLAY_DEADLINE.as_secs()));
+                self.note(format!("gave up after {} s", deadline.as_secs()));
                 Err(SpotifyError::Failed)
+            }
+        }
+    }
+
+    /// Like `play_found`, but when Spotify lists no device to play on (the Spotify app on this
+    /// computer is closed), it starts that app with `start_app`, waits for it to show up as a
+    /// device, and asks again. All of it fits inside `budget`, so the tool's own time limit never
+    /// cuts it off with nothing to show. `start_app` runs on a blocking thread and answers whether
+    /// the app was started (it must refuse when the app is not installed).
+    pub async fn play_found_or_start_app(
+        &self,
+        found: &Found,
+        cancel: &CancellationToken,
+        start_app: Arc<dyn Fn() -> bool + Send + Sync>,
+        budget: Duration,
+    ) -> Result<Played, SpotifyError> {
+        let began = Instant::now();
+        let first = self
+            .play_found_within(found, cancel, budget.min(PLAY_DEADLINE), NORMAL_POLLS)
+            .await;
+        // Only "nothing to play on" is worth starting the app for. A device that took the song and
+        // stayed silent is already running, a refusal and a sign-in problem are not about the app,
+        // and no network will not be fixed by it.
+        if first != Err(SpotifyError::NoDevice) {
+            return first;
+        }
+        if cancel.is_cancelled() {
+            return Err(SpotifyError::Cancelled);
+        }
+        let started = tokio::task::spawn_blocking(move || start_app())
+            .await
+            .unwrap_or(false);
+        if !started {
+            self.note("could not start the Spotify app".into());
+            return first;
+        }
+        self.note("started the Spotify app".into());
+        // The app needs a few seconds before Spotify lists it: wait, then look for it.
+        let settle = Duration::from_millis(self.ep.settle_ms.saturating_mul(3));
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(SpotifyError::Cancelled),
+            _ = tokio::time::sleep(settle) => {}
+        }
+        let left = budget.saturating_sub(began.elapsed());
+        let min_after = self.min_play_after_start();
+        if left < min_after {
+            self.note("no time left after starting the Spotify app".into());
+            return first;
+        }
+        if !self
+            .wait_for_device(left.saturating_sub(min_after), cancel)
+            .await
+        {
+            if cancel.is_cancelled() {
+                return Err(SpotifyError::Cancelled);
+            }
+            return Err(SpotifyError::NoDevice);
+        }
+        // A freshly started app registers as a device before it is ready to play: give it a few
+        // seconds more, and watch the player for longer.
+        let ready = Duration::from_millis(self.ep.settle_ms.saturating_mul(5));
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(SpotifyError::Cancelled),
+            _ = tokio::time::sleep(ready) => {}
+        }
+        let left = budget.saturating_sub(began.elapsed());
+        self.play_found_within(found, cancel, left.max(min_after), FRESH_POLLS)
+            .await
+    }
+
+    /// The least time worth giving the last "play" (a short one in tests, where nothing settles).
+    fn min_play_after_start(&self) -> Duration {
+        if self.ep.settle_ms == 0 {
+            Duration::from_millis(300)
+        } else {
+            MIN_PLAY_AFTER_START
+        }
+    }
+
+    /// Waits until Spotify lists a device we can play on, up to `within`. True if one showed up.
+    async fn wait_for_device(&self, within: Duration, cancel: &CancellationToken) -> bool {
+        let end = Instant::now() + within;
+        let poll = Duration::from_millis(self.ep.settle_ms.max(10));
+        loop {
+            if cancel.is_cancelled() {
+                return false;
+            }
+            if let Ok(devs) = self.get_json::<Devices>("/v1/me/player/devices", &[]).await
+                && devs
+                    .devices
+                    .iter()
+                    .any(|d| d.id.is_some() && !d.is_restricted)
+            {
+                self.note("a device appeared".into());
+                return true;
+            }
+            if Instant::now() + poll >= end {
+                self.note(format!("no device appeared within {} s", within.as_secs()));
+                return false;
+            }
+            tokio::select! {
+                _ = cancel.cancelled() => return false,
+                _ = tokio::time::sleep(poll) => {}
             }
         }
     }
@@ -549,13 +711,10 @@ impl Spotify {
         }
         let mut hit = None;
         for query in search_queries(&q) {
-            let found: Search = self
-                .get_json(
-                    "/v1/search",
-                    &[("q", &query), ("type", "track"), ("limit", "5")],
-                )
-                .await?;
-            if let Some(t) = found.tracks.items.into_iter().next() {
+            let items = self.search_tracks(&query).await?;
+            // The first result that can be played where this person is. The Spotify app clears
+            // its player when it is asked for a track it cannot play (reported on Windows).
+            if let Some(t) = items.into_iter().find(|t| t.is_playable != Some(false)) {
                 hit = Some(t);
                 break;
             }
@@ -564,7 +723,23 @@ impl Spotify {
         if !track.uri.starts_with("spotify:track:") || track.uri.len() > 64 {
             return Err(SpotifyError::Failed);
         }
+        // A track address is public; recording it lets a failure be checked against what the
+        // Spotify app shows for the same song.
+        self.note(format!(
+            "track {} playable={}",
+            track.uri,
+            match track.is_playable {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "unknown",
+            }
+        ));
+        let album_uri = track
+            .album
+            .map(|a| a.uri)
+            .filter(|u| valid_id(u, "spotify:album:"));
         let found = Found {
+            album_uri,
             uri: track.uri,
             title: clip(&track.name, 120),
             artist: clip(
@@ -575,15 +750,43 @@ impl Spotify {
         Ok(found)
     }
 
+    /// Searches for tracks. (A search for the account's country, `market=from_token`, is refused
+    /// with 403 for apps in Spotify's development mode, so the plain search is the one used.)
+    async fn search_tracks(&self, query: &str) -> Result<Vec<Track>, SpotifyError> {
+        let s: Search = self
+            .get_json(
+                "/v1/search",
+                &[("q", query), ("type", "track"), ("limit", "5")],
+            )
+            .await?;
+        Ok(s.tracks.items)
+    }
+
     async fn play_found_steps(
         &self,
         found: &Found,
         cancel: &CancellationToken,
+        polls: u32,
     ) -> Result<Played, SpotifyError> {
         if cancel.is_cancelled() {
             return Err(SpotifyError::Cancelled);
         }
-        let body = serde_json::json!({ "uris": [found.uri] }).to_string();
+        // The ways to ask, best first. Playing the track inside its album is how Spotify's own apps
+        // start a song, and it is the one that works on Windows (the app clears its player when
+        // asked for the track alone); the track alone is the fallback, and the only way when the
+        // album is not known.
+        let alone = serde_json::json!({ "uris": [found.uri] }).to_string();
+        let (body, fallback) = match &found.album_uri {
+            Some(album) => (
+                serde_json::json!({
+                    "context_uri": album,
+                    "offset": { "uri": found.uri }
+                })
+                .to_string(),
+                Some(alone),
+            ),
+            None => (alone, None),
+        };
         let (mut s, _) = self
             .call(
                 reqwest::Method::PUT,
@@ -617,11 +820,18 @@ impl Spotify {
                 map_status(s)
             });
         }
-        let device = match self.confirm_playing(cancel).await {
+        let device = match self.confirm_playing(cancel, polls).await {
             Err(SpotifyError::NotPlaying) => {
                 // Spotify took the request but nothing started: the device may be asleep.
                 // Move playback to it explicitly, then ask for the song again.
-                self.wake_device_and_retry(&body, cancel).await?
+                match self.wake_device_and_retry(&body, cancel, polls).await {
+                    // Still nothing: ask the other way.
+                    Err(SpotifyError::NotPlaying) if fallback.is_some() => {
+                        self.play_other_way(fallback.as_deref().unwrap_or_default(), cancel, polls)
+                            .await?
+                    }
+                    other => other?,
+                }
             }
             other => other?,
         };
@@ -632,10 +842,41 @@ impl Spotify {
         })
     }
 
+    /// Asks once more with `body` (the other way of asking) on the best device, and watches.
+    async fn play_other_way(
+        &self,
+        body: &str,
+        cancel: &CancellationToken,
+        polls: u32,
+    ) -> Result<Option<String>, SpotifyError> {
+        let devs: Devices = self.get_json("/v1/me/player/devices", &[]).await?;
+        let id = devs
+            .devices
+            .iter()
+            .filter(|d| !d.is_restricted)
+            .max_by_key(|d| d.is_active)
+            .and_then(|d| d.id.clone())
+            .ok_or(SpotifyError::NoDevice)?;
+        self.note("trying the other way of asking".into());
+        let (s, _) = self
+            .call(
+                reqwest::Method::PUT,
+                "/v1/me/player/play",
+                &[("device_id", &id)],
+                Some(body.to_owned()),
+            )
+            .await?;
+        if !s.is_success() {
+            return Err(map_status(s));
+        }
+        self.confirm_playing(cancel, polls).await
+    }
+
     async fn wake_device_and_retry(
         &self,
         body: &str,
         cancel: &CancellationToken,
+        polls: u32,
     ) -> Result<Option<String>, SpotifyError> {
         let devs: Devices = self.get_json("/v1/me/player/devices", &[]).await?;
         self.note(format!(
@@ -643,7 +884,8 @@ impl Spotify {
             devs.devices
                 .iter()
                 .map(|d| format!(
-                    "{}{}",
+                    "{}:{}{}",
+                    clip(&d.kind, 12),
                     if d.is_active { "active" } else { "idle" },
                     if d.is_restricted { "+restricted" } else { "" }
                 ))
@@ -673,17 +915,19 @@ impl Spotify {
         if !s.is_success() {
             return Err(map_status(s));
         }
-        self.confirm_playing(cancel).await
+        self.confirm_playing(cancel, polls).await
     }
 
-    /// Asks Spotify whether something is really playing, up to four times. A 204 or
+    /// Asks Spotify whether something is really playing, up to `polls` times, one second apart. A 204 or
     /// `is_playing: false` means no. Any other answer is "cannot tell", which is not a
     /// failure (the play request itself was accepted).
     async fn confirm_playing(
         &self,
         cancel: &CancellationToken,
+        polls: u32,
     ) -> Result<Option<String>, SpotifyError> {
-        for attempt in 0..4 {
+        let last = polls.saturating_sub(1);
+        for attempt in 0..polls {
             if self.ep.settle_ms > 0 {
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(SpotifyError::Cancelled),
@@ -694,7 +938,7 @@ impl Spotify {
                 .call(reqwest::Method::GET, "/v1/me/player", &[], None)
                 .await?;
             if s == StatusCode::NO_CONTENT {
-                if attempt == 3 {
+                if attempt == last {
                     return Err(SpotifyError::NotPlaying);
                 }
                 continue;
@@ -705,10 +949,23 @@ impl Spotify {
             let Ok(state) = serde_json::from_str::<PlayerState>(&text) else {
                 return Ok(None);
             };
+            // What the player says, as yes and no only: never the track, the device's name or any
+            // text. Repeated identical lines collapse in the trace.
+            self.note_state(format!(
+                "player playing={} track={} progress={}s device={}",
+                state.is_playing,
+                state.item.is_some(),
+                state.progress_ms.unwrap_or(0) / 1000,
+                match &state.device {
+                    Some(d) if d.is_active => "active",
+                    Some(_) => "idle",
+                    None => "none",
+                }
+            ));
             if state.is_playing {
                 return Ok(state.device.map(|d| clip(&d.name, 60)));
             }
-            if attempt == 3 {
+            if attempt == last {
                 return Err(SpotifyError::NotPlaying);
             }
         }
@@ -738,6 +995,15 @@ struct Track {
     uri: String,
     name: String,
     artists: Vec<Artist>,
+    /// False means Spotify says it cannot be played for this account.
+    #[serde(default)]
+    is_playable: Option<bool>,
+    #[serde(default)]
+    album: Option<Album>,
+}
+#[derive(Deserialize)]
+struct Album {
+    uri: String,
 }
 #[derive(Deserialize)]
 struct Artist {
@@ -747,10 +1013,17 @@ struct Artist {
 struct PlayerState {
     is_playing: bool,
     device: Option<PlayerDevice>,
+    /// Whether Spotify has a current track at all (the track itself is never read or logged).
+    #[serde(default)]
+    item: Option<serde::de::IgnoredAny>,
+    #[serde(default)]
+    progress_ms: Option<u64>,
 }
 #[derive(Deserialize)]
 struct PlayerDevice {
     name: String,
+    #[serde(default)]
+    is_active: bool,
 }
 #[derive(Deserialize)]
 struct Devices {
@@ -759,6 +1032,9 @@ struct Devices {
 #[derive(Deserialize)]
 struct Device {
     id: Option<String>,
+    /// "Computer", "Smartphone", "Speaker": what kind of device, never its name.
+    #[serde(rename = "type", default)]
+    kind: String,
     #[serde(default)]
     is_active: bool,
     #[serde(default)]
@@ -1297,10 +1573,7 @@ mod tests {
                 t.contains("search 200") && t.contains("player/play 204"),
                 "{t}"
             );
-            assert!(
-                t.contains("devices idle") && t.contains("player 204"),
-                "{t}"
-            );
+            assert!(t.contains(":idle") && t.contains("player 204"), "{t}");
             assert!(
                 !t.contains("acc-") && !t.contains("ref-"),
                 "no token in the trace"
@@ -1352,6 +1625,308 @@ mod tests {
         );
     }
 
+    // ---- Windows: start the Spotify app when nothing is open ----
+
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// A Spotify account whose app is closed until `started` is set, then lists one device.
+    fn closed_app(started: Arc<AtomicBool>, shows_up: bool) -> Answer {
+        Arc::new(move |r| {
+            let open = started.load(Ordering::SeqCst) && shows_up;
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/search") => (200, SEARCH_HIT.into()),
+                ("GET", "/v1/me/player/devices") if open => {
+                    (200, r#"{"devices":[{"id":"pc1","name":"My PC"}]}"#.into())
+                }
+                ("GET", "/v1/me/player/devices") => (200, r#"{"devices":[]}"#.into()),
+                ("PUT", _) if open && r.target.contains("device_id=pc1") => (204, String::new()),
+                ("PUT", _) => (404, "{}".into()),
+                ("GET", "/v1/me/player") if open => (
+                    200,
+                    r#"{"is_playing":true,"device":{"name":"My PC"}}"#.into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        })
+    }
+
+    fn starter(
+        flag: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+        ok: bool,
+    ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        Arc::new(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            if ok {
+                flag.store(true, Ordering::SeqCst);
+            }
+            ok
+        })
+    }
+
+    fn found() -> Found {
+        Found {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Bohemian Rhapsody".into(),
+            artist: "Queen".into(),
+            album_uri: Some("spotify:album:6i6folBtxKV28WX3msQ4FE".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn with_no_device_it_starts_the_app_waits_for_it_and_plays() {
+        let started = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (sp, log) = connected(closed_app(started.clone(), true)).await;
+        let p = sp
+            .play_found_or_start_app(
+                &found(),
+                &CancellationToken::new(),
+                starter(started, calls.clone(), true),
+                Duration::from_secs(8),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (p.title.as_str(), p.device.as_deref()),
+            ("Bohemian Rhapsody", Some("My PC"))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the app was started once");
+        // It played on the device that appeared, with only the track's address.
+        let plays: Vec<_> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == "PUT" && r.target.contains("device_id=pc1"))
+            .cloned()
+            .collect();
+        assert!(!plays.is_empty());
+        assert!(
+            plays[0]
+                .body
+                .contains("spotify:track:4u7EnebtmKWzUH433cf5Qv")
+        );
+        assert!(sp.last_trace().contains("started the Spotify app"));
+        assert!(sp.last_trace().contains("a device appeared"));
+    }
+
+    #[tokio::test]
+    async fn if_the_app_cannot_be_started_it_says_there_is_no_device_and_asks_nothing_more() {
+        let started = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (sp, log) = connected(closed_app(started.clone(), true)).await;
+        let out = sp
+            .play_found_or_start_app(
+                &found(),
+                &CancellationToken::new(),
+                starter(started, calls.clone(), false),
+                Duration::from_secs(8),
+            )
+            .await;
+        assert_eq!(out, Err(SpotifyError::NoDevice));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(sp.last_trace().contains("could not start the Spotify app"));
+        // No waiting loop: the device list was asked for by the first attempt only.
+        let lists = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.target.starts_with("/v1/me/player/devices"))
+            .count();
+        assert!(lists <= 1, "{lists}");
+    }
+
+    #[tokio::test]
+    async fn an_app_that_starts_but_never_shows_up_gives_up_inside_the_budget() {
+        let started = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (sp, _) = connected(closed_app(started.clone(), false)).await;
+        let t = Instant::now();
+        let out = sp
+            .play_found_or_start_app(
+                &found(),
+                &CancellationToken::new(),
+                starter(started, calls, true),
+                Duration::from_millis(1500),
+            )
+            .await;
+        assert_eq!(out, Err(SpotifyError::NoDevice));
+        assert!(
+            t.elapsed() < Duration::from_millis(2500),
+            "{:?}",
+            t.elapsed()
+        );
+        assert!(sp.last_trace().contains("no device appeared"));
+    }
+
+    #[tokio::test]
+    async fn a_cancel_while_waiting_for_the_app_stops_at_once() {
+        let started = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (sp, _) = connected(closed_app(started.clone(), false)).await;
+        let cancel = CancellationToken::new();
+        let c = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            c.cancel();
+        });
+        let t = Instant::now();
+        let out = sp
+            .play_found_or_start_app(
+                &found(),
+                &cancel,
+                starter(started, calls, true),
+                Duration::from_secs(20),
+            )
+            .await;
+        assert_eq!(out, Err(SpotifyError::Cancelled));
+        assert!(t.elapsed() < Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn problems_that_are_not_about_a_missing_app_never_start_it() {
+        // Premium needed (403), and not signed in (401 and no refresh): the app is left alone.
+        for (code, want) in [(403u16, SpotifyError::Forbidden)] {
+            let started = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let (sp, _) = connected(Arc::new(move |r| {
+                match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                    ("POST", "/api/token") => (
+                        200,
+                        r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                    ),
+                    ("PUT", _) => (code, "{}".into()),
+                    _ => (404, "{}".into()),
+                }
+            }))
+            .await;
+            let out = sp
+                .play_found_or_start_app(
+                    &found(),
+                    &CancellationToken::new(),
+                    starter(started, calls.clone(), true),
+                    Duration::from_secs(8),
+                )
+                .await;
+            assert_eq!(out, Err(want));
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "the app must not be started"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn when_a_device_is_already_there_the_app_is_not_started() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let (sp, _) = connected(Arc::new(|r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("PUT", "/v1/me/player/play") => (204, String::new()),
+                ("GET", "/v1/me/player") => (
+                    200,
+                    r#"{"is_playing":true,"device":{"name":"My PC"}}"#.into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let p = sp
+            .play_found_or_start_app(
+                &found(),
+                &CancellationToken::new(),
+                Arc::new(move || {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    true
+                }),
+                Duration::from_secs(8),
+            )
+            .await
+            .unwrap();
+        assert_eq!(p.device.as_deref(), Some("My PC"));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_long_wait_collapses_its_polls_so_the_summary_line_survives() {
+        let (sp, _) = connected(Arc::new(|_| (404, "{}".into()))).await;
+        for _ in 0..50 {
+            sp.note("get player/devices 200".into());
+        }
+        sp.note("no device appeared within 12 s".into());
+        let t = sp.last_trace();
+        assert!(t.contains("get player/devices 200 ×50"), "{t}");
+        assert!(t.ends_with("no device appeared within 12 s"), "{t}");
+        // Different steps are still kept in order, up to the cap.
+        sp.note("a".into());
+        sp.note("a".into());
+        assert!(sp.last_trace().ends_with("a ×2"));
+    }
+
+    #[tokio::test]
+    async fn a_device_that_takes_the_song_and_stays_silent_does_not_get_the_app_started() {
+        // Spotify says 204 to every play, a device is listed, but the player never plays.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let (sp, _) = connected(Arc::new(|r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("PUT", _) => (204, String::new()),
+                ("GET", "/v1/me/player/devices") => (
+                    200,
+                    r#"{"devices":[{"id":"pc1","type":"Computer","is_active":true}]}"#.into(),
+                ),
+                ("GET", "/v1/me/player") => (
+                    200,
+                    r#"{"is_playing":false,"device":{"name":"PC","is_active":true},"progress_ms":0}"#
+                        .into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let out = sp
+            .play_found_or_start_app(
+                &found(),
+                &CancellationToken::new(),
+                Arc::new(move || {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    true
+                }),
+                Duration::from_secs(8),
+            )
+            .await;
+        assert_eq!(out, Err(SpotifyError::NotPlaying));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a running app is not started again"
+        );
+        // The trace says what the player reported, in yes and no only, and what kind of device.
+        let t = sp.last_trace();
+        assert!(
+            t.contains("player playing=false track=false progress=0s device=active"),
+            "{t}"
+        );
+        assert!(t.contains("Computer:active"), "{t}");
+        assert!(
+            !t.contains("PC"),
+            "a device's name never goes into the trace: {t}"
+        );
+    }
+
     /// A Disconnect pressed while a token refresh is in flight must stay a Disconnect: the refresh
     /// that was already on its way must not put the (possibly rotated) token back in the keychain.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1389,5 +1964,178 @@ mod tests {
             "the in-flight refresh put the token back after Disconnect"
         );
         assert!(!sp.connected());
+    }
+
+    #[tokio::test]
+    async fn the_search_skips_a_track_that_cannot_be_played_and_keeps_the_album() {
+        let hits = r#"{"tracks":{"items":[
+            {"uri":"spotify:track:AAAAAAAAAAAAAAAAAAAAAA","name":"Blocked","artists":[{"name":"X"}],"is_playable":false},
+            {"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv","name":"Thunderstruck","artists":[{"name":"AC/DC"}],"is_playable":true,
+             "album":{"uri":"spotify:album:6i6folBtxKV28WX3msQ4FE"}},
+            {"uri":"spotify:track:BBBBBBBBBBBBBBBBBBBBBB","name":"Other","artists":[],"album":{"uri":"not an album address"}}]}}"#;
+        let (sp, _) = connected(Arc::new(move |r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/search") => (200, hits.into()),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let f = sp
+            .find("thunderstruck", &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(f.uri, "spotify:track:4u7EnebtmKWzUH433cf5Qv");
+        assert_eq!(
+            f.album_uri.as_deref(),
+            Some("spotify:album:6i6folBtxKV28WX3msQ4FE")
+        );
+        assert!(
+            sp.last_trace()
+                .contains("track spotify:track:4u7EnebtmKWzUH433cf5Qv playable=yes")
+        );
+    }
+
+    #[test]
+    fn only_well_formed_album_addresses_are_kept() {
+        assert!(valid_id(
+            "spotify:album:6i6folBtxKV28WX3msQ4FE",
+            "spotify:album:"
+        ));
+        for bad in [
+            "",
+            "spotify:album:",
+            "spotify:album:6i6folBtxKV28WX3msQ4F",
+            "spotify:track:6i6folBtxKV28WX3msQ4FE",
+            "spotify:album:6i6folBtxKV28WX3msQ4F\"}",
+            "https://open.spotify.com/album/6i6folBtxKV28WX3msQ4FE",
+        ] {
+            assert!(!valid_id(bad, "spotify:album:"), "{bad:?}");
+        }
+    }
+
+    /// A Spotify app that plays only when asked the given way (`needle` is in the request body).
+    fn picky(needle: &'static str, plays: Arc<Mutex<Vec<String>>>) -> Answer {
+        let started = Arc::new(AtomicBool::new(false));
+        Arc::new(move |r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/me/player/devices") => (
+                    200,
+                    r#"{"devices":[{"id":"pc1","type":"Computer","is_active":true}]}"#.into(),
+                ),
+                ("PUT", "/v1/me/player/play") => {
+                    plays.lock().unwrap().push(r.body.clone());
+                    if r.body.contains(needle) {
+                        started.store(true, Ordering::SeqCst);
+                    }
+                    (204, String::new())
+                }
+                ("PUT", _) => (204, String::new()),
+                ("GET", "/v1/me/player") if started.load(Ordering::SeqCst) => (
+                    200,
+                    r#"{"is_playing":true,"device":{"name":"My PC","is_active":true},"progress_ms":900}"#.into(),
+                ),
+                ("GET", "/v1/me/player") => (
+                    200,
+                    r#"{"is_playing":false,"device":{"name":"My PC","is_active":true},"progress_ms":0}"#.into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn the_track_is_played_inside_its_album_first_and_at_once() {
+        let plays = Arc::new(Mutex::new(Vec::new()));
+        let (sp, _) = connected(picky("context_uri", plays.clone())).await;
+        let p = sp
+            .play_found(&found(), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(p.device.as_deref(), Some("My PC"));
+        let plays = plays.lock().unwrap().clone();
+        assert_eq!(plays.len(), 1, "one request was enough: {plays:?}");
+        assert!(plays[0].contains("spotify:album:6i6folBtxKV28WX3msQ4FE"));
+        assert!(plays[0].contains(r#""offset":{"uri":"spotify:track:4u7EnebtmKWzUH433cf5Qv"}"#));
+        assert!(!plays[0].contains("\"uris\""));
+    }
+
+    #[tokio::test]
+    async fn if_the_album_way_never_starts_the_track_alone_is_tried() {
+        let plays = Arc::new(Mutex::new(Vec::new()));
+        let (sp, _) = connected(picky("\"uris\"", plays.clone())).await;
+        let p = sp
+            .play_found(&found(), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(p.device.as_deref(), Some("My PC"));
+        let plays = plays.lock().unwrap().clone();
+        assert!(plays.first().unwrap().contains("context_uri"));
+        assert!(plays.last().unwrap().contains("\"uris\""));
+        assert!(sp.last_trace().contains("trying the other way of asking"));
+    }
+
+    #[tokio::test]
+    async fn without_an_album_address_only_the_track_alone_is_asked_for() {
+        let (sp, log) = connected(Arc::new(|r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/me/player/devices") => (
+                    200,
+                    r#"{"devices":[{"id":"pc1","type":"Computer","is_active":true}]}"#.into(),
+                ),
+                ("PUT", _) => (204, String::new()),
+                ("GET", "/v1/me/player") => (
+                    200,
+                    r#"{"is_playing":false,"device":{"name":"PC","is_active":true}}"#.into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let mut f = found();
+        f.album_uri = None;
+        assert_eq!(
+            sp.play_found(&f, &CancellationToken::new()).await,
+            Err(SpotifyError::NotPlaying)
+        );
+        assert!(
+            !log.lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.body.contains("context_uri"))
+        );
+    }
+
+    #[tokio::test]
+    async fn only_unplayable_results_count_as_no_results() {
+        let (sp, _) = connected(Arc::new(|r| {
+            match (r.method.as_str(), r.target.split('?').next().unwrap()) {
+                ("POST", "/api/token") => (
+                    200,
+                    r#"{"access_token":"a-0123456789","expires_in":3600}"#.into(),
+                ),
+                ("GET", "/v1/search") => (
+                    200,
+                    r#"{"tracks":{"items":[{"uri":"spotify:track:AAAAAAAAAAAAAAAAAAAAAA","name":"B","artists":[],"is_playable":false}]}}"#.into(),
+                ),
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        assert_eq!(
+            sp.find("anything", &CancellationToken::new()).await,
+            Err(SpotifyError::NoResults)
+        );
     }
 }
