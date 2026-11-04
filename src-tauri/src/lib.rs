@@ -8,6 +8,7 @@ mod orchestrator;
 mod permissions;
 mod platform;
 mod services;
+mod spotify;
 mod tools;
 mod voice;
 
@@ -47,8 +48,10 @@ pub fn run() {
                 PriceTable::embedded().map_err(|e| format!("pricing table is invalid: {e}"))?,
             );
             let settings_path = app.path().app_config_dir()?.join("settings.json");
+            let settings = Arc::new(SettingsStore::load(settings_path, &prices));
+            let for_id = settings.clone();
             let svc = Arc::new(Services {
-                settings: Arc::new(SettingsStore::load(settings_path, &prices)),
+                settings,
                 prices,
                 vault: Arc::new(ApiKeyVault::open()),
                 spend: Arc::new(SpendMeter::new(
@@ -58,6 +61,14 @@ pub fn run() {
                 api_base_url: ANTHROPIC_API.into(),
                 // TODO(Dev B, platform/): the per-OS installed-apps list; until then no app can be allowed.
                 installed: Arc::new(platform::apps::PlatformApps::new()),
+                spotify: Arc::new(spotify::client::Spotify::new(
+                    spotify::client::Endpoints::real(),
+                    Arc::new(ApiKeyVault::open_account(
+                        platform::keychain::ACCOUNT_SPOTIFY,
+                    )),
+                    Arc::new(move || for_id.get().spotify_client_id),
+                    Arc::new(platform::browser::open_https),
+                )),
             });
             svc.apply_saved_caps();
 
@@ -85,7 +96,10 @@ pub fn run() {
                     ipc::commands::publish_event(&handle, ipc::types::EventKind::MemoryProposed, m)
                 }),
             );
-            let ports = Arc::new(tools::adapters::platform_ports(Arc::new(inbox)));
+            let ports = Arc::new(tools::adapters::platform_ports(
+                Arc::new(inbox),
+                Arc::new(tools::adapters::SpotifyPlayer::new(svc.spotify.clone())),
+            ));
             let for_tools = svc.clone();
             let for_gateway = gateway.clone();
             let tools = orchestrator::turn::ToolWiring {

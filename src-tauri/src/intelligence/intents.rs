@@ -21,6 +21,8 @@ pub enum Intent {
     Music(MusicCmd),
     /// "What's playing?"
     NowPlaying,
+    /// "Play Bohemian Rhapsody": the words after "play", for Spotify (music step 2).
+    PlayQuery(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,9 +193,45 @@ fn music(s: &str) -> Option<Intent> {
     } else if one_of(s, NOW_PLAYING) {
         return Some(Intent::NowPlaying);
     } else {
-        return None;
+        return play_query(s).map(Intent::PlayQuery);
     };
     Some(Intent::Music(cmd))
+}
+
+/// "play <words>" with a few words after it: something to look for on Spotify. The bare
+/// resume phrases ("play", "play music") were matched before this. A long sentence that
+/// merely starts with "play" is left to the model.
+fn play_query(s: &str) -> Option<String> {
+    const MAX_WORDS: usize = 8;
+    const VAGUE: &[&str] = &[
+        "it",
+        "that",
+        "this",
+        "something",
+        "anything",
+        "some music",
+        "some songs",
+        "songs",
+        "a song",
+        "the music",
+        "music",
+        "a game",
+        "games",
+        "again",
+    ];
+    let rest = s.strip_prefix("play ")?;
+    let rest = rest.strip_prefix("me ").unwrap_or(rest);
+    let rest = rest.strip_prefix("something by ").unwrap_or(rest);
+    let rest = rest
+        .strip_suffix(" on spotify")
+        .or_else(|| rest.strip_suffix(" in spotify"))
+        .unwrap_or(rest)
+        .trim();
+    let words = rest.split_whitespace().count();
+    if rest.is_empty() || words > MAX_WORDS || VAGUE.contains(&rest) {
+        return None;
+    }
+    Some(rest.to_owned())
 }
 
 const FILLER_PREFIXES: &[&str] = &[
@@ -556,5 +594,41 @@ mod tests {
             route("remember that stop means stop"),
             Some(Remember(_))
         ));
+    }
+
+    #[test]
+    fn play_followed_by_words_is_a_spotify_request() {
+        let q = |t: &str| match route(t) {
+            Some(Intent::PlayQuery(q)) => Some(q),
+            _ => None,
+        };
+        assert_eq!(
+            q("Play Bohemian Rhapsody"),
+            Some("bohemian rhapsody".into())
+        );
+        assert_eq!(
+            q("hey jarvis, play Bohemian Rhapsody by Queen!"),
+            Some("bohemian rhapsody by queen".into())
+        );
+        assert_eq!(
+            q("play me something by the Beatles"),
+            Some("the beatles".into())
+        );
+        assert_eq!(q("play lofi beats on Spotify"), Some("lofi beats".into()));
+        // The resume phrases stay resume, and vague or long requests go to the model.
+        for other in [
+            "play",
+            "play music",
+            "play something",
+            "play it",
+            "play a game",
+            "play the first one of those songs that I like from before please",
+            "I want to play chess",
+            "can you play something",
+        ] {
+            assert_eq!(q(other), None, "{other}");
+        }
+        assert_eq!(route("play"), Some(Intent::Music(MusicCmd::Play)));
+        assert_eq!(route("play music"), Some(Intent::Music(MusicCmd::Play)));
     }
 }
