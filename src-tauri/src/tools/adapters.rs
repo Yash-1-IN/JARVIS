@@ -172,6 +172,12 @@ impl SpotifyPlayer {
         tokio::task::spawn_blocking(move || crate::platform::media::play_spotify_uri(&uri)).await
     }
 
+    /// The last resort: the song inside its album (the album's next song then follows).
+    async fn local_in_album(uri: String) -> Result<Result<(), LocalError>, tokio::task::JoinError> {
+        tokio::task::spawn_blocking(move || crate::platform::media::play_spotify_uri_in_album(&uri))
+            .await
+    }
+
     fn here(f: &Found) -> super::ports::PlayedTrack {
         super::ports::PlayedTrack {
             title: f.title.clone(),
@@ -196,6 +202,16 @@ impl SpotifyPlayer {
         if matches!(first, Ok(Ok(()))) {
             return Ok(Self::here(&found));
         }
+        // Open, but it refused the way that plays a song on its own: play it inside its album.
+        if matches!(first, Ok(Err(LocalError::Failed))) {
+            let album = Self::local_in_album(found.uri.clone()).await;
+            self.spotify.note(format!(
+                "this computer's Spotify app, album form: {album:?}"
+            ));
+            if matches!(album, Ok(Ok(()))) {
+                return Ok(Self::here(&found));
+            }
+        }
         // Closed, and this computer can start it (macOS; Windows is handled below): the person
         // asked for a song, so start the app, give it a few seconds to load, and play.
         if matches!(first, Ok(Err(LocalError::NothingPlaying))) {
@@ -219,8 +235,14 @@ impl SpotifyPlayer {
                 if taken {
                     return Ok(Self::here(&found));
                 }
-                self.spotify
-                    .note("the Spotify app did not take the song in time".into());
+                // Still refusing after the wait: play it inside its album rather than not at all.
+                let album = Self::local_in_album(found.uri.clone()).await;
+                self.spotify.note(format!(
+                    "the Spotify app did not take the song in time; album form: {album:?}"
+                ));
+                if matches!(album, Ok(Ok(()))) {
+                    return Ok(Self::here(&found));
+                }
             }
         }
         if cancel.is_cancelled() {

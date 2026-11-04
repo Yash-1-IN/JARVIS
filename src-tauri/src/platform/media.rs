@@ -64,7 +64,14 @@ pub fn send(cmd: Command) -> Result<(), MediaError> {
 /// say `Unsupported`. This call never starts Spotify itself: if it is not running the answer is
 /// `NothingPlaying`, and the caller decides whether to start it (`start_spotify_app`). Blocking.
 pub fn play_spotify_uri(uri: &str) -> Result<(), MediaError> {
-    imp::play_spotify_uri(uri)
+    imp::play_spotify_uri(uri, false)
+}
+
+/// Like `play_spotify_uri`, but plays a track the way Spotify does by default: inside its album,
+/// so the album's next song follows. Only used as a last resort, when the strict form that plays
+/// a track on its own did not work. Blocking.
+pub fn play_spotify_uri_in_album(uri: &str) -> Result<(), MediaError> {
+    imp::play_spotify_uri(uri, true)
 }
 
 /// Starts the Spotify desktop app on this computer, because the person asked for a song and it is
@@ -282,7 +289,7 @@ mod imp {
         }
     }
 
-    pub fn play_spotify_uri(_: &str) -> Result<(), MediaError> {
+    pub fn play_spotify_uri(_: &str, _album: bool) -> Result<(), MediaError> {
         Err(MediaError::Unsupported)
     }
 
@@ -775,7 +782,7 @@ mod imp {
         run(&transport).map(|_| ())
     }
 
-    pub fn play_spotify_uri(uri: &str) -> Result<(), MediaError> {
+    pub fn play_spotify_uri(uri: &str, album: bool) -> Result<(), MediaError> {
         if !script::valid_play_uri(uri) {
             return Err(MediaError::Failed);
         }
@@ -783,14 +790,12 @@ mod imp {
             return Err(MediaError::NothingPlaying);
         }
         // A single track plays on its own (autoplay follows); a playlist, an artist or the liked
-        // songs are contexts already and play as they are. If this Spotify version refuses the
-        // track-as-its-own-context form, the plain form still plays the song.
-        if script::valid_track_uri(uri) {
-            match run_with(script::PLAY_TRACK_ALONE_SCRIPT, &[uri]) {
-                Ok(_) => return Ok(()),
-                Err(MediaError::NotAllowed) => return Err(MediaError::NotAllowed),
-                Err(_) => {}
-            }
+        // songs are contexts already and play as they are. There is no quiet fallback here: a
+        // freshly started Spotify refuses commands for a few seconds, and quietly playing the
+        // track inside its album at that moment would make the album follow. The caller retries,
+        // and asks for the album form (`album: true`) only as a last resort.
+        if script::valid_track_uri(uri) && !album {
+            return run_with(script::PLAY_TRACK_ALONE_SCRIPT, &[uri]).map(|_| ());
         }
         run_with(script::PLAY_TRACK_SCRIPT, &[uri]).map(|_| ())
     }
@@ -814,7 +819,7 @@ mod imp {
 mod imp {
     use super::{Command, MediaError, NowPlaying};
 
-    pub fn play_spotify_uri(_: &str) -> Result<(), MediaError> {
+    pub fn play_spotify_uri(_: &str, _album: bool) -> Result<(), MediaError> {
         Err(MediaError::Unsupported)
     }
 
