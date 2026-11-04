@@ -260,6 +260,18 @@ pub async fn voice_devices() -> AudioDevices {
         })
 }
 
+/// The window calls this once at start-up, with a channel: a turn that starts from voice (push to
+/// talk now, the wake word later) streams its reply there, because it has no `submit_text` call to
+/// carry one. Calling it again replaces the channel (a reloaded window). Until it has been called,
+/// voice input refuses to start, so a reply never streams to nowhere.
+#[tauri::command]
+pub fn voice_attach(
+    stream: tauri::State<'_, Arc<crate::ipc::voice_stream::VoiceStream>>,
+    on_event: Channel<TurnStreamEvent>,
+) {
+    stream.attach_channel(on_event);
+}
+
 /// Push to talk, key down: starts listening. Until voice input is built this answers with an error.
 #[tauri::command]
 pub fn voice_capture_start(svc: tauri::State<'_, Arc<Services>>) -> Result<(), JarvisError> {
