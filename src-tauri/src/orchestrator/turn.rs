@@ -260,6 +260,56 @@ impl TurnRunner {
         Ok(id)
     }
 
+    /// Continues a **voice** turn whose request id the orchestrator already holds (it began in
+    /// `listening` and is now `transcribing`) with what was heard. It then runs exactly like a typed
+    /// turn: local intents, tools through the gateway, or the model. "Stop", "mute" and "unmute"
+    /// are controls, as they are for typed text: the voice request is ended and the control runs.
+    pub fn continue_voice(
+        self: &Arc<Self>,
+        id: &str,
+        text: String,
+        sink: Arc<dyn TurnSink>,
+    ) -> Result<(), JarvisError> {
+        let text = text.trim().to_owned();
+        if text.is_empty() {
+            return Err(err(
+                ErrorCode::Internal,
+                "I did not hear anything.",
+                true,
+                Some(id),
+            ));
+        }
+        if let Some(intent @ (Intent::Stop | Intent::Mute | Intent::Unmute)) = intents::route(&text)
+        {
+            if let Ok(snap) = self.orch.cancel(id) {
+                sink.snapshot(snap);
+            }
+            self.run_control(intent, sink.as_ref());
+            return Ok(());
+        }
+        let snap = self
+            .orch
+            .transition(id, AssistantPhase::Thinking)
+            .map_err(|_| {
+                err(
+                    ErrorCode::Internal,
+                    "That request is no longer active.",
+                    false,
+                    Some(id),
+                )
+            })?;
+        sink.snapshot(snap);
+        let token = CancellationToken::new();
+        lock(&self.tokens).insert(id.to_owned(), token.clone());
+        let me = Arc::clone(self);
+        let rid = id.to_owned();
+        tokio::spawn(async move {
+            me.run(&rid, text, token, sink.as_ref()).await;
+            lock(&me.tokens).remove(&rid);
+        });
+        Ok(())
+    }
+
     fn run_control(&self, intent: Intent, sink: &dyn TurnSink) -> String {
         let id = uuid::Uuid::now_v7().to_string();
         let reply = match intent {

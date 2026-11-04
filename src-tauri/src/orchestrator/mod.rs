@@ -15,6 +15,8 @@ pub enum TransitionError {
     },
     WrongRequest,
     NoActiveTurn,
+    /// The microphone is muted or unavailable, so a voice turn cannot start.
+    MicNotAvailable,
 }
 
 /// True if `from -> to` is a legal phase change (spec §5.1 and the phase diagram).
@@ -49,6 +51,8 @@ pub struct Orchestrator {
 struct Inner {
     snap: Snapshot,
     mic_before_mute: MicState,
+    /// What the microphone was doing before a capture began; restored when the capture ends.
+    mic_before_capture: MicState,
 }
 
 impl Default for Orchestrator {
@@ -57,6 +61,7 @@ impl Default for Orchestrator {
             inner: Mutex::new(Inner {
                 snap: Snapshot::initial(),
                 mic_before_mute: MicState::Off,
+                mic_before_capture: MicState::Off,
             }),
         }
     }
@@ -93,6 +98,38 @@ impl Orchestrator {
         Ok((id, Self::bump(&mut g)))
     }
 
+    /// Starts a voice turn: idle (or after an error) to `listening`, and the microphone to
+    /// `capturing`. Refused while the microphone is muted or unavailable, or while another turn is
+    /// running. The previous microphone state comes back when the capture ends, however it ends.
+    pub fn begin_listening(&self) -> Result<(String, Snapshot), TransitionError> {
+        let mut g = self.lock();
+        if matches!(g.snap.mic, MicState::Muted | MicState::Unavailable) {
+            return Err(TransitionError::MicNotAvailable);
+        }
+        if !is_legal(g.snap.phase, AssistantPhase::Listening) || g.snap.active_request_id.is_some()
+        {
+            return Err(TransitionError::Illegal {
+                from: g.snap.phase,
+                to: AssistantPhase::Listening,
+            });
+        }
+        let id = uuid::Uuid::now_v7().to_string();
+        g.mic_before_capture = g.snap.mic;
+        g.snap.mic = MicState::Capturing;
+        g.snap.phase = AssistantPhase::Listening;
+        g.snap.active_request_id = Some(id.clone());
+        g.snap.last_error = None;
+        Ok((id, Self::bump(&mut g)))
+    }
+
+    /// The microphone goes back to what it was once a capture is over (it was capturing only
+    /// because of that capture).
+    fn leave_capture(g: &mut Inner) {
+        if g.snap.mic == MicState::Capturing {
+            g.snap.mic = g.mic_before_capture;
+        }
+    }
+
     /// Moves the active turn to `to`. Entering idle ends the turn.
     pub fn transition(
         &self,
@@ -106,6 +143,9 @@ impl Orchestrator {
         let from = g.snap.phase;
         if !is_legal(from, to) {
             return Err(TransitionError::Illegal { from, to });
+        }
+        if from == AssistantPhase::Listening {
+            Self::leave_capture(&mut g);
         }
         g.snap.phase = to;
         if to == AssistantPhase::Idle {
@@ -122,6 +162,7 @@ impl Orchestrator {
         if g.snap.active_request_id.as_deref() != Some(request_id) {
             return Err(TransitionError::NoActiveTurn);
         }
+        Self::leave_capture(&mut g);
         g.snap.phase = AssistantPhase::Idle;
         g.snap.active_request_id = None;
         g.snap.cloud_in_use = false;
@@ -134,6 +175,7 @@ impl Orchestrator {
         if g.snap.active_request_id.as_deref() != Some(request_id) {
             return Err(TransitionError::WrongRequest);
         }
+        Self::leave_capture(&mut g);
         // The turn is over: stop the cloud indicator and free the slot, but keep
         // `last_error.request_id` so the UI can offer a retry.
         g.snap.phase = AssistantPhase::Error;
@@ -163,6 +205,12 @@ impl Orchestrator {
         let mut g = self.lock();
         match (muted, g.snap.mic) {
             (true, MicState::Muted) | (true, MicState::Unavailable) => {}
+            // Muting during a capture must not leave "capturing" to come back on unmute: the
+            // capture is over, so unmute returns to what the microphone was before it.
+            (true, MicState::Capturing) => {
+                g.mic_before_mute = g.mic_before_capture;
+                g.snap.mic = MicState::Muted;
+            }
             (true, current) => {
                 g.mic_before_mute = current;
                 g.snap.mic = MicState::Muted;
@@ -291,5 +339,83 @@ mod tests {
         let a = o.set_mute(true).seq;
         let b = o.set_mute(false).seq;
         assert!(b > a);
+    }
+
+    #[test]
+    fn a_voice_turn_listens_captures_and_gives_the_microphone_back() {
+        let o = Orchestrator::default();
+        let (id, s) = o.begin_listening().unwrap();
+        assert_eq!(
+            (s.phase, s.mic, s.active_request_id.as_deref()),
+            (
+                AssistantPhase::Listening,
+                MicState::Capturing,
+                Some(id.as_str())
+            )
+        );
+        // Listening, then transcribing: capture is over, so the microphone is back to what it was.
+        let s = o.transition(&id, AssistantPhase::Transcribing).unwrap();
+        assert_eq!(
+            (s.phase, s.mic),
+            (AssistantPhase::Transcribing, MicState::Off)
+        );
+        o.transition(&id, AssistantPhase::Thinking).unwrap();
+        o.transition(&id, AssistantPhase::Idle).unwrap();
+    }
+
+    #[test]
+    fn standby_is_restored_however_a_capture_ends() {
+        for end in 0..3 {
+            let o = Orchestrator::default();
+            // Put the microphone on standby the way wake-word listening will.
+            o.inner.lock().unwrap().snap.mic = MicState::Standby;
+            let (id, _) = o.begin_listening().unwrap();
+            let s = match end {
+                0 => o.cancel(&id).unwrap(),
+                1 => o
+                    .fail(
+                        &id,
+                        JarvisError {
+                            code: ErrorCode::DeviceLost,
+                            message: "lost".into(),
+                            retryable: true,
+                            request_id: Some(id.clone()),
+                        },
+                    )
+                    .unwrap(),
+                _ => o.transition(&id, AssistantPhase::Idle).unwrap(),
+            };
+            assert_eq!(s.mic, MicState::Standby, "end {end}");
+            assert_eq!(s.active_request_id, None);
+        }
+    }
+
+    #[test]
+    fn a_voice_turn_is_refused_while_muted_unavailable_or_busy() {
+        let o = Orchestrator::default();
+        o.set_mute(true);
+        assert_eq!(o.begin_listening(), Err(TransitionError::MicNotAvailable));
+        o.set_mute(false);
+        o.inner.lock().unwrap().snap.mic = MicState::Unavailable;
+        assert_eq!(o.begin_listening(), Err(TransitionError::MicNotAvailable));
+        o.inner.lock().unwrap().snap.mic = MicState::Off;
+        let (_id, _) = o.begin_turn().unwrap();
+        assert!(matches!(
+            o.begin_listening(),
+            Err(TransitionError::Illegal { .. })
+        ));
+        // Nothing changed for the running turn.
+        assert_eq!(o.snapshot().mic, MicState::Off);
+    }
+
+    #[test]
+    fn muting_during_a_capture_ends_it_and_unmuting_does_not_bring_capturing_back() {
+        let o = Orchestrator::default();
+        o.inner.lock().unwrap().snap.mic = MicState::Standby;
+        let (id, _) = o.begin_listening().unwrap();
+        assert_eq!(o.set_mute(true).mic, MicState::Muted);
+        o.cancel(&id).unwrap(); // the voice controller cancels the capture on mute
+        assert_eq!(o.snapshot().mic, MicState::Muted);
+        assert_eq!(o.set_mute(false).mic, MicState::Standby);
     }
 }

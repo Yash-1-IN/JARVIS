@@ -10,6 +10,7 @@ mod platform;
 mod services;
 mod spotify;
 mod tools;
+mod voice;
 
 use config::SettingsStore;
 use intelligence::pricing::PriceTable;
