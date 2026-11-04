@@ -459,6 +459,14 @@ mod applescript {
          tell application \"Spotify\" to play track (item 1 of argv)\n\
          end run";
 
+    /// Plays one track **as its own context**, so only that song plays and Spotify's autoplay then
+    /// carries on with similar music, not the album's next song (tested on a real Mac: after the
+    /// song, an unrelated similar one played; the plain script above played the album's next
+    /// track). The same address is the track and its context, both read from `argv`.
+    pub const PLAY_TRACK_ALONE_SCRIPT: &str = "on run argv\n\
+         tell application \"Spotify\" to play track (item 1 of argv) in context (item 1 of argv)\n\
+         end run";
+
     /// What `player state as string` says.
     pub fn parse_state(out: &str) -> State {
         match out.trim() {
@@ -774,6 +782,16 @@ mod imp {
         if !running(Player::Spotify)? {
             return Err(MediaError::NothingPlaying);
         }
+        // A single track plays on its own (autoplay follows); a playlist, an artist or the liked
+        // songs are contexts already and play as they are. If this Spotify version refuses the
+        // track-as-its-own-context form, the plain form still plays the song.
+        if script::valid_track_uri(uri) {
+            match run_with(script::PLAY_TRACK_ALONE_SCRIPT, &[uri]) {
+                Ok(_) => return Ok(()),
+                Err(MediaError::NotAllowed) => return Err(MediaError::NotAllowed),
+                Err(_) => {}
+            }
+        }
         run_with(script::PLAY_TRACK_SCRIPT, &[uri]).map(|_| ())
     }
 
@@ -823,7 +841,9 @@ mod tests {
 
 #[cfg(test)]
 mod play_track_tests {
-    use super::applescript::{PLAY_TRACK_SCRIPT, valid_play_uri, valid_track_uri};
+    use super::applescript::{
+        PLAY_TRACK_ALONE_SCRIPT, PLAY_TRACK_SCRIPT, valid_play_uri, valid_track_uri,
+    };
 
     #[test]
     fn only_plain_spotify_track_addresses_reach_the_play_script() {
@@ -874,6 +894,10 @@ mod play_track_tests {
     fn the_play_script_is_fixed_text_that_reads_its_address_from_argv() {
         assert!(PLAY_TRACK_SCRIPT.contains("item 1 of argv"));
         assert!(!PLAY_TRACK_SCRIPT.contains("spotify:"));
+        // The track-as-its-own-context form reads the address twice from argv and names none.
+        assert_eq!(PLAY_TRACK_ALONE_SCRIPT.matches("item 1 of argv").count(), 2);
+        assert!(PLAY_TRACK_ALONE_SCRIPT.contains(" in context "));
+        assert!(!PLAY_TRACK_ALONE_SCRIPT.contains("spotify:"));
     }
 
     #[test]
