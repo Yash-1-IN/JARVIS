@@ -66,9 +66,81 @@ pub fn play_spotify_uri(uri: &str) -> Result<(), MediaError> {
     imp::play_spotify_uri(uri)
 }
 
+/// Starts the Spotify desktop app on this computer so it can show up as a device to play on.
+/// Windows only (macOS never starts Spotify, by design; other systems say `Unsupported`). It
+/// refuses, without opening any dialog, when Spotify is not installed. The only thing ever passed
+/// to the system is the fixed address `spotify:`. Blocking.
+pub fn start_spotify_app() -> Result<(), MediaError> {
+    spotify_start::start()
+}
+
 /// `Ok(None)` means no app has a media session. Blocking.
 pub fn now_playing() -> Result<Option<NowPlaying>, MediaError> {
     imp::now_playing()
+}
+
+#[cfg(windows)]
+mod spotify_start {
+    use super::MediaError;
+    use std::process::{Command, Stdio};
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CLASSES_ROOT, KEY_READ, RegCloseKey, RegOpenKeyExW,
+    };
+
+    /// True if a program has registered the `spotify:` address scheme (the desktop app does).
+    /// Without this check Windows would ask "how do you want to open this?" when it is missing.
+    fn registered() -> bool {
+        let name: Vec<u16> = "spotify\0".encode_utf16().collect();
+        let mut key = std::ptr::null_mut();
+        // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the call, `key` is a
+        // valid out-pointer, and the key is closed straight away when it was opened.
+        unsafe {
+            let rc = RegOpenKeyExW(HKEY_CLASSES_ROOT, name.as_ptr(), 0, KEY_READ, &mut key);
+            if rc == 0 {
+                RegCloseKey(key);
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    /// `rundll32.exe` by its full path under the Windows folder, so a program of that name in the
+    /// current folder or on the path is never run instead.
+    fn rundll32() -> std::path::PathBuf {
+        match std::env::var_os("SystemRoot") {
+            Some(root) => std::path::Path::new(&root)
+                .join("System32")
+                .join("rundll32.exe"),
+            None => "rundll32.exe".into(),
+        }
+    }
+
+    pub fn start() -> Result<(), MediaError> {
+        if !registered() {
+            return Err(MediaError::Unsupported);
+        }
+        let status = Command::new(rundll32())
+            .arg("url.dll,FileProtocolHandler")
+            .arg("spotify:")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            _ => Err(MediaError::Failed),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod spotify_start {
+    use super::MediaError;
+
+    pub fn start() -> Result<(), MediaError> {
+        Err(MediaError::Unsupported)
+    }
 }
 
 #[cfg(windows)]

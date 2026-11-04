@@ -10,6 +10,7 @@ mod platform;
 mod services;
 mod spotify;
 mod tools;
+mod voice;
 
 use config::SettingsStore;
 use intelligence::pricing::PriceTable;
@@ -97,7 +98,7 @@ pub fn run() {
             );
             let ports = Arc::new(tools::adapters::platform_ports(
                 Arc::new(inbox),
-                Arc::new(tools::adapters::SpotifyPlayer(svc.spotify.clone())),
+                Arc::new(tools::adapters::SpotifyPlayer::new(svc.spotify.clone())),
             ));
             let for_tools = svc.clone();
             let for_gateway = gateway.clone();

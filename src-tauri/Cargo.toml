@@ -62,7 +62,7 @@ libc = "0.2.191"
 [target.'cfg(windows)'.dependencies]
 # MoveFileExW without REPLACE_EXISTING for no-overwrite moves (platform/fs.rs) and the system
 # volume keys (platform/media.rs).
-windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_UI_Input_KeyboardAndMouse"] }
 # The system media session (pause, play, skip, now playing) for platform/media.rs; the volume
 # keys use windows-sys above. Same version Tauri already pulls in, so no new crate in the tree.
 windows = { version = "0.62.2", features = ["Media_Control", "Foundation", "Win32_System_Com"] }
