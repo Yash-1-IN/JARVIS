@@ -40,6 +40,14 @@ jobs:
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
+      # swatinem/rust-cache deletes every file under target/ that is outside a profile folder, which
+      # empties the unpacked sherpa-onnx library but leaves its folder behind. The next build sees the
+      # folder, skips the download, and cannot link (`could not find native static library
+      # sherpa-onnx-c-api`) whenever sherpa-onnx-sys has to be recompiled. Dropping the folder and the
+      # build script's cached result makes it download the library again (about 22 MB, seconds).
+      - name: Drop the sherpa-onnx library the cache emptied
+        shell: bash
+        run: rm -rf src-tauri/target/sherpa-onnx-prebuilt src-tauri/target/*/build/sherpa-onnx-sys-* src-tauri/target/*/.fingerprint/sherpa-onnx-sys-*
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: |

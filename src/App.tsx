@@ -21,6 +21,7 @@ import { StatusPanel } from "./components/StatusPanel";
 import { WelcomeNotice } from "./components/WelcomeNotice";
 import { useMemories } from "./hooks/useMemories";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useVoice } from "./hooks/useVoice";
 import { PROTOCOL_VERSION } from "./protocol";
 import { useChatStore } from "./state/chatStore";
 import { describeError } from "./state/errors";
@@ -106,6 +107,17 @@ export default function App({ transport }: { transport: Transport }) {
     if (mic && mic !== "unavailable") run(transport.setMute(mic !== "muted"));
   }, [transport, run]);
   useShortcuts({ onCancel, onToggleMute });
+  useVoice(transport, setCommandError);
+  const onTalkStart = useCallback(() => {
+    setCommandError(null);
+    const p = transport.voiceCaptureStart();
+    p.catch((e: unknown) => setCommandError(describeError(e)));
+    return p;
+  }, [transport]);
+  const onTalkStop = useCallback(
+    () => run(transport.voiceCaptureStop()),
+    [transport, run],
+  );
 
   const turns = useChatStore((s) => s.turns);
   const nextKey = useRef(0);
@@ -226,6 +238,8 @@ export default function App({ transport }: { transport: Transport }) {
                     snapshot={snapshot}
                     onCancel={onCancel}
                     onToggleMute={onToggleMute}
+                    onTalkStart={onTalkStart}
+                    onTalkStop={onTalkStop}
                   />
                 </div>
               </div>
