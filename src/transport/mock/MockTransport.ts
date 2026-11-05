@@ -20,6 +20,7 @@ import type { Snapshot } from "../../types/generated/Snapshot";
 import type { SpotifyStatus } from "../../types/generated/SpotifyStatus";
 import type { StopReason } from "../../types/generated/StopReason";
 import type { InterruptReason } from "../../types/generated/InterruptReason";
+import type { Transcript } from "../../types/generated/Transcript";
 import type { TurnInterrupted } from "../../types/generated/TurnInterrupted";
 import type { UsageSummary } from "../../types/generated/UsageSummary";
 import type {
@@ -98,6 +99,9 @@ export class MockTransport implements Transport {
   private timers: ReturnType<typeof setTimeout>[] = [];
   private turn: { requestId: string; onEvent: TurnListener } | null = null;
   private turnCount = 0;
+  private voiceListener: TurnListener | null = null;
+  private transcriptListeners = new Set<(t: Transcript) => void>();
+  private micBeforeCapture: Snapshot["mic"] = "off";
   private nextFault: MockFault | null = null;
   private usageListeners = new Set<UsageListener>();
   /** Approval ids already decided: a decision is single-use. */
@@ -264,6 +268,47 @@ export class MockTransport implements Transport {
       ),
     );
     return requestId;
+  }
+
+  async voiceAttach(onEvent: TurnListener): Promise<void> {
+    this.voiceListener = onEvent;
+  }
+
+  async voiceCaptureStart(): Promise<void> {
+    if (!this.voiceListener) {
+      throw {
+        code: "INTERNAL",
+        message: "Voice input is not ready yet.",
+        retryable: true,
+        requestId: null,
+      } satisfies JarvisError;
+    }
+    if (this.snapshot.phase === "listening") return;
+    if (this.snapshot.activeRequestId || this.snapshot.mic === "muted") {
+      throw {
+        code: "INTERNAL",
+        message: "JARVIS is busy with another request.",
+        retryable: true,
+        requestId: null,
+      } satisfies JarvisError;
+    }
+    this.micBeforeCapture = this.snapshot.mic;
+    this.apply({ phase: "listening", mic: "capturing", lastError: null });
+  }
+
+  /** Nothing is heard in the mock: key up plays a fixed, labelled sentence as the transcript. */
+  async voiceCaptureStop(): Promise<void> {
+    const listener = this.voiceListener;
+    if (!listener || this.snapshot.phase !== "listening") return;
+    this.apply({ phase: "transcribing", mic: this.micBeforeCapture });
+    const text = "(MOCK: nothing was heard) what time is it";
+    const requestId = await this.submitText(text, listener);
+    for (const l of this.transcriptListeners) l({ requestId, text });
+  }
+
+  onTranscriptFinal(listener: (t: Transcript) => void): () => void {
+    this.transcriptListeners.add(listener);
+    return () => this.transcriptListeners.delete(listener);
   }
 
   async cancel(requestId: string): Promise<void> {

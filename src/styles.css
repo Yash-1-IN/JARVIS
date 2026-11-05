@@ -279,7 +279,19 @@ select {
 
 .controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+/* Hold to talk: no text selection or touch scrolling while the button is held. */
+.push-to-talk {
+  touch-action: none;
+  user-select: none;
+}
+
+.push-to-talk[aria-pressed="true"] {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
 
 kbd {
