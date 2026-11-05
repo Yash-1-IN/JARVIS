@@ -98,9 +98,10 @@ impl Orchestrator {
         Ok((id, Self::bump(&mut g)))
     }
 
-    /// Starts a voice turn: idle (or after an error) to `listening`, and the microphone to
-    /// `capturing`. Refused while the microphone is muted or unavailable, or while another turn is
-    /// running. The previous microphone state comes back when the capture ends, however it ends.
+    /// Starts a voice turn: idle (or after an error) to `listening`. The microphone is **not**
+    /// `capturing` yet: the device still has to open, which can take a noticeable moment (see
+    /// `mic_open`). Refused while the microphone is muted or unavailable, or while another turn is
+    /// running.
     pub fn begin_listening(&self) -> Result<(String, Snapshot), TransitionError> {
         let mut g = self.lock();
         if matches!(g.snap.mic, MicState::Muted | MicState::Unavailable) {
@@ -114,12 +115,37 @@ impl Orchestrator {
             });
         }
         let id = uuid::Uuid::now_v7().to_string();
-        g.mic_before_capture = g.snap.mic;
-        g.snap.mic = MicState::Capturing;
         g.snap.phase = AssistantPhase::Listening;
         g.snap.active_request_id = Some(id.clone());
         g.snap.last_error = None;
         Ok((id, Self::bump(&mut g)))
+    }
+
+    /// The microphone is open and delivering sound: `capturing`. This is the moment the person can
+    /// start to speak, so the window can say so instead of guessing; words said before it are lost
+    /// because nothing was listening yet. The microphone goes back to what it was when the capture
+    /// ends, however it ends. Does nothing (an error) if the request is not the one listening, or
+    /// the microphone was muted in the meantime.
+    pub fn mic_open(&self, request_id: &str) -> Result<Snapshot, TransitionError> {
+        let mut g = self.lock();
+        if g.snap.active_request_id.as_deref() != Some(request_id) {
+            return Err(TransitionError::WrongRequest);
+        }
+        if g.snap.phase != AssistantPhase::Listening {
+            return Err(TransitionError::Illegal {
+                from: g.snap.phase,
+                to: AssistantPhase::Listening,
+            });
+        }
+        if matches!(
+            g.snap.mic,
+            MicState::Muted | MicState::Unavailable | MicState::Capturing
+        ) {
+            return Err(TransitionError::MicNotAvailable);
+        }
+        g.mic_before_capture = g.snap.mic;
+        g.snap.mic = MicState::Capturing;
+        Ok(Self::bump(&mut g))
     }
 
     /// The microphone goes back to what it was once a capture is over (it was capturing only
@@ -345,13 +371,16 @@ mod tests {
     fn a_voice_turn_listens_captures_and_gives_the_microphone_back() {
         let o = Orchestrator::default();
         let (id, s) = o.begin_listening().unwrap();
+        // Listening has begun, but the device is not open yet, so the microphone is not capturing.
         assert_eq!(
             (s.phase, s.mic, s.active_request_id.as_deref()),
-            (
-                AssistantPhase::Listening,
-                MicState::Capturing,
-                Some(id.as_str())
-            )
+            (AssistantPhase::Listening, MicState::Off, Some(id.as_str()))
+        );
+        // Once it is open, it is: that is the cue to speak.
+        let s = o.mic_open(&id).unwrap();
+        assert_eq!(
+            (s.phase, s.mic),
+            (AssistantPhase::Listening, MicState::Capturing)
         );
         // Listening, then transcribing: capture is over, so the microphone is back to what it was.
         let s = o.transition(&id, AssistantPhase::Transcribing).unwrap();
@@ -364,12 +393,43 @@ mod tests {
     }
 
     #[test]
+    fn the_microphone_is_capturing_only_once_it_is_open_and_only_for_the_listening_request() {
+        let o = Orchestrator::default();
+        // Nothing is listening: refused.
+        assert!(o.mic_open("nobody").is_err());
+        let (id, _) = o.begin_listening().unwrap();
+        // Another request's id is refused and changes nothing.
+        assert!(o.mic_open("someone-else").is_err());
+        assert_eq!(o.snapshot().mic, MicState::Off);
+        o.mic_open(&id).unwrap();
+        // A second call is refused (already capturing) and does not overwrite what to go back to.
+        assert!(o.mic_open(&id).is_err());
+        o.cancel(&id).unwrap();
+        assert_eq!(o.snapshot().mic, MicState::Off);
+        // Too late: the request is over.
+        assert!(o.mic_open(&id).is_err());
+        assert_eq!(o.snapshot().mic, MicState::Off);
+    }
+
+    #[test]
+    fn muting_before_the_microphone_has_opened_keeps_it_muted() {
+        let o = Orchestrator::default();
+        let (id, _) = o.begin_listening().unwrap();
+        o.set_mute(true);
+        // The device opens a moment later: it must not undo the mute.
+        assert!(o.mic_open(&id).is_err());
+        assert_eq!(o.snapshot().mic, MicState::Muted);
+        assert_eq!(o.set_mute(false).mic, MicState::Off);
+    }
+
+    #[test]
     fn standby_is_restored_however_a_capture_ends() {
         for end in 0..3 {
             let o = Orchestrator::default();
             // Put the microphone on standby the way wake-word listening will.
             o.inner.lock().unwrap().snap.mic = MicState::Standby;
             let (id, _) = o.begin_listening().unwrap();
+            assert_eq!(o.mic_open(&id).unwrap().mic, MicState::Capturing);
             let s = match end {
                 0 => o.cancel(&id).unwrap(),
                 1 => o

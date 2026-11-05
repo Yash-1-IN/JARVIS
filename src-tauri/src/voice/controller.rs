@@ -299,6 +299,12 @@ impl VoiceController {
             let n = self.orch.snapshot();
             n.mic == MicState::Muted || n.active_request_id.as_deref() != Some(id)
         };
+        // The device is open: only now is the microphone `capturing`, which is the cue to speak.
+        let mut on_open = || {
+            if let Ok(snap) = self.orch.mic_open(id) {
+                self.sink.snapshot(snap);
+            }
+        };
         let outcome = collect(
             &rx,
             &mut endpoint,
@@ -306,6 +312,7 @@ impl VoiceController {
             cancel,
             &muted,
             self.cfg.no_audio_timeout,
+            &mut on_open,
         );
         capture.stop();
         drop(capture);
@@ -427,6 +434,7 @@ fn collect(
     cancel: &CancellationToken,
     muted: &dyn Fn() -> bool,
     no_audio_timeout: Duration,
+    on_open: &mut dyn FnMut(),
 ) -> Outcome {
     let mut audio: Vec<f32> = Vec::new();
     let started = std::time::Instant::now();
@@ -439,6 +447,12 @@ fn collect(
         }
         match rx.recv_timeout(Duration::from_millis(20)) {
             Ok(Msg::Audio(c)) => {
+                if audio.is_empty() {
+                    tracing::info!(
+                        ms = started.elapsed().as_millis() as u64,
+                        "voice: first sound arrived"
+                    );
+                }
                 audio.extend_from_slice(&c);
                 match endpoint.push(&c) {
                     Decision::Continue => {}
@@ -447,6 +461,13 @@ fn collect(
                 }
             }
             Ok(Msg::Status(CaptureStatus::Unavailable(e))) => return Outcome::Lost(e),
+            Ok(Msg::Status(CaptureStatus::Running { .. })) => {
+                tracing::info!(
+                    ms = started.elapsed().as_millis() as u64,
+                    "voice: microphone open"
+                );
+                on_open();
+            }
             Ok(Msg::Status(_)) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
                 return Outcome::Lost(AudioError::Failed("capture ended".into()));
@@ -669,9 +690,15 @@ mod tests {
     async fn a_spoken_phrase_becomes_a_transcript_and_a_normal_turn() {
         let s = setup(phrase(), false, None, Box::new(Says("what can you do")));
         s.ctl.start_capture().unwrap();
-        // The phase went listening with the microphone capturing, then the turn ran and ended.
+        // The phase went listening at once, the microphone became capturing when the device had
+        // opened, then the turn ran and ended.
         assert_eq!(s.sink.snaps_first().phase, AssistantPhase::Listening);
-        assert_eq!(s.sink.snaps_first().mic, MicState::Capturing);
+        assert_eq!(s.sink.snaps_first().mic, MicState::Off);
+        wait_for("the microphone to report capturing", || {
+            lock(&s.sink.snaps)
+                .iter()
+                .any(|n| n.phase == AssistantPhase::Listening && n.mic == MicState::Capturing)
+        });
         wait_for("the turn to end", || {
             !s.sink.text().is_empty() && s.orch.snapshot().phase == AssistantPhase::Idle
         });
@@ -947,5 +974,45 @@ mod tests {
         wait_for("the controller to let go", || lock(&s.ctl.active).is_none());
         assert!(lock(&s.sink.heard).is_empty());
         assert_eq!(s.orch.snapshot().phase, AssistantPhase::Idle);
+    }
+
+    /// A microphone that takes a while to open, as a real device can (Windows, a busy driver).
+    struct SlowOpen(Mic);
+    impl Backend for SlowOpen {
+        fn open(&mut self, device: Option<&str>) -> Result<Opened, AudioError> {
+            std::thread::sleep(Duration::from_millis(400));
+            self.0.open(device)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_microphone_only_reports_capturing_once_a_slow_device_has_opened() {
+        let mut script = tone(300, 0.002);
+        script.extend(tone(900, 0.3));
+        let opened = Arc::new(AtomicU64::new(0));
+        let o = opened.clone();
+        let s = setup_with(
+            Box::new(move || {
+                Box::new(SlowOpen(Mic {
+                    script: script.clone(),
+                    lost: false,
+                    fail: None,
+                    opened: o.clone(),
+                }))
+            }),
+            opened,
+            Box::new(Says("never")),
+            Duration::from_secs(20),
+        );
+        s.ctl.start_capture().unwrap();
+        // Right after the press: listening, but the device is not open, so not capturing.
+        let n = s.orch.snapshot();
+        assert_eq!((n.phase, n.mic), (AssistantPhase::Listening, MicState::Off));
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(s.orch.snapshot().mic, MicState::Off, "still opening");
+        // Then it is open, and only then capturing: the cue to speak.
+        wait_for("capturing", || s.orch.snapshot().mic == MicState::Capturing);
+        assert_eq!(s.orch.snapshot().phase, AssistantPhase::Listening);
+        s.ctl.cancel();
     }
 }
