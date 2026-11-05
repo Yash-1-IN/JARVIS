@@ -5,6 +5,7 @@ import type { Envelope } from "../types/generated/Envelope";
 import type { EventKind } from "../types/generated/EventKind";
 import type { ActivityEntry } from "../types/generated/ActivityEntry";
 import type { AllowedApp } from "../types/generated/AllowedApp";
+import type { AudioDevices } from "../types/generated/AudioDevices";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
 import type { ConversationSummary } from "../types/generated/ConversationSummary";
@@ -22,6 +23,7 @@ import type { Transcript } from "../types/generated/Transcript";
 import type { TurnInterrupted } from "../types/generated/TurnInterrupted";
 import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
 import type { UsageSummary } from "../types/generated/UsageSummary";
+import type { VoiceSettingsPatch } from "../types/generated/VoiceSettingsPatch";
 import type { VoiceStatus } from "../types/generated/VoiceStatus";
 import type {
   SnapshotListener,
@@ -187,6 +189,14 @@ export class TauriTransport implements Transport {
 
   cancel(requestId: string): Promise<void> {
     return invoke("cancel", { requestId });
+  }
+
+  voiceDevices(): Promise<AudioDevices> {
+    return invoke<AudioDevices>("voice_devices");
+  }
+
+  voiceSettingsSet(patch: VoiceSettingsPatch): Promise<VoiceStatus> {
+    return invoke<VoiceStatus>("voice_settings_set", { patch });
   }
 
   voiceStatus(): Promise<VoiceStatus> {

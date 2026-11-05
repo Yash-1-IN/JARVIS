@@ -20,6 +20,8 @@ import type { Snapshot } from "../../types/generated/Snapshot";
 import type { SpotifyStatus } from "../../types/generated/SpotifyStatus";
 import type { StopReason } from "../../types/generated/StopReason";
 import type { InterruptReason } from "../../types/generated/InterruptReason";
+import type { AudioDevices } from "../../types/generated/AudioDevices";
+import type { VoiceSettingsPatch } from "../../types/generated/VoiceSettingsPatch";
 import type { ModelProgress } from "../../types/generated/ModelProgress";
 import type { VoiceStatus } from "../../types/generated/VoiceStatus";
 import type { Transcript } from "../../types/generated/Transcript";
@@ -107,6 +109,7 @@ export class MockTransport implements Transport {
   private turnCount = 0;
   private voiceListener: TurnListener | null = null;
   private modelsReady = false;
+  private inputDevice: string | null = null;
   private installing = false;
   private progressListeners = new Set<(p: ModelProgress) => void>();
   private transcriptListeners = new Set<(t: Transcript) => void>();
@@ -285,10 +288,35 @@ export class MockTransport implements Transport {
       followUpWindow: true,
       voice: "",
       availableVoices: [],
-      inputDevice: null,
+      inputDevice: this.inputDevice,
       micPermission: "unknown",
       modelsReady: this.modelsReady,
     };
+  }
+
+  async voiceDevices(): Promise<AudioDevices> {
+    return {
+      inputs: ["MacBook Air Microphone (MOCK)", "Wireless headset (MOCK)"],
+      outputs: ["MacBook Air Speakers (MOCK)"],
+      defaultInput: "Wireless headset (MOCK)",
+    };
+  }
+
+  async voiceSettingsSet(patch: VoiceSettingsPatch): Promise<VoiceStatus> {
+    if (patch.inputDevice !== undefined) {
+      const name = patch.inputDevice;
+      if (
+        name !== null &&
+        (name.length > 200 || [...name].some((c) => c < " "))
+      ) {
+        throw jarvisError(
+          "INTERNAL",
+          "That is not a valid microphone name (1 to 200 characters, no control characters)",
+        );
+      }
+      this.inputDevice = name === "" ? null : name;
+    }
+    return this.voiceStatusNow();
   }
 
   async voiceStatus(): Promise<VoiceStatus> {

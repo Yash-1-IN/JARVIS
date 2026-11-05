@@ -1,5 +1,6 @@
 import type { ActivityEntry } from "../types/generated/ActivityEntry";
 import type { AllowedApp } from "../types/generated/AllowedApp";
+import type { AudioDevices } from "../types/generated/AudioDevices";
 import type { ApiKeyStatus } from "../types/generated/ApiKeyStatus";
 import type { ApprovalDecision } from "../types/generated/ApprovalDecision";
 import type { ConversationSummary } from "../types/generated/ConversationSummary";
@@ -15,6 +16,7 @@ import type { SpotifyStatus } from "../types/generated/SpotifyStatus";
 import type { Transcript } from "../types/generated/Transcript";
 import type { TurnInterrupted } from "../types/generated/TurnInterrupted";
 import type { TurnStreamEvent } from "../types/generated/TurnStreamEvent";
+import type { VoiceSettingsPatch } from "../types/generated/VoiceSettingsPatch";
 import type { VoiceStatus } from "../types/generated/VoiceStatus";
 import type { ModelProgress } from "../types/generated/ModelProgress";
 import type { UsageSummary } from "../types/generated/UsageSummary";
@@ -102,6 +104,13 @@ export interface Transport {
   /** `transcript.final`: the words heard; they open the voice turn the attached channel then streams. */
   onTranscriptFinal(listener: TranscriptListener): () => void;
 
+  /** Contract `voice_devices`: microphone and speaker names, and what the system default is now. */
+  voiceDevices(): Promise<AudioDevices>;
+  /**
+   * Contract `voice_settings_set`: omit a field to leave it alone; `inputDevice: null` goes back
+   * to the system default. A bad value is refused and nothing in the patch is applied.
+   */
+  voiceSettingsSet(patch: VoiceSettingsPatch): Promise<VoiceStatus>;
   /** Contract `voice_status`: text and settings only; `modelsReady` is read from disk each time. */
   voiceStatus(): Promise<VoiceStatus>;
   /**
