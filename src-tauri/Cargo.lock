@@ -2243,6 +2243,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "bzip2 0.4.4",
  "cpal",
  "futures",
  "getrandom 0.4.3",
@@ -2260,6 +2261,7 @@ dependencies = [
  "sherpa-onnx",
  "starship-battery",
  "sysinfo",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

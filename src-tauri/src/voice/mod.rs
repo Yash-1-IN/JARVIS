@@ -5,5 +5,6 @@
 
 pub mod controller;
 pub mod endpoint;
+pub mod models;
 pub mod sherpa;
 pub mod transcribe;

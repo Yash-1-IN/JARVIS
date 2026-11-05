@@ -27,7 +27,7 @@ regex = "1.13.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 ts-rs = "12.0.1"
 uuid = { version = "1.29.0", features = ["v7"] }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "fs"] }
 tokio-util = "0.7.20"
 futures = "0.3.34"
 async-trait = "0.1.92"
@@ -52,6 +52,11 @@ rtrb = "0.4"
 # The speech engine (D-26): Moonshine speech-to-text on the CPU through ONNX Runtime, voice/sherpa.rs
 # (Apache-2.0). Its build downloads the prebuilt native library from the project's GitHub release.
 sherpa-onnx = "2.0.1"
+# Unpack the speech model archive (.tar.bz2) after its checksum is verified, voice/models.rs. Both are
+# already in the build (sherpa-onnx's build script uses them), so no new package: tar is MIT OR Apache-2.0,
+# bzip2 is MIT OR Apache-2.0 (its C library is bzip2-1.0.6, added to the allow-list in D-01 for #107).
+tar = "0.4"
+bzip2 = "0.4"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

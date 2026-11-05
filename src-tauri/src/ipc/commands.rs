@@ -293,19 +293,30 @@ pub async fn spotify_disconnect(
     off_main(move || svc.spotify_disconnect()).await
 }
 
-/// Voice settings and state (M3). Text and settings only, never audio.
+/// Voice settings and state (M3). Text and settings only, never audio. `modelsReady` is read from the
+/// models folder each time, so it is true as soon as a download has finished and verified.
 #[tauri::command]
-pub fn voice_status(svc: tauri::State<'_, Arc<Services>>) -> VoiceStatus {
-    svc.voice_status()
+pub fn voice_status(
+    svc: tauri::State<'_, Arc<Services>>,
+    models: tauri::State<'_, Arc<crate::voice::models::ModelManager>>,
+) -> VoiceStatus {
+    VoiceStatus {
+        models_ready: models.ready(),
+        ..svc.voice_status()
+    }
 }
 
 /// Saves voice choices. A bad value is an `INTERNAL` error with a plain message and nothing changes.
 #[tauri::command]
 pub fn voice_settings_set(
     svc: tauri::State<'_, Arc<Services>>,
+    models: tauri::State<'_, Arc<crate::voice::models::ModelManager>>,
     patch: VoiceSettingsPatch,
 ) -> Result<VoiceStatus, JarvisError> {
-    svc.voice_settings_set(&patch)
+    Ok(VoiceStatus {
+        models_ready: models.ready(),
+        ..svc.voice_settings_set(&patch)?
+    })
 }
 
 /// The microphones and speakers the system has, by name, and which microphone is the default.
@@ -361,12 +372,76 @@ pub fn voice_capture_stop(voice: tauri::State<'_, Arc<crate::voice::controller::
     voice.stop_capture()
 }
 
-/// Downloads the voice models (progress arrives as `voice.models_progress`). Not built yet.
+/// Downloads the voice models that are not installed yet. Progress arrives as `voice.models_progress`;
+/// the answer comes when every file has been downloaded and verified (a checksum for the archive and
+/// one for each file). A download that was interrupted resumes where it stopped. One download at a time.
 #[tauri::command]
-pub fn voice_models_install(
+pub async fn voice_models_install(
+    app: tauri::AppHandle,
     svc: tauri::State<'_, Arc<Services>>,
+    models: tauri::State<'_, Arc<crate::voice::models::ModelManager>>,
 ) -> Result<VoiceStatus, JarvisError> {
-    svc.voice_models_install()
+    let for_events = app.clone();
+    models
+        .install_default(&move |p| publish_event(&for_events, EventKind::VoiceModelsProgress, p))
+        .await
+        .map_err(model_error)?;
+    Ok(VoiceStatus {
+        models_ready: models.ready(),
+        ..svc.voice_status()
+    })
+}
+
+/// What the person is told when a model download fails. Plain words, never an address or a path.
+fn model_error(e: crate::voice::models::ModelError) -> JarvisError {
+    use crate::voice::models::ModelError as M;
+    let (code, message, retryable) = match e {
+        M::Offline => (
+            ErrorCode::NetworkOffline,
+            "The speech models could not be downloaded. Check your internet connection and try again; the download continues where it stopped.",
+            true,
+        ),
+        M::Stalled => (
+            ErrorCode::NetworkOffline,
+            "The download stopped answering. Try again; it continues where it stopped.",
+            true,
+        ),
+        M::Http(_) => (
+            ErrorCode::Internal,
+            "The download server answered with an error. Try again in a while.",
+            true,
+        ),
+        M::ChecksumMismatch => (
+            ErrorCode::Internal,
+            "The downloaded file was not the expected one and was thrown away. Try again.",
+            true,
+        ),
+        M::TooBig | M::BadArchive(_) => (
+            ErrorCode::Internal,
+            "The downloaded file was not what this version of JARVIS expects, so nothing was installed.",
+            false,
+        ),
+        M::Io(_) => (
+            ErrorCode::Internal,
+            "A file could not be saved. Check that there is free disk space and try again.",
+            true,
+        ),
+        M::Cancelled => (ErrorCode::Internal, "The download was cancelled.", true),
+        M::Busy => (
+            ErrorCode::Internal,
+            "The speech models are already being downloaded.",
+            false,
+        ),
+    };
+    if !matches!(e, M::Cancelled | M::Busy) {
+        tracing::warn!(error = %e, "the speech model download failed");
+    }
+    JarvisError {
+        code,
+        message: message.into(),
+        retryable,
+        request_id: None,
+    }
 }
 
 /// Apps that can be put on the allow-list (`AllowedApp.id` is what is checked and launched).
