@@ -24,6 +24,7 @@ export function Controls({
       <PushToTalk
         unavailable={snapshot.mic === "muted" || snapshot.mic === "unavailable"}
         busy={snapshot.activeRequestId !== null}
+        listening={snapshot.phase === "listening"}
         micOpen={snapshot.mic === "capturing"}
         onStart={onTalkStart}
         onStop={onTalkStop}

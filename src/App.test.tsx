@@ -452,7 +452,7 @@ describe("App push to talk", () => {
     const t = new MockTransport();
     render(<App transport={t} />);
     await act(async () => {});
-    const talk = screen.getByRole("button", { name: /hold to talk/i });
+    const talk = screen.getByRole("button", { name: /talk/i });
 
     await act(async () => {
       fireEvent.pointerDown(talk);
@@ -484,6 +484,40 @@ describe("App push to talk", () => {
     vi.useRealTimers();
   });
 
+  it("a quick tap keeps listening and ends by itself when speech ends", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    render(<App transport={t} />);
+    await act(async () => {});
+    const talk = screen.getByRole("button", { name: /talk/i });
+
+    await act(async () => {
+      fireEvent.pointerDown(talk);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(50);
+      fireEvent.pointerUp(talk);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    // Still listening: nothing was sent on the release.
+    expect(screen.getByTestId("phase")).toHaveAttribute(
+      "data-phase",
+      "listening",
+    );
+    expect(talk).toHaveTextContent("press to send");
+
+    await act(async () => {
+      vi.advanceTimersByTime(8000);
+    });
+    expect(
+      screen.getAllByText(/MOCK: nothing was heard/).length,
+    ).toBeGreaterThan(0);
+    expect(talk).toHaveTextContent("Hold or tap to talk");
+    vi.useRealTimers();
+  });
+
   it("cannot be used while the microphone is muted", async () => {
     const t = new MockTransport();
     render(<App transport={t} />);
@@ -491,8 +525,6 @@ describe("App push to talk", () => {
     await act(async () => {
       fireEvent.keyDown(window, { key: "M", ctrlKey: true, shiftKey: true });
     });
-    expect(
-      screen.getByRole("button", { name: /hold to talk/i }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: /talk/i })).toBeDisabled();
   });
 });

@@ -41,6 +41,8 @@ const APPROVAL_TTL_MS = 60_000;
 const FIRST_TOKEN_MS = 400;
 /** How long the mock microphone takes to open, as a real device can. */
 const MOCK_MIC_OPEN_MS = 400;
+/** The mock "hears a quiet gap" this long after the microphone opens and ends the capture itself. */
+const MOCK_END_OF_SPEECH_MS = 3000;
 const TOKEN_MS = 60;
 /** What one mock reply "costs", so the usage panel and caps can be exercised. */
 const MOCK_TURN_COST_MICRO_USD = 1_500;
@@ -357,6 +359,13 @@ export class MockTransport implements Transport {
           this.apply({ mic: "capturing" });
         }
       }, MOCK_MIC_OPEN_MS),
+    );
+    // Like the backend's end-of-speech detector: a capture nobody stops ends by itself.
+    this.timers.push(
+      setTimeout(
+        () => void this.voiceCaptureStop(),
+        MOCK_MIC_OPEN_MS + MOCK_END_OF_SPEECH_MS,
+      ),
     );
   }
 
