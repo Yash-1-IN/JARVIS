@@ -57,6 +57,10 @@ sherpa-onnx = "2.0.1"
 # bzip2 is MIT OR Apache-2.0 (its C library is bzip2-1.0.6, added to the allow-list in D-01 for #107).
 tar = "0.4"
 bzip2 = "0.4"
+# The wake word's ONNX Runtime download is a .tgz (Linux, macOS) and a .zip (Windows), voice/models.rs.
+# Both are already in the build (sherpa-onnx's build script uses them): flate2 is MIT OR Apache-2.0, zip is MIT.
+flate2 = "1"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -59,6 +59,46 @@ fn archive(items: &[Item]) -> Vec<u8> {
     enc.finish().unwrap()
 }
 
+/// The same items as a `.tgz`.
+fn archive_tgz(items: &[Item]) -> Vec<u8> {
+    let mut tar = tar::Builder::new(Vec::new());
+    for it in items {
+        match it {
+            Item::File(path, data) | Item::RawFile(path, data) => {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(data.len() as u64);
+                h.set_mode(0o644);
+                h.set_cksum();
+                tar.append_data(&mut h, path, *data).unwrap();
+            }
+            Item::Symlink(path, to) => {
+                let mut h = tar::Header::new_gnu();
+                h.set_entry_type(tar::EntryType::Symlink);
+                h.set_size(0);
+                h.set_mode(0o777);
+                h.set_cksum();
+                tar.append_link(&mut h, path, to).unwrap();
+            }
+        }
+    }
+    let raw = tar.into_inner().unwrap();
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    enc.write_all(&raw).unwrap();
+    enc.finish().unwrap()
+}
+
+/// A deflated `.zip` of `(name, bytes)` entries; names are written as given.
+fn archive_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, data) in entries {
+        zw.start_file(*name, opts).unwrap();
+        zw.write_all(data).unwrap();
+    }
+    zw.finish().unwrap().into_inner()
+}
+
 const TOKENS: &[u8] = b"a 1\nb 2\n";
 const MODEL: &[u8] = b"model-bytes-model-bytes-model-bytes";
 
@@ -77,7 +117,9 @@ fn spec_for(archive: &[u8], url: String) -> ModelSpec {
         name: "Test model".into(),
         purpose: "speech-to-text".into(),
         licence: "MIT".into(),
-        default: true,
+        set: SET_SPEECH.into(),
+        platform: None,
+        format: Format::TarBz2,
         url,
         archive_bytes: archive.len() as u64,
         archive_sha256: sha(archive),
@@ -85,11 +127,13 @@ fn spec_for(archive: &[u8], url: String) -> ModelSpec {
         files: vec![
             FileSpec {
                 name: "tokens.txt".into(),
+                path: None,
                 bytes: TOKENS.len() as u64,
                 sha256: sha(TOKENS),
             },
             FileSpec {
                 name: "model.onnx".into(),
+                path: None,
                 bytes: MODEL.len() as u64,
                 sha256: sha(MODEL),
             },
@@ -205,6 +249,11 @@ fn manager(root: &Path, spec: &ModelSpec) -> ModelManager {
 
 type Seen = Arc<Mutex<Vec<ModelProgress>>>;
 
+/// Like `run`, for one named set.
+async fn run_set(m: &ModelManager, set: &str) -> Result<(), ModelError> {
+    m.install_set(set, &|_| {}).await
+}
+
 async fn run(m: &ModelManager) -> (Result<(), ModelError>, Vec<ModelProgress>) {
     let seen: Seen = Arc::default();
     let s2 = seen.clone();
@@ -217,25 +266,54 @@ async fn run(m: &ModelManager) -> (Result<(), ModelError>, Vec<ModelProgress>) {
 fn the_shipped_manifest_is_valid_and_pins_everything() {
     let m = manifest();
     assert!(!m.is_empty());
-    let mut default_total = 0;
+    let mut speech_total = 0;
+    let mut dirs = std::collections::HashSet::new();
     for s in m {
         s.validate(false).unwrap();
-        assert!(
-            s.url
-                .starts_with("https://github.com/k2-fsa/sherpa-onnx/releases/download/")
-        );
+        assert!(ALLOWED_SOURCES.iter().any(|p| s.url.starts_with(p)));
         assert!(is_hex64(&s.archive_sha256));
         assert!(s.files.iter().all(|f| is_hex64(&f.sha256)));
-        // The licence file of a model travels with it.
-        assert!(s.files.iter().any(|f| f.name == "LICENSE"), "{}", s.id);
-        if s.default {
-            default_total += s.archive_bytes;
+        // Two downloads must never share a folder: installing one replaces the folder.
+        assert!(dirs.insert(s.dir.clone()), "{} shares its folder", s.id);
+        // The licence file of anything that comes as an archive travels with it.
+        if s.format != Format::File {
+            assert!(s.files.iter().any(|f| f.name == "LICENSE"), "{}", s.id);
+        }
+        if s.set == SET_SPEECH {
+            speech_total += s.archive_bytes;
         }
     }
     assert!(
-        default_total <= DEFAULT_SET_LIMIT,
-        "default set is {default_total} bytes"
+        speech_total <= DEFAULT_SET_LIMIT,
+        "speech set is {speech_total} bytes"
     );
+    // The wake word has its three model files, and a runtime for every system the alpha runs on.
+    let wake: Vec<&ModelSpec> = m.iter().filter(|s| s.set == SET_WAKE).collect();
+    for id in [
+        "wake-oww-melspectrogram",
+        "wake-oww-embedding",
+        "wake-oww-hey-jarvis",
+    ] {
+        let s = wake
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("{id}"));
+        assert_eq!(s.format, Format::File);
+        assert!(s.platform.is_none() && s.licence.contains("CC-BY-NC-SA-4.0"));
+    }
+    for plat in PLATFORMS {
+        let s = wake
+            .iter()
+            .find(|s| s.platform.as_deref() == Some(*plat))
+            .unwrap_or_else(|| panic!("no ONNX Runtime for {plat}"));
+        // The one library that gets loaded is listed with its exact path in the archive.
+        let lib = s
+            .files
+            .iter()
+            .filter(|f| f.name != "LICENSE" && !f.name.contains("providers"));
+        assert_eq!(lib.count(), 1, "{plat}");
+        assert!(s.files.iter().all(|f| f.path.is_some()), "{plat}");
+    }
 }
 
 #[test]
@@ -622,7 +700,11 @@ fn the_real_archive_matches_the_manifest_and_unpacks() {
     let Ok(path) = std::env::var("JARVIS_TEST_MOONSHINE_ARCHIVE") else {
         panic!("set JARVIS_TEST_MOONSHINE_ARCHIVE");
     };
-    let spec = manifest().iter().find(|s| s.default).unwrap().clone();
+    let spec = manifest()
+        .iter()
+        .find(|s| s.set == SET_SPEECH)
+        .unwrap()
+        .clone();
     let cancel = CancellationToken::new();
     let archive = PathBuf::from(path);
     assert_eq!(sha256_file(&archive, &cancel).unwrap(), spec.archive_sha256);
@@ -650,5 +732,367 @@ async fn a_real_download_from_github_installs_the_model() {
     assert!(m.ready());
     let last = seen.last().unwrap();
     assert_eq!(last.done_bytes, last.total_bytes);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+// ---- Step 1 of the wake word (D-29): per-system downloads, tgz and zip, single files, two sets.
+
+const LIB: &[u8] = b"pretend-this-is-a-native-library-0123456789";
+const LICENSE_TXT: &[u8] = b"MIT License";
+
+/// A spec for a runtime archive: the library is at `lib/libfoo.so.1.2` inside the archive and is
+/// called `libfoo.so` on disk.
+fn runtime_spec(archive: &[u8], url: String, format: Format, platform: Option<&str>) -> ModelSpec {
+    ModelSpec {
+        id: "ort-test".into(),
+        name: "Runtime".into(),
+        purpose: "wake-word runtime".into(),
+        licence: "MIT".into(),
+        set: SET_WAKE.into(),
+        platform: platform.map(str::to_owned),
+        format,
+        url,
+        archive_bytes: archive.len() as u64,
+        archive_sha256: sha(archive),
+        dir: "ort/test".into(),
+        files: vec![
+            FileSpec {
+                name: "LICENSE".into(),
+                path: Some("LICENSE".into()),
+                bytes: LICENSE_TXT.len() as u64,
+                sha256: sha(LICENSE_TXT),
+            },
+            FileSpec {
+                name: "libfoo.so".into(),
+                path: Some("lib/libfoo.so.1.2".into()),
+                bytes: LIB.len() as u64,
+                sha256: sha(LIB),
+            },
+        ],
+    }
+}
+
+fn read(dir: &Path, name: &str) -> Vec<u8> {
+    std::fs::read(dir.join(name)).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tgz_with_dot_slash_paths_and_links_installs_only_the_listed_files_under_the_manifests_names()
+ {
+    // The shape of the real ONNX Runtime archives: `./top/...`, a symlink next to the real file,
+    // and things nobody asked for.
+    let a = archive_tgz(&[
+        Item::File("./top/LICENSE", LICENSE_TXT),
+        Item::File("./top/lib/libfoo.so.1.2", LIB),
+        Item::Symlink("./top/lib/libfoo.so", "libfoo.so.1.2"),
+        Item::Symlink("./top/lib/libfoo.so.1", "libfoo.so.1.2"),
+        Item::File("./top/include/foo.h", b"header"),
+        Item::File("./top/ThirdPartyNotices.txt", b"notices"),
+    ]);
+    let srv = serve(a.clone()).await;
+    let spec = runtime_spec(&a, srv.url.clone(), Format::Tgz, None);
+    let root = temp_root("tgz");
+    let m = manager(&root, &spec);
+    assert_eq!(run_set(&m, SET_WAKE).await, Ok(()));
+    assert!(m.wake_ready() && !m.ready());
+    let dir = root.join("ort/test");
+    // Named by the manifest ("libfoo.so", not the archive's "libfoo.so.1.2"), and nothing else.
+    assert_eq!(read(&dir, "libfoo.so"), LIB);
+    assert_eq!(read(&dir, "LICENSE"), LICENSE_TXT);
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, [".verified", "LICENSE", "libfoo.so"]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deflated_zip_installs_the_listed_files_and_refuses_a_path_that_climbs() {
+    let a = archive_zip(&[
+        ("top/LICENSE", LICENSE_TXT),
+        ("top/lib/libfoo.so.1.2", LIB),
+        ("top/lib/other.dll", b"not listed"),
+    ]);
+    let srv = serve(a.clone()).await;
+    let spec = runtime_spec(&a, srv.url.clone(), Format::Zip, None);
+    let root = temp_root("zip");
+    let m = manager(&root, &spec);
+    assert_eq!(run_set(&m, SET_WAKE).await, Ok(()));
+    assert_eq!(read(&root.join("ort/test"), "libfoo.so"), LIB);
+    assert!(!root.join("ort/test/other.dll").exists());
+    let _ = std::fs::remove_dir_all(root);
+
+    // An entry that leaves the folder is refused, listed or not, and nothing is installed.
+    let a = archive_zip(&[
+        ("top/LICENSE", LICENSE_TXT),
+        ("../evil.txt", b"x"),
+        ("top/lib/libfoo.so.1.2", LIB),
+    ]);
+    let srv = serve(a.clone()).await;
+    let spec = runtime_spec(&a, srv.url.clone(), Format::Zip, None);
+    let root = temp_root("zip-slip");
+    let m = manager(&root, &spec);
+    assert!(matches!(
+        run_set(&m, SET_WAKE).await,
+        Err(ModelError::BadArchive(_))
+    ));
+    assert!(!m.wake_ready());
+    assert!(!root.parent().unwrap().join("evil.txt").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_listed_path_must_be_exactly_where_the_manifest_says() {
+    // The right name in the wrong place, a link in the right place, and a path that only ends the
+    // same way are none of them the listed file.
+    for (tag, items) in [
+        (
+            "wrong-folder",
+            vec![
+                Item::File("top/LICENSE", LICENSE_TXT),
+                Item::File("top/other/libfoo.so.1.2", LIB),
+            ],
+        ),
+        (
+            "no-top-folder",
+            vec![
+                Item::File("top/LICENSE", LICENSE_TXT),
+                Item::File("lib/libfoo.so.1.2", LIB),
+            ],
+        ),
+        (
+            "link",
+            vec![
+                Item::File("top/LICENSE", LICENSE_TXT),
+                Item::Symlink("top/lib/libfoo.so.1.2", "/usr/lib/libc.so"),
+            ],
+        ),
+    ] {
+        let a = archive_tgz(&items);
+        let srv = serve(a.clone()).await;
+        let spec = runtime_spec(&a, srv.url.clone(), Format::Tgz, None);
+        let root = temp_root(tag);
+        let m = manager(&root, &spec);
+        assert!(
+            matches!(run_set(&m, SET_WAKE).await, Err(ModelError::BadArchive(_))),
+            "{tag}"
+        );
+        assert!(!m.wake_ready(), "{tag}");
+        assert!(!root.join("ort/test").exists(), "{tag}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_file_download_is_checked_and_installed_as_it_is() {
+    let spec_for_file = |body: &[u8], url: String| ModelSpec {
+        id: "wake-test".into(),
+        name: "A model".into(),
+        purpose: "wake-word".into(),
+        licence: "CC-BY-NC-SA-4.0".into(),
+        set: SET_WAKE.into(),
+        platform: None,
+        format: Format::File,
+        url,
+        archive_bytes: body.len() as u64,
+        archive_sha256: sha(body),
+        dir: "wake/test".into(),
+        files: vec![FileSpec {
+            name: "model.onnx".into(),
+            path: None,
+            bytes: body.len() as u64,
+            sha256: sha(body),
+        }],
+    };
+    let body = b"onnx-model-bytes".to_vec();
+    let srv = serve(body.clone()).await;
+    let spec = spec_for_file(&body, srv.url.clone());
+    assert!(spec.validate(true).is_ok());
+    let root = temp_root("file");
+    let m = manager(&root, &spec);
+    assert_eq!(run_set(&m, SET_WAKE).await, Ok(()));
+    assert!(m.wake_ready());
+    assert_eq!(read(&root.join("wake/test"), "model.onnx"), body);
+    let _ = std::fs::remove_dir_all(root);
+
+    // A different file of the same length is caught.
+    let mut other = body.clone();
+    other[0] ^= 1;
+    let srv = serve(other).await;
+    let spec = spec_for_file(&body, srv.url.clone());
+    let root = temp_root("file-bad");
+    let m = manager(&root, &spec);
+    assert_eq!(
+        run_set(&m, SET_WAKE).await,
+        Err(ModelError::ChecksumMismatch)
+    );
+    assert!(!m.wake_ready() && !root.join("wake/test").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_set_is_installed_and_reported_on_its_own() {
+    let speech_a = archive(&good_items());
+    let wake_a = archive_tgz(&[
+        Item::File("top/LICENSE", LICENSE_TXT),
+        Item::File("top/lib/libfoo.so.1.2", LIB),
+    ]);
+    let (s1, s2) = (serve(speech_a.clone()).await, serve(wake_a.clone()).await);
+    let speech = spec_for(&speech_a, s1.url.clone());
+    let wake = runtime_spec(&wake_a, s2.url.clone(), Format::Tgz, None);
+    let root = temp_root("sets");
+    let m = ModelManager::with(
+        root.clone(),
+        vec![speech, wake],
+        http_client(true),
+        Duration::from_secs(3),
+    );
+    assert!(!m.ready() && !m.wake_ready());
+    // The wake set alone: speech is untouched, and nothing of it is requested.
+    let seen: Seen = Arc::default();
+    let s3 = seen.clone();
+    m.install_set(SET_WAKE, &move |p| lock(&s3).push(p))
+        .await
+        .unwrap();
+    assert!(m.wake_ready() && !m.ready());
+    assert_eq!(
+        s1.hits.load(Ordering::SeqCst),
+        0,
+        "the speech set was not fetched"
+    );
+    // Then the speech set, as the existing command does.
+    assert_eq!(run(&m).await.0, Ok(()));
+    assert!(m.ready() && m.wake_ready());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn only_the_downloads_for_this_system_are_considered() {
+    let a = archive_tgz(&[Item::File("top/LICENSE", LICENSE_TXT)]);
+    let mk = |id: &str, plat: Option<&str>| {
+        let mut s = runtime_spec(&a, "http://x/y".into(), Format::Tgz, plat);
+        s.id = id.into();
+        s
+    };
+    let all = vec![
+        mk("any", None),
+        mk("win", Some("windows-x86_64")),
+        mk("mac", Some("macos-aarch64")),
+        mk("linux", Some("linux-x86_64")),
+    ];
+    let ids = |here: &str| -> Vec<String> {
+        for_platform(&all, here).into_iter().map(|s| s.id).collect()
+    };
+    assert_eq!(ids("windows-x86_64"), ["any", "win"]);
+    assert_eq!(ids("macos-aarch64"), ["any", "mac"]);
+    assert_eq!(ids("linux-x86_64"), ["any", "linux"]);
+    // A system with no download of its own gets only the shared ones, so the set is not "ready".
+    assert_eq!(ids("other"), ["any"]);
+    assert!(PLATFORMS.contains(&current_platform()) || current_platform() == "macos-x86_64");
+}
+
+#[test]
+fn the_new_manifest_fields_are_checked_too() {
+    let a = archive_tgz(&[Item::File("top/LICENSE", LICENSE_TXT)]);
+    let https = "https://github.com/microsoft/onnxruntime/releases/download/v1/x.tgz".to_string();
+    let ok = runtime_spec(&a, https.clone(), Format::Tgz, Some("windows-x86_64"));
+    assert!(ok.validate(false).is_ok());
+    let mut s = ok.clone();
+    s.set = "other".into();
+    assert!(s.validate(false).is_err());
+    let mut s = ok.clone();
+    s.platform = Some("plan9-mips".into());
+    assert!(s.validate(false).is_err());
+    for path in [
+        "../lib/x",
+        "/lib/x",
+        "lib//x",
+        "lib/../x",
+        ".hidden/x",
+        "a/b/c/d/e",
+    ] {
+        let mut s = ok.clone();
+        s.files[1].path = Some(path.into());
+        assert!(s.validate(false).is_err(), "{path}");
+    }
+    // The other approved projects are allowed; others are not.
+    let mut s = ok.clone();
+    s.url = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/a.onnx".into();
+    assert!(s.validate(false).is_ok());
+    let mut s = ok.clone();
+    s.url = "https://github.com/microsoft/onnxruntime/archive/refs/heads/main.zip".into();
+    assert!(s.validate(false).is_err());
+    let mut s = ok.clone();
+    s.url = "https://github.com/someone-else/onnxruntime/releases/download/v1/x.tgz".into();
+    assert!(s.validate(false).is_err());
+    // A single-file download must be exactly its one file.
+    let mut s = ok.clone();
+    s.format = Format::File;
+    assert!(
+        s.validate(false).is_err(),
+        "two files and a path in a single-file download"
+    );
+}
+
+/// Needs the real downloads: `JARVIS_TEST_WAKE_DIR=<folder> cargo test -- --ignored`, where the
+/// folder holds `ort-win/p.zip`, `ort-linux/p.tgz`, `ort-mac/p.tgz` and `oww/*.onnx`. Proves the
+/// pinned checksums, paths and unpacking rules fit the real ONNX Runtime and openWakeWord files.
+#[test]
+#[ignore = "needs the real ONNX Runtime archives and openWakeWord files"]
+fn the_real_wake_word_downloads_match_the_manifest_and_unpack() {
+    let Ok(dir) = std::env::var("JARVIS_TEST_WAKE_DIR") else {
+        panic!("set JARVIS_TEST_WAKE_DIR");
+    };
+    let dir = PathBuf::from(dir);
+    let cancel = CancellationToken::new();
+    let local = |id: &str| -> PathBuf {
+        match id {
+            "ort-windows-x86_64" => dir.join("ort-win/p.zip"),
+            "ort-linux-x86_64" => dir.join("ort-linux/p.tgz"),
+            "ort-macos-aarch64" => dir.join("ort-mac/p.tgz"),
+            "wake-oww-melspectrogram" => dir.join("oww/melspectrogram.onnx"),
+            "wake-oww-embedding" => dir.join("oww/embedding_model.onnx"),
+            "wake-oww-hey-jarvis" => dir.join("oww/hey_jarvis_v0.1.onnx"),
+            other => panic!("{other}"),
+        }
+    };
+    for spec in manifest().iter().filter(|s| s.set == SET_WAKE) {
+        let archive = local(&spec.id);
+        assert_eq!(
+            sha256_file(&archive, &cancel).unwrap(),
+            spec.archive_sha256,
+            "{}",
+            spec.id
+        );
+        assert_eq!(
+            std::fs::metadata(&archive).unwrap().len(),
+            spec.archive_bytes,
+            "{}",
+            spec.id
+        );
+        let root = temp_root("real-wake");
+        let stage = root.join("stage");
+        std::fs::create_dir_all(&stage).unwrap();
+        extract(&archive, &stage, spec, &cancel).unwrap_or_else(|e| panic!("{}: {e}", spec.id));
+        put_in_place(&root, &stage, spec).unwrap();
+        assert!(is_installed(&root, spec), "{}", spec.id);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+/// A real download of the wake set for this system from github.com (about 15 MB on Linux, about
+/// 85 MB on Windows). Needs internet.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "downloads the wake word files from github.com"]
+async fn a_real_download_of_the_wake_set_installs_it() {
+    let root = temp_root("real-wake-download");
+    let m = ModelManager::new(root.clone());
+    assert!(!m.wake_ready());
+    m.install_set(SET_WAKE, &|_| {})
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(m.wake_ready());
     let _ = std::fs::remove_dir_all(root);
 }

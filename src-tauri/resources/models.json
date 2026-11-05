@@ -6,18 +6,187 @@
       "name": "Speech recognition (Moonshine base, English)",
       "purpose": "speech-to-text",
       "licence": "MIT",
-      "default": true,
       "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2",
       "archiveBytes": 250807309,
       "archiveSha256": "21870cecaa2e44e4e2bf63e02d1072bed183ccd10284871353bd9d24dad14e5e",
       "dir": "stt/moonshine-base-en-int8",
       "files": [
-        { "name": "LICENSE", "bytes": 1071, "sha256": "29f60769d1779eb7e196d96b8d2dd471d0263cf8200c79e55c0c00183971ee1b" },
-        { "name": "tokens.txt", "bytes": 436688, "sha256": "1165c2aeb9f72f457a83be2d459a09054f27490acd9b41bd43794dfd25e296ea" },
-        { "name": "preprocess.onnx", "bytes": 14077290, "sha256": "ffa630d395c5ccf76f5d4954be5b882df76aaf6491519ec01fd82ea7a3819fb2" },
-        { "name": "encode.int8.onnx", "bytes": 50311494, "sha256": "7e38770f776f2e5583a53b052936005df2ba5c833d7e09c2a5fd796b94bf73e2" },
-        { "name": "uncached_decode.int8.onnx", "bytes": 122120451, "sha256": "c01f4b35093bcac20d352d23a75a539e772964579f9d024a90e5e6f09cae9987" },
-        { "name": "cached_decode.int8.onnx", "bytes": 99983837, "sha256": "2db74e51cedf64a8b1be3c8192e0bb5e4923af0e90bd9e87f8e8771873f8ea03" }
+        {
+          "name": "LICENSE",
+          "bytes": 1071,
+          "sha256": "29f60769d1779eb7e196d96b8d2dd471d0263cf8200c79e55c0c00183971ee1b"
+        },
+        {
+          "name": "tokens.txt",
+          "bytes": 436688,
+          "sha256": "1165c2aeb9f72f457a83be2d459a09054f27490acd9b41bd43794dfd25e296ea"
+        },
+        {
+          "name": "preprocess.onnx",
+          "bytes": 14077290,
+          "sha256": "ffa630d395c5ccf76f5d4954be5b882df76aaf6491519ec01fd82ea7a3819fb2"
+        },
+        {
+          "name": "encode.int8.onnx",
+          "bytes": 50311494,
+          "sha256": "7e38770f776f2e5583a53b052936005df2ba5c833d7e09c2a5fd796b94bf73e2"
+        },
+        {
+          "name": "uncached_decode.int8.onnx",
+          "bytes": 122120451,
+          "sha256": "c01f4b35093bcac20d352d23a75a539e772964579f9d024a90e5e6f09cae9987"
+        },
+        {
+          "name": "cached_decode.int8.onnx",
+          "bytes": 99983837,
+          "sha256": "2db74e51cedf64a8b1be3c8192e0bb5e4923af0e90bd9e87f8e8771873f8ea03"
+        }
+      ],
+      "set": "speech",
+      "format": "tar.bz2"
+    },
+    {
+      "id": "ort-windows-x86_64",
+      "name": "ONNX Runtime 1.31.0 (windows-x86_64), for the wake word",
+      "purpose": "wake-word runtime",
+      "licence": "MIT",
+      "set": "wake",
+      "platform": "windows-x86_64",
+      "format": "zip",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-win-x64-1.31.0.zip",
+      "archiveBytes": 82887349,
+      "archiveSha256": "3958d8a44984160692c1b4ffd0de3cb48f8c39f9d34bb31e433db06e30b82195",
+      "dir": "ort/windows-x86_64",
+      "files": [
+        {
+          "name": "LICENSE",
+          "path": "LICENSE",
+          "bytes": 1094,
+          "sha256": "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674"
+        },
+        {
+          "name": "onnxruntime.dll",
+          "path": "lib/onnxruntime.dll",
+          "bytes": 17253176,
+          "sha256": "0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c"
+        },
+        {
+          "name": "onnxruntime_providers_shared.dll",
+          "path": "lib/onnxruntime_providers_shared.dll",
+          "bytes": 21816,
+          "sha256": "e45d471ea2a842b268c51291b96d53568b0dae10807f43d1fb7dc0eb84e83723"
+        }
+      ]
+    },
+    {
+      "id": "ort-linux-x86_64",
+      "name": "ONNX Runtime 1.31.0 (linux-x86_64), for the wake word",
+      "purpose": "wake-word runtime",
+      "licence": "MIT",
+      "set": "wake",
+      "platform": "linux-x86_64",
+      "format": "tgz",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-linux-x64-1.31.0.tgz",
+      "archiveBytes": 11408003,
+      "archiveSha256": "cc5c72baf5ae5c8238a6841f0897227be2d02826b9cf98eaf02fdefaeeb03a57",
+      "dir": "ort/linux-x86_64",
+      "files": [
+        {
+          "name": "LICENSE",
+          "path": "LICENSE",
+          "bytes": 1073,
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        },
+        {
+          "name": "libonnxruntime.so",
+          "path": "lib/libonnxruntime.so.1.31.0",
+          "bytes": 29345384,
+          "sha256": "469849977cb60744ea160927e1a3a0643fd4c55c0aff743251c6d293402e334e"
+        }
+      ]
+    },
+    {
+      "id": "ort-macos-aarch64",
+      "name": "ONNX Runtime 1.31.0 (macos-aarch64), for the wake word",
+      "purpose": "wake-word runtime",
+      "licence": "MIT",
+      "set": "wake",
+      "platform": "macos-aarch64",
+      "format": "tgz",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-osx-arm64-1.31.0.tgz",
+      "archiveBytes": 36549009,
+      "archiveSha256": "1031b36dd3bdaa8d976a6130d9cf2a05e9be320b93ae804f8427b91dc3432afc",
+      "dir": "ort/macos-aarch64",
+      "files": [
+        {
+          "name": "LICENSE",
+          "path": "LICENSE",
+          "bytes": 1073,
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        },
+        {
+          "name": "libonnxruntime.dylib",
+          "path": "lib/libonnxruntime.1.31.0.dylib",
+          "bytes": 44830288,
+          "sha256": "2a50a63e7f41f8d4d551d3ee47248df3864f6540109fce8ad520ca3b51af4b70"
+        }
+      ]
+    },
+    {
+      "id": "wake-oww-melspectrogram",
+      "name": "Wake word model: melspectrogram (openWakeWord)",
+      "purpose": "wake-word",
+      "licence": "CC-BY-NC-SA-4.0, personal non-commercial use only (D-23, D-29); openWakeWord by David Scripka",
+      "set": "wake",
+      "format": "file",
+      "url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/melspectrogram.onnx",
+      "archiveBytes": 1087958,
+      "archiveSha256": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+      "dir": "wake/melspectrogram",
+      "files": [
+        {
+          "name": "melspectrogram.onnx",
+          "bytes": 1087958,
+          "sha256": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f"
+        }
+      ]
+    },
+    {
+      "id": "wake-oww-embedding",
+      "name": "Wake word model: embedding (openWakeWord)",
+      "purpose": "wake-word",
+      "licence": "CC-BY-NC-SA-4.0, personal non-commercial use only (D-23, D-29); openWakeWord by David Scripka",
+      "set": "wake",
+      "format": "file",
+      "url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/embedding_model.onnx",
+      "archiveBytes": 1326578,
+      "archiveSha256": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
+      "dir": "wake/embedding",
+      "files": [
+        {
+          "name": "embedding_model.onnx",
+          "bytes": 1326578,
+          "sha256": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f"
+        }
+      ]
+    },
+    {
+      "id": "wake-oww-hey-jarvis",
+      "name": "Wake word model: hey jarvis (openWakeWord)",
+      "purpose": "wake-word",
+      "licence": "CC-BY-NC-SA-4.0, personal non-commercial use only (D-23, D-29); openWakeWord by David Scripka",
+      "set": "wake",
+      "format": "file",
+      "url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_jarvis_v0.1.onnx",
+      "archiveBytes": 1271370,
+      "archiveSha256": "94a13cfe60075b132f6a472e7e462e8123ee70861bc3fb58434a73712ee0d2cb",
+      "dir": "wake/hey-jarvis",
+      "files": [
+        {
+          "name": "hey_jarvis_v0.1.onnx",
+          "bytes": 1271370,
+          "sha256": "94a13cfe60075b132f6a472e7e462e8123ee70861bc3fb58434a73712ee0d2cb"
+        }
       ]
     }
   ]

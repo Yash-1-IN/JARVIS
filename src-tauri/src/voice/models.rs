@@ -8,10 +8,14 @@
 //!
 //! 1. The archive is downloaded to a `.part` file (resumable with a `Range` request, bounded in
 //!    size, with a stall timeout) and its SHA-256 must equal the pinned one, or it is thrown away.
-//! 2. Only then it is unpacked, and only into a fresh staging folder. Only regular files whose
-//!    names are in the manifest are accepted (one folder level at most); links, devices, paths with
-//!    `..`, absolute paths and anything unknown are refused. File names on disk are built from the
-//!    manifest, never from the archive. Output is size-bounded.
+//! 2. Only then it is unpacked, and only into a fresh staging folder. Only regular files that the
+//!    manifest lists are written (matched by name, or by their exact path inside the archive, for
+//!    example `lib/onnxruntime.dll`); a listed file that is a link or anything but a plain file is
+//!    refused; paths with `..`, absolute paths and drive letters are refused; every other entry
+//!    (sample recordings, headers, links the archive happens to hold) is skipped, never written.
+//!    File names on disk are built from the manifest, never from the archive. Output is
+//!    size-bounded. Archives are `.tar.bz2`, `.tgz` or `.zip`; a model that is a single file needs
+//!    no unpacking and is only checked.
 //! 3. Each extracted file is checked again against its own pinned size and SHA-256.
 //! 4. The staging folder replaces the install folder in one rename, and a marker is written.
 //!
@@ -47,12 +51,59 @@ const MARKER: &str = ".verified";
 
 const MANIFEST: &str = include_str!("../../resources/models.json");
 
+/// Where downloads may come from. Nothing else is ever fetched.
+const ALLOWED_SOURCES: &[&str] = &[
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/",
+    "https://github.com/microsoft/onnxruntime/releases/download/",
+    "https://github.com/dscripka/openWakeWord/releases/download/",
+];
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileSpec {
+    /// The name on disk, under the model's folder.
     pub name: String,
+    /// Where the file is inside the archive, below its top folder (`lib/onnxruntime.dll`). Without
+    /// it the file is found by `name` at the top of the archive or one folder down.
+    #[serde(default)]
+    pub path: Option<String>,
     pub bytes: u64,
     pub sha256: String,
+}
+
+/// How what is downloaded is packed.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+pub enum Format {
+    #[default]
+    #[serde(rename = "tar.bz2")]
+    TarBz2,
+    #[serde(rename = "tgz")]
+    Tgz,
+    #[serde(rename = "zip")]
+    Zip,
+    /// The download is the one file itself.
+    #[serde(rename = "file")]
+    File,
+}
+
+/// The sets of downloads the app knows: what speech needs, and what the wake word needs.
+pub const SET_SPEECH: &str = "speech";
+pub const SET_WAKE: &str = "wake";
+const PLATFORMS: &[&str] = &["windows-x86_64", "macos-aarch64", "linux-x86_64"];
+
+/// The operating system and processor this build runs on, as the manifest spells them.
+pub fn current_platform() -> &'static str {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        "windows-x86_64"
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "macos-aarch64"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "macos-x86_64"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "linux-x86_64"
+    } else {
+        "other"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -62,8 +113,15 @@ pub struct ModelSpec {
     pub name: String,
     pub purpose: String,
     pub licence: String,
-    /// Part of the set the app downloads for itself.
-    pub default: bool,
+    /// `speech` (downloaded for the speech engine) or `wake` (downloaded when the wake word is
+    /// switched on).
+    pub set: String,
+    /// The system this download is for (`windows-x86_64`, `macos-aarch64`, `linux-x86_64`); without
+    /// it, every system.
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub format: Format,
     pub url: String,
     pub archive_bytes: u64,
     pub archive_sha256: String,
@@ -106,11 +164,21 @@ impl ModelSpec {
         if !is_plain_name(&self.id) {
             return bad("bad id");
         }
-        let https_github = self
-            .url
-            .starts_with("https://github.com/k2-fsa/sherpa-onnx/releases/download/");
+        // The only places a download may come from: release pages of the three projects whose
+        // files we use, on github.com, over https.
+        let https_github = ALLOWED_SOURCES.iter().any(|p| self.url.starts_with(p));
         if !(https_github || allow_http) {
-            return bad("the address must be a sherpa-onnx release on github.com over https");
+            return bad(
+                "the address must be a release of an approved project on github.com over https",
+            );
+        }
+        if self.set != SET_SPEECH && self.set != SET_WAKE {
+            return bad("unknown set");
+        }
+        if let Some(p) = &self.platform
+            && !PLATFORMS.contains(&p.as_str())
+        {
+            return bad("unknown platform");
         }
         if !is_hex64(&self.archive_sha256) || self.archive_bytes == 0 {
             return bad("archive size or checksum is missing");
@@ -132,6 +200,11 @@ impl ModelSpec {
             if !is_hex64(&f.sha256) || f.bytes == 0 || f.bytes > MAX_FILE_BYTES {
                 return bad("file size or checksum is wrong");
             }
+            if let Some(path) = &f.path
+                && (path.split('/').count() > 4 || path.split('/').any(|p| !is_plain_name(p)))
+            {
+                return bad("bad path inside the archive");
+            }
             if self.files[..i].iter().any(|g| g.name == f.name) {
                 return bad("a file is listed twice");
             }
@@ -139,6 +212,14 @@ impl ModelSpec {
         }
         if total > MAX_UNPACKED_BYTES {
             return bad("the files are larger than the unpacking limit");
+        }
+        if self.format == Format::File
+            && (self.files.len() != 1
+                || self.files[0].bytes != self.archive_bytes
+                || self.files[0].sha256 != self.archive_sha256
+                || self.files[0].path.is_some())
+        {
+            return bad("a single-file download must be exactly its one listed file");
         }
         Ok(())
     }
@@ -206,6 +287,14 @@ pub fn is_installed(root: &Path, spec: &ModelSpec) -> bool {
     })
 }
 
+/// The downloads that are for `here`: the ones with no platform, and the ones for exactly this one.
+fn for_platform(all: &[ModelSpec], here: &str) -> Vec<ModelSpec> {
+    all.iter()
+        .filter(|s| s.platform.as_deref().is_none_or(|p| p == here))
+        .cloned()
+        .collect()
+}
+
 fn http_client(allow_http: bool) -> reqwest::Client {
     use reqwest::redirect::Policy;
     reqwest::Client::builder()
@@ -243,6 +332,131 @@ fn sha256_file(path: &Path, cancel: &CancellationToken) -> Result<String, ModelE
     Ok(hex(&h.finalize()))
 }
 
+/// Which listed file (if any) an archive entry is, and the rules every listed file must meet.
+struct Picker<'a> {
+    spec: &'a ModelSpec,
+    seen: Vec<&'a str>,
+    total: u64,
+}
+
+impl<'a> Picker<'a> {
+    fn new(spec: &'a ModelSpec) -> Self {
+        Self {
+            spec,
+            seen: Vec::new(),
+            total: 0,
+        }
+    }
+
+    /// `comps` are the entry's path parts (no `.`), `is_file` says it is a plain file. An entry the
+    /// manifest does not list is skipped (`None`); a listed one must be a plain file of the exact
+    /// size, listed once, within the total bound.
+    fn pick(
+        &mut self,
+        comps: &[String],
+        is_file: bool,
+        size: u64,
+    ) -> Result<Option<&'a FileSpec>, ModelError> {
+        let spec = self.spec;
+        let Some(want) = spec.files.iter().find(|f| match &f.path {
+            // The top folder, then exactly this path.
+            Some(p) => comps.len() >= 2 && comps[1..].join("/") == *p,
+            // At the top, or one folder down.
+            None => matches!(comps, [n] | [_, n] if *n == f.name),
+        }) else {
+            return Ok(None);
+        };
+        if !is_file {
+            return Err(ModelError::BadArchive(format!(
+                "{} is not a plain file",
+                want.name
+            )));
+        }
+        if self.seen.contains(&want.name.as_str()) {
+            return Err(ModelError::BadArchive("a file appears twice".into()));
+        }
+        if size != want.bytes {
+            return Err(ModelError::BadArchive(format!(
+                "{} has the wrong size",
+                want.name
+            )));
+        }
+        self.total += size;
+        if self.total > MAX_UNPACKED_BYTES {
+            return Err(ModelError::TooBig);
+        }
+        self.seen.push(&want.name);
+        Ok(Some(want))
+    }
+
+    /// Every listed file must have turned up.
+    fn finish(self) -> Result<(), ModelError> {
+        match self
+            .spec
+            .files
+            .iter()
+            .find(|f| !self.seen.contains(&f.name.as_str()))
+        {
+            Some(missing) => Err(ModelError::BadArchive(format!(
+                "{} is missing",
+                missing.name
+            ))),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The parts of an archive path. `.` is dropped; `..`, a root and a drive letter are refused.
+fn path_parts(path: &Path) -> Result<Vec<String>, ModelError> {
+    let mut out = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::Normal(p) => out.push(p.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            _ => return Err(ModelError::BadArchive("a path leaves the folder".into())),
+        }
+    }
+    Ok(out)
+}
+
+/// Writes exactly `want.bytes` from `src` to `dst` while hashing them, and checks the hash. The
+/// name on disk is the manifest's, never the archive's.
+fn copy_verified(
+    src: &mut dyn Read,
+    dst: &Path,
+    want: &FileSpec,
+    cancel: &CancellationToken,
+) -> Result<(), ModelError> {
+    let mut f = std::fs::File::create(dst).map_err(io)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut left = want.bytes;
+    while left > 0 {
+        if cancel.is_cancelled() {
+            return Err(ModelError::Cancelled);
+        }
+        let want_now = left.min(buf.len() as u64) as usize;
+        let n = src
+            .read(&mut buf[..want_now])
+            .map_err(|e| ModelError::BadArchive(e.to_string()))?;
+        if n == 0 {
+            return Err(ModelError::BadArchive("a file ends early".into()));
+        }
+        h.update(&buf[..n]);
+        f.write_all(&buf[..n]).map_err(io)?;
+        left -= n as u64;
+    }
+    f.flush().map_err(io)?;
+    if hex(&h.finalize()) != want.sha256 {
+        return Err(ModelError::ChecksumMismatch);
+    }
+    Ok(())
+}
+
+fn bad_archive(e: impl std::fmt::Display) -> ModelError {
+    ModelError::BadArchive(e.to_string())
+}
+
 /// Unpacks `archive` into the new folder `stage`, keeping only what the spec lists.
 fn extract(
     archive: &Path,
@@ -251,96 +465,87 @@ fn extract(
     cancel: &CancellationToken,
 ) -> Result<(), ModelError> {
     let file = std::fs::File::open(archive).map_err(io)?;
-    // The decompressed stream is cut off at the unpacking limit, so a bomb cannot fill the disk.
-    let decoder = bzip2::read::BzDecoder::new(file).take(MAX_UNPACKED_BYTES + MAX_FILE_BYTES);
-    let mut tar = tar::Archive::new(decoder);
-    let mut seen: Vec<&str> = Vec::new();
-    let mut total = 0u64;
-    let entries = tar
-        .entries()
-        .map_err(|e| ModelError::BadArchive(e.to_string()))?;
-    for entry in entries {
+    // A decompressed stream is cut off at the unpacking limit, so a bomb cannot fill the disk.
+    let limit = MAX_UNPACKED_BYTES + MAX_FILE_BYTES;
+    match spec.format {
+        Format::TarBz2 => extract_tar(
+            bzip2::read::BzDecoder::new(file).take(limit),
+            stage,
+            spec,
+            cancel,
+        ),
+        Format::Tgz => extract_tar(
+            flate2::read::GzDecoder::new(file).take(limit),
+            stage,
+            spec,
+            cancel,
+        ),
+        Format::Zip => extract_zip(file, stage, spec, cancel),
+        Format::File => {
+            let want = &spec.files[0];
+            let mut file = file;
+            if file.metadata().map_err(io)?.len() != want.bytes {
+                return Err(bad_archive("the file has the wrong size"));
+            }
+            copy_verified(&mut file, &stage.join(&want.name), want, cancel)
+        }
+    }
+}
+
+fn extract_tar<R: Read>(
+    reader: R,
+    stage: &Path,
+    spec: &ModelSpec,
+    cancel: &CancellationToken,
+) -> Result<(), ModelError> {
+    let mut tar = tar::Archive::new(reader);
+    let mut picker = Picker::new(spec);
+    for entry in tar.entries().map_err(bad_archive)? {
         if cancel.is_cancelled() {
             return Err(ModelError::Cancelled);
         }
-        let mut entry = entry.map_err(|e| ModelError::BadArchive(e.to_string()))?;
+        let mut entry = entry.map_err(bad_archive)?;
         let kind = entry.header().entry_type();
-        let path = entry
-            .path()
-            .map_err(|e| ModelError::BadArchive(e.to_string()))?
-            .into_owned();
-        // Only plain names: no `..`, no absolute path, no drive letters.
-        let parts: Vec<&std::ffi::OsStr> = path
-            .components()
-            .map(|c| match c {
-                Component::Normal(p) => Ok(p),
-                _ => Err(ModelError::BadArchive("a path leaves the folder".into())),
-            })
-            .collect::<Result<_, _>>()?;
+        let path = entry.path().map_err(bad_archive)?.into_owned();
+        let comps = path_parts(&path)?;
         if kind.is_dir() {
             continue;
         }
-        if !kind.is_file() {
-            return Err(ModelError::BadArchive(
-                "it contains something that is not a plain file".into(),
-            ));
-        }
-        // `top-folder/file` or `file`; anything deeper is not a model file.
-        let name = match parts.as_slice() {
-            [n] | [_, n] => n.to_string_lossy().into_owned(),
-            _ => continue,
+        let Some(want) = picker.pick(&comps, kind.is_file(), entry.size())? else {
+            continue; // not listed: skipped, whatever it is (a link included): never written
         };
-        // Files the manifest does not list (sample recordings, readmes) are skipped, not written.
-        let Some(want) = spec.files.iter().find(|f| f.name == name) else {
+        copy_verified(&mut entry, &stage.join(&want.name), want, cancel)?;
+    }
+    picker.finish()
+}
+
+fn extract_zip(
+    file: std::fs::File,
+    stage: &Path,
+    spec: &ModelSpec,
+    cancel: &CancellationToken,
+) -> Result<(), ModelError> {
+    let mut zip = zip::ZipArchive::new(file).map_err(bad_archive)?;
+    let mut picker = Picker::new(spec);
+    for i in 0..zip.len() {
+        if cancel.is_cancelled() {
+            return Err(ModelError::Cancelled);
+        }
+        let mut entry = zip.by_index(i).map_err(bad_archive)?;
+        // `enclosed_name` is `None` for an absolute path or one that climbs out with `..`.
+        let Some(path) = entry.enclosed_name() else {
+            return Err(bad_archive("a path leaves the folder"));
+        };
+        let comps = path_parts(&path)?;
+        if entry.is_dir() {
+            continue;
+        }
+        let Some(want) = picker.pick(&comps, entry.is_file(), entry.size())? else {
             continue;
         };
-        if seen.contains(&want.name.as_str()) {
-            return Err(ModelError::BadArchive("a file appears twice".into()));
-        }
-        if entry.size() != want.bytes {
-            return Err(ModelError::BadArchive(format!(
-                "{} has the wrong size",
-                want.name
-            )));
-        }
-        total += entry.size();
-        if total > MAX_UNPACKED_BYTES {
-            return Err(ModelError::TooBig);
-        }
-        // The name on disk comes from the manifest, never from the archive.
-        let out = stage.join(&want.name);
-        let mut f = std::fs::File::create(&out).map_err(io)?;
-        let mut h = Sha256::new();
-        let mut buf = vec![0u8; 1 << 20];
-        let mut left = want.bytes;
-        while left > 0 {
-            if cancel.is_cancelled() {
-                return Err(ModelError::Cancelled);
-            }
-            let want_now = left.min(buf.len() as u64) as usize;
-            let n = entry
-                .read(&mut buf[..want_now])
-                .map_err(|e| ModelError::BadArchive(e.to_string()))?;
-            if n == 0 {
-                return Err(ModelError::BadArchive("a file ends early".into()));
-            }
-            h.update(&buf[..n]);
-            f.write_all(&buf[..n]).map_err(io)?;
-            left -= n as u64;
-        }
-        f.flush().map_err(io)?;
-        if hex(&h.finalize()) != want.sha256 {
-            return Err(ModelError::ChecksumMismatch);
-        }
-        seen.push(&want.name);
+        copy_verified(&mut entry, &stage.join(&want.name), want, cancel)?;
     }
-    if let Some(missing) = spec.files.iter().find(|f| !seen.contains(&f.name.as_str())) {
-        return Err(ModelError::BadArchive(format!(
-            "{} is missing",
-            missing.name
-        )));
-    }
-    Ok(())
+    picker.finish()
 }
 
 /// Writes the marker into `stage` and moves it into place, replacing an older install.
@@ -380,7 +585,13 @@ pub fn import_from_folder(
     );
     std::fs::create_dir_all(&stage.0).map_err(io)?;
     for f in &spec.files {
-        let src = folder.join(&f.name);
+        // In a folder the person unpacked, a file has the name it had in the archive.
+        let in_folder = f
+            .path
+            .as_deref()
+            .and_then(|p| p.rsplit('/').next())
+            .unwrap_or(&f.name);
+        let src = folder.join(in_folder);
         let meta = std::fs::symlink_metadata(&src)
             .map_err(|_| ModelError::BadArchive(format!("{} is not in that folder", f.name)))?;
         if !meta.is_file() || meta.len() != f.bytes {
@@ -423,7 +634,8 @@ impl Drop for BusyGuard<'_> {
 impl ModelManager {
     /// `root` is the models folder inside the app data folder.
     pub fn new(root: PathBuf) -> Self {
-        Self::with(root, manifest().to_vec(), http_client(false), STALL)
+        let specs = for_platform(manifest(), current_platform());
+        Self::with(root, specs, http_client(false), STALL)
     }
 
     fn with(root: PathBuf, specs: Vec<ModelSpec>, http: reqwest::Client, stall: Duration) -> Self {
@@ -437,12 +649,21 @@ impl ModelManager {
         }
     }
 
-    /// True once every model of the default set is installed and verified.
+    /// True once every download of the speech set is installed and verified.
     pub fn ready(&self) -> bool {
-        self.specs
-            .iter()
-            .filter(|s| s.default)
-            .all(|s| is_installed(&self.root, s))
+        self.set_ready(SET_SPEECH)
+    }
+
+    /// True once everything the wake word needs on this system is installed and verified. False on a
+    /// system the wake word has no download for.
+    #[cfg_attr(not(test), allow(dead_code))] // the wake word's own steps use it
+    pub fn wake_ready(&self) -> bool {
+        self.set_ready(SET_WAKE)
+    }
+
+    fn set_ready(&self, set: &str) -> bool {
+        let mut members = self.specs.iter().filter(|s| s.set == set).peekable();
+        members.peek().is_some() && members.all(|s| is_installed(&self.root, s))
     }
 
     /// The folder a model's files are in (the speech engine reads it).
@@ -462,10 +683,19 @@ impl ModelManager {
         }
     }
 
-    /// Downloads and verifies every model of the default set that is not installed yet.
+    /// Downloads and verifies every download of the speech set that is not installed yet.
     /// `progress` is called with the archive's progress, at most every 250 ms.
     pub async fn install_default(
         &self,
+        progress: &(dyn Fn(ModelProgress) + Send + Sync),
+    ) -> Result<(), ModelError> {
+        self.install_set(SET_SPEECH, progress).await
+    }
+
+    /// The same for one named set (`speech` or `wake`).
+    pub async fn install_set(
+        &self,
+        set: &str,
         progress: &(dyn Fn(ModelProgress) + Send + Sync),
     ) -> Result<(), ModelError> {
         if self
@@ -478,7 +708,7 @@ impl ModelManager {
         let _busy = BusyGuard(self);
         let cancel = CancellationToken::new();
         *lock(&self.cancel) = Some(cancel.clone());
-        for spec in self.specs.iter().filter(|s| s.default) {
+        for spec in self.specs.iter().filter(|s| s.set == set) {
             if is_installed(&self.root, spec) {
                 continue;
             }
