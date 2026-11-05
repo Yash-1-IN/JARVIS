@@ -302,6 +302,7 @@ pub fn voice_status(
 ) -> VoiceStatus {
     VoiceStatus {
         models_ready: models.ready(),
+        wake_ready: models.wake_ready(),
         ..svc.voice_status()
     }
 }
@@ -315,6 +316,7 @@ pub fn voice_settings_set(
 ) -> Result<VoiceStatus, JarvisError> {
     Ok(VoiceStatus {
         models_ready: models.ready(),
+        wake_ready: models.wake_ready(),
         ..svc.voice_settings_set(&patch)?
     })
 }
@@ -386,8 +388,10 @@ pub async fn voice_models_install(
         .install_default(&move |p| publish_event(&for_events, EventKind::VoiceModelsProgress, p))
         .await
         .map_err(model_error)?;
-    // The wake word's files are fetched only once the person has switched it on (D-28).
-    if svc.settings.get().voice.wake_enabled {
+    // The wake word's files are fetched only once the person has accepted the notice and switched
+    // it on (D-28, D-29).
+    let v = svc.settings.get().voice;
+    if v.wake_enabled && v.wake_notice_accepted && crate::voice::models::wake_supported() {
         let for_events = app.clone();
         models
             .install_set(crate::voice::models::SET_WAKE, &move |p| {
@@ -398,6 +402,7 @@ pub async fn voice_models_install(
     }
     Ok(VoiceStatus {
         models_ready: models.ready(),
+        wake_ready: models.wake_ready(),
         ..svc.voice_status()
     })
 }

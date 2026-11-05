@@ -229,6 +229,23 @@ impl ModelSpec {
     }
 }
 
+/// True when the wake word is offered on this system: a download exists for it **and** the system
+/// is one the owner has decided to ship it on. macOS is not (yet): the installed app runs with the
+/// hardened runtime, which will refuse the downloaded ONNX Runtime library unless
+/// `disable-library-validation` is added, and that weakens the signature check for the whole app, so
+/// it is the owner's decision (D-29). The manifest keeps the macOS download for when it is decided.
+pub fn wake_supported() -> bool {
+    wake_supported_on(current_platform())
+}
+
+fn wake_supported_on(platform: &str) -> bool {
+    let shipped = matches!(platform, "windows-x86_64" | "linux-x86_64");
+    shipped
+        && for_platform(manifest(), platform)
+            .iter()
+            .any(|s| s.set == SET_WAKE)
+}
+
 /// The models this app version knows about.
 pub fn manifest() -> &'static [ModelSpec] {
     static M: LazyLock<Vec<ModelSpec>> = LazyLock::new(|| {

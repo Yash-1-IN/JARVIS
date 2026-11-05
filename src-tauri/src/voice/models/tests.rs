@@ -1096,3 +1096,13 @@ async fn a_real_download_of_the_wake_set_installs_it() {
     assert!(m.wake_ready());
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn the_wake_word_is_offered_on_windows_and_linux_and_not_on_macos() {
+    assert!(wake_supported_on("windows-x86_64"));
+    assert!(wake_supported_on("linux-x86_64"));
+    // The macOS download stays in the manifest, but nothing offers it (D-29).
+    assert!(!wake_supported_on("macos-aarch64"));
+    assert!(!wake_supported_on("macos-x86_64"));
+    assert!(!wake_supported_on("other"));
+}
