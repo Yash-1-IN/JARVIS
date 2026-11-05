@@ -48,6 +48,9 @@ pub struct StoredVoice {
     pub voice: String,
     #[serde(default)]
     pub input_device: Option<String>,
+    /// The wake word's licence notice was accepted. Older files lack this field: not accepted.
+    #[serde(default)]
+    pub wake_notice_accepted: bool,
 }
 
 fn yes() -> bool {
@@ -68,6 +71,7 @@ impl Default for StoredVoice {
             follow_up_window: true,
             voice: default_voice(),
             input_device: None,
+            wake_notice_accepted: false,
         }
     }
 }
@@ -102,6 +106,8 @@ pub enum SettingsError {
     TooMany,
     #[error("that does not look like a Spotify Client ID (32 characters, 0-9 and a-f)")]
     BadClientId,
+    #[error("read and accept the wake word notice first")]
+    WakeNoticeNeeded,
     #[error("that is not a valid voice id (1 to 64 letters, digits, `_` or `-`)")]
     BadVoice,
     #[error("that is not a valid microphone name (1 to 200 characters, no control characters)")]
@@ -230,8 +236,20 @@ impl SettingsStore {
     /// Validates and applies a voice patch, then saves. On any error nothing changes.
     pub fn apply_voice(&self, patch: &VoiceSettingsPatch) -> Result<StoredVoice, SettingsError> {
         let mut next = self.get();
+        if let Some(on) = patch.wake_notice_accepted {
+            next.voice.wake_notice_accepted = on;
+        }
         if let Some(on) = patch.wake_enabled {
             next.voice.wake_enabled = on;
+        }
+        // The wake word listens all the time, so it cannot be on without the licence notice having
+        // been accepted. Only checked when this patch touches one of the two, so a saved file that
+        // predates the notice does not block unrelated changes.
+        if (patch.wake_enabled.is_some() || patch.wake_notice_accepted.is_some())
+            && next.voice.wake_enabled
+            && !next.voice.wake_notice_accepted
+        {
+            return Err(SettingsError::WakeNoticeNeeded);
         }
         if let Some(on) = patch.follow_up_window {
             next.voice.follow_up_window = on;
@@ -718,6 +736,59 @@ mod tests {
     }
 
     #[test]
+    fn the_wake_word_cannot_be_turned_on_without_the_notice() {
+        let store = SettingsStore::load(tmp_path(), &prices());
+        let on = VoiceSettingsPatch {
+            wake_enabled: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(store.apply_voice(&on), Err(SettingsError::WakeNoticeNeeded));
+        assert!(!store.get().voice.wake_enabled && !store.get().voice.wake_notice_accepted);
+        // Accepting and enabling in one patch works, and survives a restart.
+        let both = VoiceSettingsPatch {
+            wake_enabled: Some(true),
+            wake_notice_accepted: Some(true),
+            ..Default::default()
+        };
+        assert!(store.apply_voice(&both).unwrap().wake_enabled);
+        // Withdrawing the notice while the wake word is on is refused, and changes nothing.
+        let withdraw = VoiceSettingsPatch {
+            wake_notice_accepted: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(
+            store.apply_voice(&withdraw),
+            Err(SettingsError::WakeNoticeNeeded)
+        );
+        assert!(store.get().voice.wake_notice_accepted);
+        // Turning it off first, then withdrawing, is fine.
+        let off = VoiceSettingsPatch {
+            wake_enabled: Some(false),
+            wake_notice_accepted: Some(false),
+            ..Default::default()
+        };
+        let s = store.apply_voice(&off).unwrap();
+        assert!(!s.wake_enabled && !s.wake_notice_accepted);
+    }
+
+    #[test]
+    fn a_file_saved_before_the_notice_loads_as_not_accepted_and_does_not_block_other_changes() {
+        let path = tmp_path();
+        std::fs::write(
+            &path,
+            r#"{"schemaVersion":1,"model":"claude-haiku-5-5","dailyCapMicroUsd":null,"monthlyCapMicroUsd":null,"voice":{"wakeEnabled":true}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(path, &prices());
+        assert!(store.get().voice.wake_enabled && !store.get().voice.wake_notice_accepted);
+        let other = VoiceSettingsPatch {
+            follow_up_window: Some(false),
+            ..Default::default()
+        };
+        assert!(store.apply_voice(&other).is_ok());
+    }
+
+    #[test]
     fn voice_settings_are_saved_survive_a_restart_and_a_bad_value_changes_nothing() {
         let path = tmp_path();
         let store = SettingsStore::load(path.clone(), &prices());
@@ -726,6 +797,7 @@ mod tests {
             follow_up_window: Some(false),
             voice: Some("af_sky".into()),
             input_device: Some(Some("Realtek".into())),
+            wake_notice_accepted: Some(true),
         };
         let saved = store.apply_voice(&patch).unwrap();
         assert!(saved.wake_enabled && !saved.follow_up_window);

@@ -111,6 +111,7 @@ impl Services {
                 | SettingsError::BadFolder(_)
                 | SettingsError::UnknownApp(_)
                 | SettingsError::BadClientId
+                | SettingsError::WakeNoticeNeeded
                 | SettingsError::BadVoice
                 | SettingsError::BadDevice
                 | SettingsError::TooMany => err(ErrorCode::Internal, &e.to_string(), false),
@@ -201,6 +202,9 @@ impl Services {
             input_device: v.input_device,
             mic_permission: MicPermission::Unknown,
             models_ready: false,
+            wake_supported: crate::voice::models::wake_supported(),
+            wake_ready: false,
+            wake_notice_accepted: v.wake_notice_accepted,
         }
     }
 
@@ -209,6 +213,13 @@ impl Services {
         &self,
         patch: &VoiceSettingsPatch,
     ) -> Result<VoiceStatus, JarvisError> {
+        if patch.wake_enabled == Some(true) && !crate::voice::models::wake_supported() {
+            return Err(err(
+                ErrorCode::Internal,
+                "The wake word is not available on this computer.",
+                false,
+            ));
+        }
         self.settings.apply_voice(patch).map_err(|e| match e {
             SettingsError::Save => err(ErrorCode::Internal, "Settings could not be saved.", true),
             other => err(ErrorCode::Internal, &other.to_string(), false),
@@ -574,12 +585,15 @@ mod tests {
         assert!(s.available_voices.is_empty() && s.input_device.is_none());
         let s = svc
             .voice_settings_set(&VoiceSettingsPatch {
-                wake_enabled: Some(true),
+                // Where the wake word is not offered (macOS) turning it on is refused, tested below.
+                wake_enabled: crate::voice::models::wake_supported().then_some(true),
+                wake_notice_accepted: Some(true),
                 input_device: Some(Some("Realtek".into())),
                 ..Default::default()
             })
             .unwrap();
-        assert!(s.wake_enabled);
+        assert_eq!(s.wake_enabled, crate::voice::models::wake_supported());
+        assert!(s.wake_notice_accepted);
         assert_eq!(s.input_device.as_deref(), Some("Realtek"));
         assert_eq!(svc.voice_status(), s);
         // The voice choices are not part of Settings, so the settings contract is untouched.
@@ -604,5 +618,25 @@ mod tests {
         assert_eq!(e.code, ErrorCode::Internal);
         assert!(!e.message.contains(bad) && !e.retryable);
         assert!(!svc.voice_status().wake_enabled, "nothing changed");
+    }
+
+    #[test]
+    fn the_wake_word_needs_the_notice_and_the_refusal_is_a_plain_message() {
+        let svc = services("http://127.0.0.1:1");
+        let e = svc
+            .voice_settings_set(&VoiceSettingsPatch {
+                wake_enabled: Some(true),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+        // Offered here: the notice is what is missing. Not offered (macOS): that is said first.
+        let expected = if crate::voice::models::wake_supported() {
+            "notice"
+        } else {
+            "not available"
+        };
+        assert!(e.message.contains(expected) && !e.retryable);
+        assert!(!svc.voice_status().wake_enabled && !svc.voice_status().wake_notice_accepted);
     }
 }

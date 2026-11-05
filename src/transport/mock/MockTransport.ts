@@ -291,6 +291,10 @@ export class MockTransport implements Transport {
       inputDevice: this.inputDevice,
       micPermission: "unknown",
       modelsReady: this.modelsReady,
+      // MOCK: the wake word is not simulated; the window can show its switch but nothing listens.
+      wakeSupported: true,
+      wakeReady: false,
+      wakeNoticeAccepted: false,
     };
   }
 

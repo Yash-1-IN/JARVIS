@@ -4,4 +4,9 @@
  * Partial update of the voice settings. Omit a field to leave it unchanged; `inputDevice: null`
  * goes back to the system default.
  */
-export type VoiceSettingsPatch = { wakeEnabled?: boolean, followUpWindow?: boolean, voice?: string, inputDevice?: string | null, };
+export type VoiceSettingsPatch = { wakeEnabled?: boolean, followUpWindow?: boolean, voice?: string, inputDevice?: string | null, 
+/**
+ * Record that the wake word's licence notice was shown and accepted. `wakeEnabled: true` is
+ * refused unless this is already true or is sent as true in the same patch.
+ */
+wakeNoticeAccepted?: boolean, };
