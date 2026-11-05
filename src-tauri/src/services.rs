@@ -216,15 +216,6 @@ impl Services {
         Ok(self.voice_status())
     }
 
-    /// The `voice_models_install` command. Not built yet.
-    pub fn voice_models_install(&self) -> Result<VoiceStatus, JarvisError> {
-        Err(err(
-            ErrorCode::Internal,
-            "Installing the voice models is not built yet.",
-            false,
-        ))
-    }
-
     /// The `apps_installed` command: the only ids `settings_set` will accept.
     pub fn apps_installed(&self) -> Vec<AllowedApp> {
         self.installed.list()
@@ -613,14 +604,5 @@ mod tests {
         assert_eq!(e.code, ErrorCode::Internal);
         assert!(!e.message.contains(bad) && !e.retryable);
         assert!(!svc.voice_status().wake_enabled, "nothing changed");
-    }
-
-    #[test]
-    fn model_install_says_it_is_not_built_yet() {
-        let svc = services("http://127.0.0.1:1");
-        assert_eq!(
-            svc.voice_models_install().unwrap_err().code,
-            ErrorCode::Internal
-        );
     }
 }

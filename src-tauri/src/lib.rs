@@ -142,16 +142,16 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
                 }
             });
-            // Voice (M3 step 4c): push to talk. The speech model (Moonshine, D-26) is read from the
-            // app data folder when something is first said; until its files are there a capture that
-            // hears speech ends with "The speech models are not installed yet.".
-            let stt_dir = app
-                .path()
-                .app_data_dir()?
-                .join("models")
-                .join("stt")
-                .join("moonshine-base-en-int8");
+            // Voice (M3 step 4): push to talk with Moonshine (D-26). The model files are downloaded
+            // and verified by the model manager into `<app data>/models`; the speech engine reads
+            // them when something is first said, so a finished download needs no restart.
             let voice_stream = Arc::new(ipc::voice_stream::VoiceStream::default());
+            let models = Arc::new(voice::models::ModelManager::new(
+                app.path().app_data_dir()?.join("models"),
+            ));
+            let stt_dir = models
+                .dir_of("stt-moonshine-base-en-int8")
+                .ok_or("the speech model is not in the manifest")?;
             let for_device = svc.clone();
             let voice = voice::controller::VoiceController::new(
                 orch.clone(),
@@ -172,6 +172,7 @@ pub fn run() {
             app.manage(svc);
             app.manage(voice_stream);
             app.manage(voice);
+            app.manage(models);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
