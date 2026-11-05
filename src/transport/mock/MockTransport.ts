@@ -20,6 +20,8 @@ import type { Snapshot } from "../../types/generated/Snapshot";
 import type { SpotifyStatus } from "../../types/generated/SpotifyStatus";
 import type { StopReason } from "../../types/generated/StopReason";
 import type { InterruptReason } from "../../types/generated/InterruptReason";
+import type { ModelProgress } from "../../types/generated/ModelProgress";
+import type { VoiceStatus } from "../../types/generated/VoiceStatus";
 import type { Transcript } from "../../types/generated/Transcript";
 import type { TurnInterrupted } from "../../types/generated/TurnInterrupted";
 import type { UsageSummary } from "../../types/generated/UsageSummary";
@@ -100,6 +102,9 @@ export class MockTransport implements Transport {
   private turn: { requestId: string; onEvent: TurnListener } | null = null;
   private turnCount = 0;
   private voiceListener: TurnListener | null = null;
+  private modelsReady = false;
+  private installing = false;
+  private progressListeners = new Set<(p: ModelProgress) => void>();
   private transcriptListeners = new Set<(t: Transcript) => void>();
   private micBeforeCapture: Snapshot["mic"] = "off";
   private nextFault: MockFault | null = null;
@@ -268,6 +273,55 @@ export class MockTransport implements Transport {
       ),
     );
     return requestId;
+  }
+
+  private voiceStatusNow(): VoiceStatus {
+    return {
+      wakeEnabled: false,
+      followUpWindow: true,
+      voice: "",
+      availableVoices: [],
+      inputDevice: null,
+      micPermission: "unknown",
+      modelsReady: this.modelsReady,
+    };
+  }
+
+  async voiceStatus(): Promise<VoiceStatus> {
+    return this.voiceStatusNow();
+  }
+
+  /** Nothing is downloaded: a short, labelled run that ends with the models "ready". */
+  async voiceModelsInstall(): Promise<VoiceStatus> {
+    if (this.installing) {
+      throw jarvisError(
+        "INTERNAL",
+        "The speech models are already being downloaded.",
+      );
+    }
+    this.installing = true;
+    const total = 250_807_309;
+    const steps = 5;
+    try {
+      for (let i = 1; i <= steps; i++) {
+        await new Promise<void>((r) => this.timers.push(setTimeout(r, 200)));
+        const p = {
+          name: "Speech recognition (MOCK: nothing is downloaded)",
+          doneBytes: Math.floor((total * i) / steps),
+          totalBytes: total,
+        };
+        for (const l of this.progressListeners) l(p);
+      }
+      this.modelsReady = true;
+      return this.voiceStatusNow();
+    } finally {
+      this.installing = false;
+    }
+  }
+
+  onModelsProgress(listener: (p: ModelProgress) => void): () => void {
+    this.progressListeners.add(listener);
+    return () => this.progressListeners.delete(listener);
   }
 
   async voiceAttach(onEvent: TurnListener): Promise<void> {

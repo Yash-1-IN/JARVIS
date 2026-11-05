@@ -8,6 +8,7 @@ import {
 } from "react";
 import { describeError } from "../state/errors";
 import { DisplaySettings } from "./DisplaySettings";
+import { ModelsSettings } from "./ModelsSettings";
 import { MusicSettings } from "./MusicSettings";
 import { PolicySettings } from "./PolicySettings";
 import {
@@ -71,6 +72,7 @@ const TABS = {
   spending: "Spending",
   permissions: "Permissions",
   music: "Music",
+  models: "Models",
   display: "Display",
 } as const;
 type TabId = keyof typeof TABS;
@@ -344,6 +346,7 @@ export function SettingsPanel({ transport }: { transport: Transport }) {
               />
             ),
             music: <MusicSettings transport={transport} />,
+            models: <ModelsSettings transport={transport} />,
             display: <DisplaySettings />,
           }}
         </SettingsTabs>
