@@ -226,6 +226,31 @@ impl Orchestrator {
         Self::bump(&mut g)
     }
 
+    /// The wake word is listening (`standby`) or has stopped (`off`). Only moves between those two:
+    /// a muted or unavailable microphone stays so, and a capture in progress goes back to the new
+    /// value when it ends. Does not bump the sequence when nothing changed.
+    pub fn set_standby(&self, on: bool) -> Snapshot {
+        let (from, to) = if on {
+            (MicState::Off, MicState::Standby)
+        } else {
+            (MicState::Standby, MicState::Off)
+        };
+        let mut g = self.lock();
+        let inner = &mut *g;
+        // The remembered values are only read when a capture or a mute ends, so keep them in step.
+        for m in [&mut inner.mic_before_capture, &mut inner.mic_before_mute] {
+            if *m == from {
+                *m = to;
+            }
+        }
+        if inner.snap.mic == from {
+            inner.snap.mic = to;
+            Self::bump(inner)
+        } else {
+            inner.snap.clone()
+        }
+    }
+
     /// Mute is a mic axis change and never touches the assistant phase.
     pub fn set_mute(&self, muted: bool) -> Snapshot {
         let mut g = self.lock();
@@ -253,6 +278,24 @@ mod tests {
     use super::*;
     use crate::ipc::types::ErrorCode;
     use AssistantPhase::*;
+
+    #[test]
+    fn standby_moves_only_between_off_and_standby() {
+        let o = Orchestrator::default();
+        let s = o.set_standby(true);
+        assert_eq!((s.mic, s.seq), (MicState::Standby, 1));
+        assert_eq!(o.set_standby(true).seq, 1, "no change, no new sequence");
+        // A capture returns to standby, not off.
+        let (id, _) = o.begin_listening().unwrap();
+        assert_eq!(o.mic_open(&id).unwrap().mic, MicState::Capturing);
+        assert_eq!(o.cancel(&id).unwrap().mic, MicState::Standby);
+        // Mute wins over standby, and unmute returns to it.
+        assert_eq!(o.set_mute(true).mic, MicState::Muted);
+        assert_eq!(o.set_standby(false).mic, MicState::Muted);
+        assert_eq!(o.set_mute(false).mic, MicState::Off);
+        assert_eq!(o.set_standby(true).mic, MicState::Standby);
+        assert_eq!(o.set_standby(false).mic, MicState::Off);
+    }
 
     #[test]
     fn happy_path_text_turn() {

@@ -386,6 +386,16 @@ pub async fn voice_models_install(
         .install_default(&move |p| publish_event(&for_events, EventKind::VoiceModelsProgress, p))
         .await
         .map_err(model_error)?;
+    // The wake word's files are fetched only once the person has switched it on (D-28).
+    if svc.settings.get().voice.wake_enabled {
+        let for_events = app.clone();
+        models
+            .install_set(crate::voice::models::SET_WAKE, &move |p| {
+                publish_event(&for_events, EventKind::VoiceModelsProgress, p)
+            })
+            .await
+            .map_err(model_error)?;
+    }
     Ok(VoiceStatus {
         models_ready: models.ready(),
         ..svc.voice_status()

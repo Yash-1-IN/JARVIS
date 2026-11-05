@@ -71,9 +71,20 @@ struct Active {
     cancel: CancellationToken,
 }
 
-enum Msg {
+/// What reaches a capture's collector: sound, and what the microphone is doing.
+pub(crate) enum Msg {
     Audio(Vec<f32>),
     Status(CaptureStatus),
+}
+
+/// Where a voice turn's audio comes from.
+enum Source {
+    /// The turn opens the microphone itself (push to talk).
+    Device,
+    /// The wake word is already listening and hands its audio over: `lead` is the sound just before
+    /// and around the phrase (RAM only), and `rx` carries what follows. The microphone is already
+    /// open, so there is nothing to wait for.
+    Feed { lead: Vec<f32>, rx: Receiver<Msg> },
 }
 
 enum Outcome {
@@ -154,6 +165,29 @@ impl VoiceController {
     /// with `Ok` (the contract). Must be called inside the Tokio runtime: the reply is streamed
     /// there once speech has been turned into text.
     pub fn start_capture(self: &Arc<Self>) -> Result<(), JarvisError> {
+        self.start(Source::Device)
+    }
+
+    /// The wake word heard its phrase: start a voice turn from the audio it already has. Unlike a
+    /// second press of the talk button this is refused (not ignored) when a capture is already
+    /// running, so the caller knows its audio is not being used.
+    pub(crate) fn start_from_wake(
+        self: &Arc<Self>,
+        lead: Vec<f32>,
+        rx: Receiver<Msg>,
+    ) -> Result<(), JarvisError> {
+        if lock(&self.active).is_some() {
+            return Err(err(
+                ErrorCode::Internal,
+                "JARVIS is busy with another request.",
+                false,
+                None,
+            ));
+        }
+        self.start(Source::Feed { lead, rx })
+    }
+
+    fn start(self: &Arc<Self>, source: Source) -> Result<(), JarvisError> {
         let mut active = lock(&self.active);
         if active.is_some() {
             return Ok(());
@@ -197,7 +231,7 @@ impl VoiceController {
                 // A panic in a driver or model must not take the app down, and must not leave the
                 // assistant stuck in `listening`.
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    me.session(&rid, &stop, &cancel, &handle);
+                    me.session(&rid, &stop, &cancel, &handle, source);
                 }));
                 if r.is_err() {
                     tracing::error!("the voice session panicked");
@@ -275,21 +309,28 @@ impl VoiceController {
         stop: &AtomicBool,
         cancel: &CancellationToken,
         handle: &tokio::runtime::Handle,
+        source: Source,
     ) {
         let _in_runtime = handle.enter();
-        let (tx, rx) = mpsc::channel::<Msg>();
-        let tx_status = tx.clone();
-        let capture = Capture::start(
-            (self.backend)(),
-            (self.device)(),
-            self.cfg.retry,
-            move |c| {
-                let _ = tx.send(Msg::Audio(c.to_vec()));
-            },
-            move |s| {
-                let _ = tx_status.send(Msg::Status(s.clone()));
-            },
-        );
+        let (rx, lead, capture, opened_already) = match source {
+            Source::Device => {
+                let (tx, rx) = mpsc::channel::<Msg>();
+                let tx_status = tx.clone();
+                let capture = Capture::start(
+                    (self.backend)(),
+                    (self.device)(),
+                    self.cfg.retry,
+                    move |c| {
+                        let _ = tx.send(Msg::Audio(c.to_vec()));
+                    },
+                    move |s| {
+                        let _ = tx_status.send(Msg::Status(s.clone()));
+                    },
+                );
+                (rx, Vec::new(), Some(capture), false)
+            }
+            Source::Feed { lead, rx } => (rx, lead, None, true),
+        };
         let mut endpoint = Endpointer::new(self.cfg.endpoint);
         // The capture ends at once when the person mutes (the button, the hotkey, a typed or a
         // spoken "mute") or when the request is cancelled from outside (Esc, "stop"): the
@@ -305,6 +346,9 @@ impl VoiceController {
                 self.sink.snapshot(snap);
             }
         };
+        if opened_already {
+            on_open(); // the wake word's microphone is open: `capturing` now, the cue to speak
+        }
         let outcome = collect(
             &rx,
             &mut endpoint,
@@ -313,9 +357,11 @@ impl VoiceController {
             &muted,
             self.cfg.no_audio_timeout,
             &mut on_open,
+            lead,
         );
-        capture.stop();
-        drop(capture);
+        if let Some(capture) = capture {
+            capture.stop();
+        }
         match outcome {
             Outcome::Cancelled => self.end_cancelled(id),
             Outcome::Lost(e) => self.fail(id, audio_error(&e, id)),
@@ -454,6 +500,7 @@ fn log_capture_end(why: &str, audio: &[f32]) {
 /// is handed over, the audio is dropped. Without this, a mute that lands a few milliseconds before
 /// the window's "key released" (which follows every mute) could be overtaken by it inside one
 /// 20 ms pass of the loop, and what was said would be sent after the person muted.
+#[allow(clippy::too_many_arguments)] // the pieces of one capture; a struct would only rename them
 fn collect(
     rx: &Receiver<Msg>,
     endpoint: &mut Endpointer,
@@ -462,14 +509,25 @@ fn collect(
     muted: &dyn Fn() -> bool,
     no_audio_timeout: Duration,
     on_open: &mut dyn FnMut(),
+    lead: Vec<f32>,
 ) -> Outcome {
-    let outcome = collect_until_done(rx, endpoint, stop, cancel, muted, no_audio_timeout, on_open);
+    let outcome = collect_until_done(
+        rx,
+        endpoint,
+        stop,
+        cancel,
+        muted,
+        no_audio_timeout,
+        on_open,
+        lead,
+    );
     match outcome {
         Outcome::Audio(_) if cancel.is_cancelled() || muted() => Outcome::Cancelled,
         other => other,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_until_done(
     rx: &Receiver<Msg>,
     endpoint: &mut Endpointer,
@@ -478,19 +536,24 @@ fn collect_until_done(
     muted: &dyn Fn() -> bool,
     no_audio_timeout: Duration,
     on_open: &mut dyn FnMut(),
+    lead: Vec<f32>,
 ) -> Outcome {
-    let mut audio: Vec<f32> = Vec::new();
+    // `lead` is kept for recognition but is not shown to the speech-end detector: it holds the wake
+    // phrase and what was said just before it, which must not count as the start of the request.
+    let mut audio: Vec<f32> = lead;
+    let mut heard = false;
     let started = std::time::Instant::now();
     loop {
         if cancel.is_cancelled() || muted() {
             return Outcome::Cancelled;
         }
-        if audio.is_empty() && started.elapsed() >= no_audio_timeout {
+        if !heard && started.elapsed() >= no_audio_timeout {
             return Outcome::NoAudio;
         }
         match rx.recv_timeout(Duration::from_millis(20)) {
             Ok(Msg::Audio(c)) => {
-                if audio.is_empty() {
+                if !heard {
+                    heard = true;
                     tracing::info!(
                         ms = started.elapsed().as_millis() as u64,
                         "voice: first sound arrived"
@@ -1093,6 +1156,7 @@ mod tests {
             &muted,
             Duration::from_secs(5),
             &mut || {},
+            Vec::new(),
         );
         assert!(matches!(out, Outcome::Cancelled));
         // Without a mute the same input is used, as a release should.
@@ -1109,6 +1173,7 @@ mod tests {
             &|| false,
             Duration::from_secs(5),
             &mut || {},
+            Vec::new(),
         );
         assert!(matches!(out, Outcome::Audio(_)));
     }

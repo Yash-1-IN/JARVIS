@@ -166,6 +166,37 @@ pub fn run() {
                 Box::new(voice::sherpa::SherpaTranscriber::new(stt_dir)),
                 voice::controller::VoiceConfig::default(),
             );
+            // Wake word (M3 step 3, D-29): while it is switched on and its files are installed, the
+            // microphone stays open and a detector listens for "hey jarvis". Off by default.
+            let wake_settings = svc.clone();
+            let wake_models = models.clone();
+            let load_models = models.clone();
+            let wake_app = app.handle().clone();
+            let standby = wake::standby::Standby::spawn(wake::standby::Deps {
+                orch: orch.clone(),
+                handover: Arc::new(wake::standby::VoiceHandover {
+                    voice: voice.clone(),
+                    rt: tauri::async_runtime::handle().inner().clone(),
+                }),
+                backend: Box::new(|| Box::new(audio::cpal_backend::CpalBackend)),
+                device: Box::new({
+                    let s = svc.clone();
+                    move || s.settings.get().voice.input_device
+                }),
+                wanted: Box::new(move || {
+                    wake_settings.settings.get().voice.wake_enabled && wake_models.wake_ready()
+                }),
+                load: Box::new(move || {
+                    let files = load_models.wake_files().ok_or_else(|| {
+                        wake::oww::WakeError::Changed("the wake word files are not installed".into())
+                    })?;
+                    Ok(Box::new(wake::oww::OwwDetector::load(&files)?)
+                        as Box<dyn wake::standby::Detector>)
+                }),
+                publish: Box::new(move |s| ipc::commands::publish(&wake_app, s)),
+                retry: audio::capture::RETRY_EVERY,
+            });
+            app.manage(standby);
             app.manage(store);
             app.manage(activity);
             app.manage(orch);
