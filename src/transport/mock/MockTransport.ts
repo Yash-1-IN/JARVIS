@@ -110,6 +110,9 @@ export class MockTransport implements Transport {
   private voiceListener: TurnListener | null = null;
   private modelsReady = false;
   private inputDevice: string | null = null;
+  private wakeEnabled = false;
+  private wakeNoticeAccepted = false;
+  private wakeReady = false;
   private installing = false;
   private progressListeners = new Set<(p: ModelProgress) => void>();
   private transcriptListeners = new Set<(t: Transcript) => void>();
@@ -284,17 +287,18 @@ export class MockTransport implements Transport {
 
   private voiceStatusNow(): VoiceStatus {
     return {
-      wakeEnabled: false,
+      wakeEnabled: this.wakeEnabled,
       followUpWindow: true,
       voice: "",
       availableVoices: [],
       inputDevice: this.inputDevice,
       micPermission: "unknown",
       modelsReady: this.modelsReady,
-      // MOCK: the wake word is not simulated; the window can show its switch but nothing listens.
+      // MOCK: nothing listens and nothing is downloaded; only the settings and the gate behave as the
+      // backend's do, so the window's switch can be tried.
       wakeSupported: true,
-      wakeReady: false,
-      wakeNoticeAccepted: false,
+      wakeReady: this.wakeReady,
+      wakeNoticeAccepted: this.wakeNoticeAccepted,
     };
   }
 
@@ -319,6 +323,26 @@ export class MockTransport implements Transport {
         );
       }
       this.inputDevice = name === "" ? null : name;
+    }
+    // The licence gate, as the backend enforces it: the wake word cannot be on without the notice.
+    const accepted = patch.wakeNoticeAccepted ?? this.wakeNoticeAccepted;
+    const enabled = patch.wakeEnabled ?? this.wakeEnabled;
+    if (
+      (patch.wakeEnabled !== undefined ||
+        patch.wakeNoticeAccepted !== undefined) &&
+      enabled &&
+      !accepted
+    ) {
+      throw jarvisError(
+        "INTERNAL",
+        "Read and accept the wake word notice first.",
+      );
+    }
+    this.wakeNoticeAccepted = accepted;
+    this.wakeEnabled = enabled;
+    if (!enabled && this.snapshot.mic === "standby") this.apply({ mic: "off" });
+    if (enabled && this.wakeReady && this.snapshot.mic === "off") {
+      this.apply({ mic: "standby" });
     }
     return this.voiceStatusNow();
   }
@@ -349,6 +373,10 @@ export class MockTransport implements Transport {
         for (const l of this.progressListeners) l(p);
       }
       this.modelsReady = true;
+      if (this.wakeEnabled && this.wakeNoticeAccepted) {
+        this.wakeReady = true;
+        if (this.snapshot.mic === "off") this.apply({ mic: "standby" });
+      }
       return this.voiceStatusNow();
     } finally {
       this.installing = false;
