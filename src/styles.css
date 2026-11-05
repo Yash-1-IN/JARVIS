@@ -221,6 +221,8 @@ select {
 
 .tabs {
   display: flex;
+  /* More tabs than fit one row go on a second row; none is cut off or squeezed. */
+  flex-wrap: wrap;
   gap: 0.25rem;
   margin: 0.5rem 0 0.75rem;
   border-bottom: 1px solid var(--border);
@@ -233,6 +235,8 @@ select {
   background: none;
   padding: 0.4rem 0.6rem;
   color: var(--muted);
+  /* A tab's name stays on one line ("Key and model" used to break into three). */
+  white-space: nowrap;
 }
 
 .tabs [role="tab"][aria-selected="true"] {
