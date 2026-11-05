@@ -461,7 +461,14 @@ describe("App push to talk", () => {
       "data-phase",
       "listening",
     );
+    // Listening at once, but the device is still opening: not capturing yet.
+    expect(screen.getByTestId("mic")).toHaveAttribute("data-mic", "off");
+    expect(talk).toHaveTextContent("Starting microphone…");
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
     expect(screen.getByTestId("mic")).toHaveAttribute("data-mic", "capturing");
+    expect(talk).toHaveTextContent("Speak now");
 
     await act(async () => {
       fireEvent.pointerUp(talk);

@@ -5,6 +5,8 @@ interface Props {
   unavailable: boolean;
   /** Another request is running (and it is not this capture). */
   busy: boolean;
+  /** The microphone has opened and is delivering sound (`mic` is `capturing`): speak now. */
+  micOpen: boolean;
   /** Key down. A rejection puts the button back; the caller shows the error. */
   onStart: () => Promise<void>;
   /** Key up, or anything that ends the press. Safe to call when nothing is capturing. */
@@ -16,7 +18,13 @@ interface Props {
  * when the window is hidden, so a lost key-up cannot leave the microphone open (contract: the
  * backend also stops at 15 seconds). Space and Enter work while the button has focus.
  */
-export function PushToTalk({ unavailable, busy, onStart, onStop }: Props) {
+export function PushToTalk({
+  unavailable,
+  busy,
+  micOpen,
+  onStart,
+  onStop,
+}: Props) {
   const [holding, setHolding] = useState(false);
   const held = useRef(false);
 
@@ -75,7 +83,11 @@ export function PushToTalk({ unavailable, busy, onStart, onStop }: Props) {
         if (e.key === " " || e.key === "Enter") stop();
       }}
     >
-      {holding ? "Listening… release to send" : "Hold to talk"}
+      {holding
+        ? micOpen
+          ? "Speak now… release to send"
+          : "Starting microphone…"
+        : "Hold to talk"}
     </button>
   );
 }

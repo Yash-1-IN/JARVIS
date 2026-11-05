@@ -9,6 +9,7 @@ function setup(props: Partial<React.ComponentProps<typeof PushToTalk>> = {}) {
     <PushToTalk
       unavailable={false}
       busy={false}
+      micOpen={false}
       onStart={onStart}
       onStop={onStop}
       {...props}
@@ -17,7 +18,8 @@ function setup(props: Partial<React.ComponentProps<typeof PushToTalk>> = {}) {
   return { onStart, onStop, ...view };
 }
 
-const button = () => screen.getByRole("button", { name: /talk|listening/i });
+const button = () =>
+  screen.getByRole("button", { name: /talk|starting microphone|speak now/i });
 
 describe("PushToTalk", () => {
   it("starts on pointer down and stops once on release", () => {
@@ -80,11 +82,25 @@ describe("PushToTalk", () => {
   it("is disabled while muted or while another request runs, and muting ends a press", () => {
     const { onStop, rerender, onStart } = setup();
     fireEvent.pointerDown(button());
-    rerender(<PushToTalk unavailable busy onStart={onStart} onStop={onStop} />);
+    rerender(
+      <PushToTalk
+        unavailable
+        busy
+        micOpen={false}
+        onStart={onStart}
+        onStop={onStop}
+      />,
+    );
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(button()).toBeDisabled();
     rerender(
-      <PushToTalk unavailable={false} busy onStart={onStart} onStop={onStop} />,
+      <PushToTalk
+        unavailable={false}
+        busy
+        micOpen={false}
+        onStart={onStart}
+        onStop={onStop}
+      />,
     );
     expect(button()).toBeDisabled();
   });
@@ -93,8 +109,31 @@ describe("PushToTalk", () => {
     const { rerender, onStart, onStop } = setup();
     fireEvent.pointerDown(button());
     rerender(
-      <PushToTalk unavailable={false} busy onStart={onStart} onStop={onStop} />,
+      <PushToTalk
+        unavailable={false}
+        busy
+        micOpen={false}
+        onStart={onStart}
+        onStop={onStop}
+      />,
     );
     expect(button()).toBeEnabled();
+  });
+
+  it("says the microphone is starting until it is open, then to speak", () => {
+    const { rerender, onStart, onStop } = setup();
+    expect(button()).toHaveTextContent("Hold to talk");
+    fireEvent.pointerDown(button());
+    expect(button()).toHaveTextContent("Starting microphone…");
+    rerender(
+      <PushToTalk
+        unavailable={false}
+        busy
+        micOpen
+        onStart={onStart}
+        onStop={onStop}
+      />,
+    );
+    expect(button()).toHaveTextContent("Speak now");
   });
 });

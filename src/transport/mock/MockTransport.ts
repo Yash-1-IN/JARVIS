@@ -37,6 +37,8 @@ import { MOCK_SCRIPTS, type MockScript, type SnapshotPatch } from "./scripts";
 
 const APPROVAL_TTL_MS = 60_000;
 const FIRST_TOKEN_MS = 400;
+/** How long the mock microphone takes to open, as a real device can. */
+const MOCK_MIC_OPEN_MS = 400;
 const TOKEN_MS = 60;
 /** What one mock reply "costs", so the usage panel and caps can be exercised. */
 const MOCK_TURN_COST_MICRO_USD = 1_500;
@@ -293,7 +295,15 @@ export class MockTransport implements Transport {
       } satisfies JarvisError;
     }
     this.micBeforeCapture = this.snapshot.mic;
-    this.apply({ phase: "listening", mic: "capturing", lastError: null });
+    // As the backend does: listening at once, `capturing` only once the device has opened.
+    this.apply({ phase: "listening", lastError: null });
+    this.timers.push(
+      setTimeout(() => {
+        if (this.snapshot.phase === "listening") {
+          this.apply({ mic: "capturing" });
+        }
+      }, MOCK_MIC_OPEN_MS),
+    );
   }
 
   /** Nothing is heard in the mock: key up plays a fixed, labelled sentence as the transcript. */
