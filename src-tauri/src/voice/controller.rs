@@ -353,7 +353,19 @@ impl VoiceController {
             Ok(snap) => self.sink.snapshot(snap),
             Err(_) => return, // cancelled in the meantime: the orchestrator already moved on
         }
+        let began = std::time::Instant::now();
         let text = self.transcribe_bounded(audio);
+        match &text {
+            Ok(t) => tracing::info!(
+                ms = began.elapsed().as_millis() as u64,
+                words = t.split_whitespace().count(),
+                "voice: recognised"
+            ),
+            Err(_) => tracing::info!(
+                ms = began.elapsed().as_millis() as u64,
+                "voice: recognition gave no text"
+            ),
+        }
         if cancel.is_cancelled() {
             return; // `cancel` already returned the assistant to idle
         }
@@ -425,6 +437,18 @@ impl VoiceController {
     }
 }
 
+/// One line about how a capture ended: facts only, never audio and never text. It tells apart the
+/// usual causes of a garbled sentence: cut short by a pause or by the key, too quiet, or too long.
+fn log_capture_end(why: &str, audio: &[f32]) {
+    let peak = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    tracing::info!(
+        why,
+        seconds = format!("{:.1}", audio.len() as f32 / 16_000.0),
+        peak = format!("{peak:.2}"),
+        "voice: capture ended"
+    );
+}
+
 /// Collects audio until speech ends, the key is released, the capture is cancelled or the
 /// microphone is lost. **A mute or a cancel always wins**: if one is in force at the moment a result
 /// is handed over, the audio is dropped. Without this, a mute that lands a few milliseconds before
@@ -475,8 +499,18 @@ fn collect_until_done(
                 audio.extend_from_slice(&c);
                 match endpoint.push(&c) {
                     Decision::Continue => {}
-                    Decision::SpeechEnded | Decision::TooLong => return Outcome::Audio(audio),
-                    Decision::NoSpeech => return Outcome::NoSpeech,
+                    Decision::SpeechEnded => {
+                        log_capture_end("a pause after speech", &audio);
+                        return Outcome::Audio(audio);
+                    }
+                    Decision::TooLong => {
+                        log_capture_end("the 15 s limit", &audio);
+                        return Outcome::Audio(audio);
+                    }
+                    Decision::NoSpeech => {
+                        log_capture_end("no speech heard", &audio);
+                        return Outcome::NoSpeech;
+                    }
                 }
             }
             Ok(Msg::Status(CaptureStatus::Unavailable(e))) => return Outcome::Lost(e),
@@ -501,8 +535,10 @@ fn collect_until_done(
                 }
             }
             return if endpoint.has_speech() {
+                log_capture_end("the key was released", &audio);
                 Outcome::Audio(audio)
             } else {
+                log_capture_end("the key was released, no speech heard", &audio);
                 Outcome::NoSpeech
             };
         }
