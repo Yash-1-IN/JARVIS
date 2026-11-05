@@ -426,8 +426,27 @@ impl VoiceController {
 }
 
 /// Collects audio until speech ends, the key is released, the capture is cancelled or the
-/// microphone is lost.
+/// microphone is lost. **A mute or a cancel always wins**: if one is in force at the moment a result
+/// is handed over, the audio is dropped. Without this, a mute that lands a few milliseconds before
+/// the window's "key released" (which follows every mute) could be overtaken by it inside one
+/// 20 ms pass of the loop, and what was said would be sent after the person muted.
 fn collect(
+    rx: &Receiver<Msg>,
+    endpoint: &mut Endpointer,
+    stop: &AtomicBool,
+    cancel: &CancellationToken,
+    muted: &dyn Fn() -> bool,
+    no_audio_timeout: Duration,
+    on_open: &mut dyn FnMut(),
+) -> Outcome {
+    let outcome = collect_until_done(rx, endpoint, stop, cancel, muted, no_audio_timeout, on_open);
+    match outcome {
+        Outcome::Audio(_) if cancel.is_cancelled() || muted() => Outcome::Cancelled,
+        other => other,
+    }
+}
+
+fn collect_until_done(
     rx: &Receiver<Msg>,
     endpoint: &mut Endpointer,
     stop: &AtomicBool,
@@ -1014,5 +1033,47 @@ mod tests {
         wait_for("capturing", || s.orch.snapshot().mic == MicState::Capturing);
         assert_eq!(s.orch.snapshot().phase, AssistantPhase::Listening);
         s.ctl.cancel();
+    }
+
+    #[test]
+    fn a_mute_that_lands_with_the_key_release_still_discards_what_was_heard() {
+        // Speech with no quiet after it; the key release is already flagged.
+        let (tx, rx) = mpsc::channel::<Msg>();
+        let mut a = tone(300, 0.002);
+        a.extend(tone(900, 0.3));
+        tx.send(Msg::Audio(a)).unwrap();
+        let stop = AtomicBool::new(true);
+        let cancel = CancellationToken::new();
+        // Not muted at the top of the loop, muted a moment later: the order that went wrong on a
+        // real laptop (mute, then the window's release, inside one pass of the loop).
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let muted = || calls.fetch_add(1, Ordering::SeqCst) >= 1;
+        let mut ep = Endpointer::new(EndpointConfig::default());
+        let out = collect(
+            &rx,
+            &mut ep,
+            &stop,
+            &cancel,
+            &muted,
+            Duration::from_secs(5),
+            &mut || {},
+        );
+        assert!(matches!(out, Outcome::Cancelled));
+        // Without a mute the same input is used, as a release should.
+        let (tx, rx) = mpsc::channel::<Msg>();
+        let mut a = tone(300, 0.002);
+        a.extend(tone(900, 0.3));
+        tx.send(Msg::Audio(a)).unwrap();
+        let mut ep = Endpointer::new(EndpointConfig::default());
+        let out = collect(
+            &rx,
+            &mut ep,
+            &stop,
+            &cancel,
+            &|| false,
+            Duration::from_secs(5),
+            &mut || {},
+        );
+        assert!(matches!(out, Outcome::Audio(_)));
     }
 }
