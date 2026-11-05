@@ -4,5 +4,7 @@
 <dict>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>JARVIS asks Spotify and Music to pause, skip and say what is playing, only when you tell it to.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>JARVIS listens only while you use push to talk, and keeps the sound in memory only; it is never saved.</string>
 </dict>
 </plist>
