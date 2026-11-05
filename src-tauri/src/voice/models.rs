@@ -603,29 +603,46 @@ impl ModelManager {
         let mut done = have;
         let mut last = Instant::now() - PROGRESS_EVERY;
         let mut stream = resp.bytes_stream();
-        loop {
+        // However the loop ends (done, cancelled, stalled, a broken connection), what has arrived
+        // is flushed to the file before returning, so a resume starts from everything that came.
+        // (A `tokio::fs::File` that is dropped without a flush can lose its last writes.)
+        let outcome: Result<(), ModelError> = loop {
             let chunk = tokio::select! {
-                _ = cancel.cancelled() => return Err(ModelError::Cancelled),
+                _ = cancel.cancelled() => break Err(ModelError::Cancelled),
                 c = tokio::time::timeout(self.stall, stream.next()) => match c {
-                    Err(_) => return Err(ModelError::Stalled),
+                    Err(_) => break Err(ModelError::Stalled),
                     Ok(c) => c,
                 },
             };
-            let Some(chunk) = chunk else { break };
-            let chunk = chunk.map_err(|_| ModelError::Offline)?;
+            let Some(chunk) = chunk else { break Ok(()) };
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(_) => break Err(ModelError::Offline),
+            };
             done += chunk.len() as u64;
             if done > total {
-                let _ = tokio::fs::remove_file(part).await;
-                return Err(ModelError::TooBig);
+                break Err(ModelError::TooBig);
             }
-            file.write_all(&chunk).await.map_err(io)?;
+            if let Err(e) = file.write_all(&chunk).await {
+                break Err(io(e));
+            }
             if last.elapsed() >= PROGRESS_EVERY {
                 last = Instant::now();
                 report(done);
             }
-        }
-        file.flush().await.map_err(io)?;
+        };
+        let flushed = file.flush().await.map_err(io);
         drop(file);
+        match outcome {
+            Err(ModelError::TooBig) => {
+                // More than promised is not a partial download worth resuming.
+                let _ = tokio::fs::remove_file(part).await;
+                return Err(ModelError::TooBig);
+            }
+            Err(e) => return Err(e),
+            Ok(()) => {}
+        }
+        flushed?;
         report(done);
         if done != total {
             // The connection ended early. What arrived is kept, and the next try resumes.
