@@ -1,35 +1,96 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { PushToTalk } from "./PushToTalk";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PushToTalk, TAP_MS } from "./PushToTalk";
 
-function setup(props: Partial<React.ComponentProps<typeof PushToTalk>> = {}) {
+type Props = React.ComponentProps<typeof PushToTalk>;
+
+function setup(props: Partial<Props> = {}) {
   const onStart = vi.fn(() => Promise.resolve());
   const onStop = vi.fn();
-  const view = render(
-    <PushToTalk
-      unavailable={false}
-      busy={false}
-      micOpen={false}
-      onStart={onStart}
-      onStop={onStop}
-      {...props}
-    />,
-  );
-  return { onStart, onStop, ...view };
+  const base: Props = {
+    unavailable: false,
+    busy: false,
+    listening: false,
+    micOpen: false,
+    onStart,
+    onStop,
+  };
+  const view = render(<PushToTalk {...base} {...props} />);
+  const again = (p: Partial<Props>) =>
+    view.rerender(<PushToTalk {...base} {...props} {...p} />);
+  return { onStart, onStop, again, ...view };
 }
 
 const button = () =>
   screen.getByRole("button", { name: /talk|starting microphone|speak now/i });
+const press = () => fireEvent.pointerDown(button());
+const release = () => fireEvent.pointerUp(button());
+const wait = (ms: number) =>
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+/** A quick press and release. */
+const tap = () => {
+  press();
+  wait(50);
+  release();
+};
 
 describe("PushToTalk", () => {
-  it("starts on pointer down and stops once on release", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("a hold starts on press and sends once on release", () => {
     const { onStart, onStop } = setup();
-    fireEvent.pointerDown(button());
+    press();
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(button()).toHaveAttribute("aria-pressed", "true");
-    fireEvent.pointerUp(button());
-    fireEvent.pointerUp(button());
+    wait(TAP_MS + 100);
+    release();
+    release();
     expect(onStop).toHaveBeenCalledTimes(1);
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("a tap does not send on release; the capture keeps running", () => {
+    const { onStart, onStop } = setup();
+    tap();
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onStop).not.toHaveBeenCalled();
+    expect(button()).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a second press during a tap sends what was said so far, once", () => {
+    const { onStart, onStop } = setup();
+    tap();
+    press();
+    release();
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("a tap-started capture that ends by itself puts the button back", () => {
+    const { onStop, again } = setup();
+    tap();
+    again({ listening: true, micOpen: true });
+    expect(button()).toHaveAttribute("aria-pressed", "true");
+    again({ listening: false, micOpen: false });
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it("does not leave the tap state if listening has not been seen yet", () => {
+    const { again } = setup();
+    tap();
+    again({ listening: false });
+    expect(button()).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("lets go of a tap the backend never ended", () => {
+    setup();
+    tap();
+    wait(26_000);
     expect(button()).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -38,6 +99,7 @@ describe("PushToTalk", () => {
     fireEvent.keyDown(button(), { key: " " });
     fireEvent.keyDown(button(), { key: " ", repeat: true });
     expect(onStart).toHaveBeenCalledTimes(1);
+    wait(TAP_MS + 100);
     fireEvent.keyUp(button(), { key: " " });
     expect(onStop).toHaveBeenCalledTimes(1);
   });
@@ -59,81 +121,72 @@ describe("PushToTalk", () => {
         });
       },
     ],
-  ])("stops the capture on %s", (_name, end) => {
+  ])("stops a hold on %s", (_name, ending) => {
     const { onStop } = setup();
-    fireEvent.pointerDown(button());
+    press();
     act(() => {
-      end();
+      ending();
+    });
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("focus leaving does not end a tap, but hiding the window does", () => {
+    const { onStop } = setup();
+    tap();
+    fireEvent.blur(button());
+    expect(onStop).not.toHaveBeenCalled();
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => true,
+    });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => false,
     });
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
   it("goes back to idle when the start is refused", async () => {
+    vi.useRealTimers();
     const onStart = vi.fn(() => Promise.reject(new Error("refused")));
     const { onStop } = setup({ onStart });
     await act(async () => {
-      fireEvent.pointerDown(button());
+      press();
     });
     expect(button()).toHaveAttribute("aria-pressed", "false");
-    fireEvent.pointerUp(button());
+    release();
     expect(onStop).not.toHaveBeenCalled();
   });
 
-  it("is disabled while muted or while another request runs, and muting ends a press", () => {
-    const { onStop, rerender, onStart } = setup();
-    fireEvent.pointerDown(button());
-    rerender(
-      <PushToTalk
-        unavailable
-        busy
-        micOpen={false}
-        onStart={onStart}
-        onStop={onStop}
-      />,
-    );
+  it("is disabled while muted or while another request runs, and muting ends a capture", () => {
+    const { onStop, again } = setup();
+    tap();
+    again({ unavailable: true, busy: true });
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(button()).toBeDisabled();
-    rerender(
-      <PushToTalk
-        unavailable={false}
-        busy
-        micOpen={false}
-        onStart={onStart}
-        onStop={onStop}
-      />,
-    );
+    again({ unavailable: false, busy: true });
     expect(button()).toBeDisabled();
   });
 
-  it("stays enabled while held even though the capture made the request busy", () => {
-    const { rerender, onStart, onStop } = setup();
-    fireEvent.pointerDown(button());
-    rerender(
-      <PushToTalk
-        unavailable={false}
-        busy
-        micOpen={false}
-        onStart={onStart}
-        onStop={onStop}
-      />,
-    );
+  it("stays enabled while capturing even though the capture made the request busy", () => {
+    const { again } = setup();
+    press();
+    again({ busy: true, listening: true });
     expect(button()).toBeEnabled();
   });
 
-  it("says the microphone is starting until it is open, then to speak", () => {
-    const { rerender, onStart, onStop } = setup();
-    expect(button()).toHaveTextContent("Hold to talk");
-    fireEvent.pointerDown(button());
+  it("says the microphone is starting until it is open, then how to finish", () => {
+    const { again } = setup();
+    expect(button()).toHaveTextContent("Hold or tap to talk");
+    press();
     expect(button()).toHaveTextContent("Starting microphone…");
-    rerender(
-      <PushToTalk
-        unavailable={false}
-        busy
-        micOpen
-        onStart={onStart}
-        onStop={onStop}
-      />,
-    );
-    expect(button()).toHaveTextContent("Speak now");
+    again({ busy: true, listening: true, micOpen: true });
+    expect(button()).toHaveTextContent("release to send");
+    wait(50);
+    release(); // a tap
+    expect(button()).toHaveTextContent("press to send");
   });
 });
