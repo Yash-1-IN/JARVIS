@@ -170,7 +170,7 @@ export function WakeWordSettings({ transport }: { transport: Transport }) {
           {busy && progress && (
             <p>
               <progress
-                aria-label="Wake word download"
+                aria-label="Speech and wake word files download"
                 max={100}
                 value={percent}
               />{" "}

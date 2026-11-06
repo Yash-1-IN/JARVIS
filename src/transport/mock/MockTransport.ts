@@ -138,6 +138,7 @@ export class MockTransport implements Transport {
     allowedFolders: [],
     allowedApps: [],
     autoAllowMedium: false,
+    maxToolCalls: 5,
   };
   private spent = {
     today: 0,
@@ -752,6 +753,19 @@ export class MockTransport implements Transport {
     ) {
       throw jarvisError("INTERNAL", `Unknown model: ${patch.model}`);
     }
+    if (
+      patch.maxToolCalls !== undefined &&
+      !(
+        Number.isInteger(patch.maxToolCalls) &&
+        patch.maxToolCalls >= 1 &&
+        patch.maxToolCalls <= 50
+      )
+    ) {
+      throw jarvisError(
+        "INTERNAL",
+        "The most actions in one request must be a whole number from 1 to 50",
+      );
+    }
     for (const cap of [patch.dailyCapMicroUsd, patch.monthlyCapMicroUsd]) {
       if (cap !== undefined && !validCap(cap)) {
         throw jarvisError(
@@ -779,6 +793,8 @@ export class MockTransport implements Transport {
     if (apps !== undefined) next.allowedApps = apps;
     if (patch.autoAllowMedium !== undefined)
       next.autoAllowMedium = patch.autoAllowMedium;
+    if (patch.maxToolCalls !== undefined)
+      next.maxToolCalls = patch.maxToolCalls;
     if (patch.model !== undefined) next.model = patch.model;
     if (patch.dailyCapMicroUsd !== undefined)
       next.dailyCapMicroUsd = patch.dailyCapMicroUsd;

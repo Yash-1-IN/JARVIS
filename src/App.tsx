@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityLog } from "./components/ActivityLog";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
@@ -25,6 +19,7 @@ import { useVoice } from "./hooks/useVoice";
 import { PROTOCOL_VERSION } from "./protocol";
 import { useChatStore } from "./state/chatStore";
 import { describeError } from "./state/errors";
+import { usePanelSplit } from "./state/layoutPref";
 import { useSnapshotStore } from "./state/snapshotStore";
 import type { Transport } from "./transport";
 import type { MockTransport } from "./transport/mock/MockTransport";
@@ -55,43 +50,15 @@ export default function App({ transport }: { transport: Transport }) {
   const navButtons = useRef<Partial<Record<PanelId, HTMLButtonElement | null>>>(
     {},
   );
-  // Where the conversation was scrolled to when a panel was opened. On a narrow window the
-  // conversation is hidden while a panel is open, so the page loses its scroll position; it is
-  // put back when the panel closes, and the person is where they were.
-  const savedScroll = useRef<number | null>(null);
-  const openPanel = (id: PanelId | null) => {
-    if (id !== null && panel === null) {
-      savedScroll.current = document.documentElement.scrollTop;
-    }
-    setPanel(id);
-  };
+  const openPanel = (id: PanelId | null) => setPanel(id);
   const togglePanel = (id: PanelId) => openPanel(panel === id ? null : id);
-  // Closing returns focus to the button that opened the panel, without scrolling to it.
+  // Closing returns focus to the button that opened the panel, without scrolling to it. The
+  // conversation scrolls inside its own area and is never hidden or unmounted by a panel, so it
+  // keeps its place without any bookkeeping here.
   const closePanel = () => {
     if (panel) navButtons.current[panel]?.focus({ preventScroll: true });
     openPanel(null);
   };
-  useLayoutEffect(() => {
-    if (panel === null && savedScroll.current !== null) {
-      document.documentElement.scrollTop = savedScroll.current;
-      savedScroll.current = null;
-    }
-  }, [panel]);
-
-  // The top bar (and any approval cards) stay on screen; the side panel sticks just below them.
-  const topRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = topRef.current;
-    if (!el) return;
-    const root = document.documentElement;
-    const set = () =>
-      root.style.setProperty("--app-top-h", `${el.offsetHeight}px`);
-    set();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(set);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   // Read the store at call time so the shortcut listener is bound once.
   const run = useCallback((p: Promise<void>) => {
@@ -120,6 +87,9 @@ export default function App({ transport }: { transport: Transport }) {
   );
 
   const turns = useChatStore((s) => s.turns);
+  // Clears what is on the screen only. The saved conversations stay in History, and the model
+  // still has its recent context (a "new conversation" that resets that needs a backend command).
+  const clearChat = useCallback(() => useChatStore.getState().clear(), []);
   const nextKey = useRef(0);
   const onSubmitText = useCallback(
     (text: string) => {
@@ -178,10 +148,31 @@ export default function App({ transport }: { transport: Transport }) {
     };
   }, [transport, receive]);
 
+  const split = usePanelSplit((s) => s.split);
+  const panelNode = panel ? (
+    <SidePanel
+      id={`${panel}-panel`}
+      title={PANELS[panel]}
+      onClose={closePanel}
+      modal={split === "popup"}
+    >
+      {panel === "settings" && <SettingsPanel transport={transport} />}
+      {panel === "activity" && <ActivityLog transport={transport} />}
+      {panel === "memory" && <MemoryPanel data={memories} />}
+      {panel === "history" && <HistoryPanel transport={transport} />}
+    </SidePanel>
+  ) : null;
+  const popup = split === "popup" && panelNode !== null;
+  // A card that needs an answer (an approval, a proposed memory) must never sit behind a pop-up: while
+  // one is waiting the pop-up is hidden (not closed, so a half-typed field survives) and the page is
+  // reachable; it comes back when the card is answered.
+  const needsAnswer =
+    (snapshot?.pendingApprovals.length ?? 0) > 0 || proposals.length > 0;
+
   return (
-    <div className={`app${panel ? " has-panel" : ""}`}>
+    <div className={`app${panel ? " has-panel" : ""}`} data-split={split}>
       {transport.isMock && <MockBadge />}
-      <div className="app-top" ref={topRef}>
+      <div className="app-top" inert={popup && !needsAnswer}>
         <header className="app-header">
           <h1>JARVIS</h1>
           <nav aria-label="Panels" className="app-nav">
@@ -225,14 +216,21 @@ export default function App({ transport }: { transport: Transport }) {
         )}
       </div>
       <WelcomeNotice transport={transport} />
-      <div className="app-body">
-        <main className="assistant">
+      {/* The window is a fixed frame: the header on top, then the work area: the talk column (hologram,
+          status, talk button) down the left and the conversation beside it. An open panel goes where
+          the person chose (Settings, Display): over the talk column (`rail`, the default), over the
+          conversation (`stage`), or across the whole width (`both`). Everything scrolls inside its own
+          area, so nothing moves the page. */}
+      <div className="app-main" inert={popup && !needsAnswer}>
+        {split === "both" && panelNode}
+        <main className="workspace">
           {error && <p role="alert">{error}</p>}
           {!error && snapshot && (
             <>
-              <div className="assistant-status">
-                <Hologram phase={snapshot.phase} mic={snapshot.mic} />
-                <div>
+              <div className="rail-col">
+                {split === "rail" && panelNode}
+                <aside className="rail" aria-label="JARVIS">
+                  <Hologram phase={snapshot.phase} mic={snapshot.mic} />
                   <StatusPanel snapshot={snapshot} onRetry={retryTurn} />
                   <Controls
                     snapshot={snapshot}
@@ -241,30 +239,35 @@ export default function App({ transport }: { transport: Transport }) {
                     onTalkStart={onTalkStart}
                     onTalkStop={onTalkStop}
                   />
-                </div>
+                </aside>
               </div>
-              <Chat
-                turns={turns}
-                busy={snapshot.activeRequestId !== null}
-                onSubmit={onSubmitText}
-              />
+              <div className="stage">
+                {split === "stage" && panelNode}
+                <Chat
+                  turns={turns}
+                  busy={snapshot.activeRequestId !== null}
+                  onSubmit={onSubmitText}
+                  onClear={clearChat}
+                />
+              </div>
             </>
           )}
           {commandError && <p role="alert">{commandError}</p>}
         </main>
-        {panel && (
-          <SidePanel
-            id={`${panel}-panel`}
-            title={PANELS[panel]}
-            onClose={closePanel}
-          >
-            {panel === "settings" && <SettingsPanel transport={transport} />}
-            {panel === "activity" && <ActivityLog transport={transport} />}
-            {panel === "memory" && <MemoryPanel data={memories} />}
-            {panel === "history" && <HistoryPanel transport={transport} />}
-          </SidePanel>
-        )}
       </div>
+      {/* The pop-up window: the page behind is dimmed and cannot be reached (`inert`); Esc, Close or a
+          click outside closes it. */}
+      {popup && (
+        <div
+          className="modal-backdrop"
+          hidden={needsAnswer}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closePanel();
+          }}
+        >
+          {panelNode}
+        </div>
+      )}
       {isMock(transport) && (
         <footer className="mock-footer">
           <MockControls transport={transport} />

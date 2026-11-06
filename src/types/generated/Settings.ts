@@ -27,4 +27,9 @@ allowedApps: Array<AllowedApp>,
  * Let medium-risk actions run without a card when no untrusted content is in the
  * context. Off by default. Never applies to high risk, and never while tainted.
  */
-autoAllowMedium: boolean, };
+autoAllowMedium: boolean, 
+/**
+ * The most tool calls one request may make before the model must answer (spec §7.2).
+ * 5 by default, 1 to 50.
+ */
+maxToolCalls: number, };

@@ -771,6 +771,7 @@ mod tests {
                     input_per_mtok: 1,
                     output_per_mtok: 1,
                 },
+                max_tool_calls: 5,
             }),
             Box::new(|| NOW),
         ));

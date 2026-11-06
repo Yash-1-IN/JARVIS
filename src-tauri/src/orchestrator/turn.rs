@@ -28,8 +28,6 @@ const PERSONA: &str = include_str!("../../resources/prompts/persona.md");
 const MAX_OUTPUT_TOKENS: u32 = 4096;
 /// What history keeps of a "remember that ..." request (the text itself lives only in Memory).
 const REMEMBER_IN_HISTORY: &str = "Asked JARVIS to remember something (see Memory).";
-/// Spec §7.2: at most five tool calls in one turn.
-const MAX_TOOL_CALLS: usize = 5;
 
 mod offline;
 mod toolcalls;
@@ -54,9 +52,22 @@ pub trait TurnSink: Send + Sync {
 
 type ProviderFactory = dyn Fn() -> Option<Arc<dyn ModelProvider>> + Send + Sync;
 
+/// "one action", "five actions": the number in words up to ten, as the message was before it was
+/// a setting, and in digits above that.
+fn actions(n: usize) -> String {
+    const WORDS: [&str; 11] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    ];
+    let count = WORDS.get(n).map_or_else(|| n.to_string(), |w| (*w).into());
+    format!("{count} action{}", if n == 1 { "" } else { "s" })
+}
+
 pub struct TurnConfig {
     pub model: String,
     pub price: Price,
+    /// Spec §7.2: the most tool calls one turn may make (5 by default, 1 to 50; the `Settings`
+    /// value, read at the start of each turn).
+    pub max_tool_calls: usize,
 }
 
 pub struct TurnRunner {
@@ -181,6 +192,13 @@ impl TurnRunner {
     }
 
     /// Offers tools to the model. Without this the model gets none.
+    /// Tests only: replaces how the model, price and limit are read.
+    #[cfg(test)]
+    fn with_config(mut self, config: Box<dyn Fn() -> TurnConfig + Send + Sync>) -> Self {
+        self.config = config;
+        self
+    }
+
     pub fn with_tools(mut self, w: ToolWiring) -> Self {
         self.tools = Some(w);
         self
@@ -555,7 +573,7 @@ impl TurnRunner {
             let mut results = Vec::new();
             let mut over_limit = false;
             for (cid, name, args) in calls {
-                let res = if calls_made >= MAX_TOOL_CALLS {
+                let res = if calls_made >= cfg.max_tool_calls {
                     over_limit = true;
                     CallResult::over_limit()
                 } else {
@@ -586,9 +604,12 @@ impl TurnRunner {
                 sink.snapshot(s);
             }
             if over_limit {
-                let msg = "I reached my limit of five actions for one request.";
-                lock(&self.history).push(Message::text(Role::Assistant, msg));
-                return self.finish_text(id, msg, sink);
+                let msg = format!(
+                    "I reached my limit of {} for one request.",
+                    actions(cfg.max_tool_calls)
+                );
+                lock(&self.history).push(Message::text(Role::Assistant, &msg));
+                return self.finish_text(id, &msg, sink);
             }
         }
     }
@@ -622,7 +643,7 @@ impl TurnRunner {
 
     fn local_reply(&self, intent: &Intent) -> String {
         match intent {
-            Intent::WhatCanYouDo => "I can chat, handle quick commands such as stop and mute, open apps you allow, check system status, pause and skip music, and work with files in the folders you allow (reading and moving ask you first). Voice is not built yet.".into(),
+            Intent::WhatCanYouDo => "I can chat, handle quick commands such as stop and mute, open apps you allow, check system status, pause and skip music, and work with files in the folders you allow (reading and moving ask you first). You can also talk to me with the talk button; I do not speak back yet.".into(),
             Intent::RepeatLast => lock(&self.last_reply)
                 .clone()
                 .unwrap_or_else(|| "I haven't said anything yet.".into()),

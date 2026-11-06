@@ -431,3 +431,21 @@ describe("MockTransport policy settings (contract #19)", () => {
     expect((await t.getSettings()).allowedApps).toHaveLength(1);
   });
 });
+
+describe("MockTransport action limit (contract: Settings.maxToolCalls)", () => {
+  it("is 5 by default, accepts 1 to 50, and refuses anything else without applying the rest", async () => {
+    const t = new MockTransport();
+    expect((await t.getSettings()).maxToolCalls).toBe(5);
+    expect((await t.updateSettings({ maxToolCalls: 50 })).maxToolCalls).toBe(
+      50,
+    );
+    for (const bad of [0, 51, 2.5, -1]) {
+      await expect(
+        t.updateSettings({ maxToolCalls: bad, autoAllowMedium: true }),
+      ).rejects.toMatchObject({ code: "INTERNAL" });
+    }
+    const s = await t.getSettings();
+    expect(s.maxToolCalls).toBe(50);
+    expect(s.autoAllowMedium).toBe(false);
+  });
+});

@@ -289,6 +289,9 @@ pub struct Settings {
     /// Let medium-risk actions run without a card when no untrusted content is in the
     /// context. Off by default. Never applies to high risk, and never while tainted.
     pub auto_allow_medium: bool,
+    /// The most tool calls one request may make before the model must answer (spec §7.2).
+    /// 5 by default, 1 to 50.
+    pub max_tool_calls: u32,
 }
 
 /// Partial update. For the caps: omit the field to leave it unchanged, send `null`
@@ -322,6 +325,10 @@ pub struct SettingsPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub auto_allow_medium: Option<bool>,
+    /// 1 to 50. Anything else is refused and nothing in the patch is applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_tool_calls: Option<u32>,
 }
 
 /// Where the Spotify sign-in stands (music step 2, issue #68). It never carries a token, a code or
@@ -869,6 +876,12 @@ mod tests {
         assert_eq!(q.allowed_apps.unwrap()[0].id, "com.spotify.client");
         assert!(serde_json::from_str::<SettingsPatch>(r#"{"allowedApps":["Spotify"]}"#).is_err());
         assert_eq!(p.auto_allow_medium, Some(true));
+        // The action limit is a plain number; a text or a negative one does not parse.
+        let m: SettingsPatch = serde_json::from_str(r#"{"maxToolCalls":8}"#).unwrap();
+        assert_eq!(m.max_tool_calls, Some(8));
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"maxToolCalls":"8"}"#).is_err());
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"maxToolCalls":-1}"#).is_err());
+        assert_eq!(SettingsPatch::default().max_tool_calls, None);
         // A misspelt policy field is an error, not a silent no-op.
         assert!(serde_json::from_str::<SettingsPatch>(r#"{"allowedFolder":["/a"]}"#).is_err());
     }

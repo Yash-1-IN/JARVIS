@@ -14,4 +14,8 @@ allowedFolders?: Array<string>,
  * Replaces the whole list. Only ids returned by `apps_installed` are accepted; the
  * `name` is taken from that list, not from the patch.
  */
-allowedApps?: Array<AllowedApp>, autoAllowMedium?: boolean, };
+allowedApps?: Array<AllowedApp>, autoAllowMedium?: boolean, 
+/**
+ * 1 to 50. Anything else is refused and nothing in the patch is applied.
+ */
+maxToolCalls?: number, };

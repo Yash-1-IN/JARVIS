@@ -1,7 +1,7 @@
 //! The settings, API key, usage and provider logic behind the settings commands.
 //! Plain Rust with no Tauri types, so every rule here is unit-tested.
 
-use crate::config::{SettingsError, SettingsStore};
+use crate::config::{MAX_TOOL_CALLS_RANGE, SettingsError, SettingsStore};
 use crate::intelligence::anthropic::{AnthropicConfig, AnthropicProvider, check_key};
 use crate::intelligence::pricing::{DEFAULT_MODEL, PriceTable};
 use crate::intelligence::provider::{ModelProvider, ProviderError};
@@ -99,6 +99,7 @@ impl Services {
             allowed_folders: s.allowed_folders,
             allowed_apps: s.allowed_apps,
             auto_allow_medium: s.auto_allow_medium,
+            max_tool_calls: s.max_tool_calls,
         }
     }
 
@@ -111,6 +112,7 @@ impl Services {
                 | SettingsError::BadFolder(_)
                 | SettingsError::UnknownApp(_)
                 | SettingsError::BadClientId
+                | SettingsError::BadMaxToolCalls
                 | SettingsError::WakeNoticeNeeded
                 | SettingsError::BadVoice
                 | SettingsError::BadDevice
@@ -302,9 +304,19 @@ impl Services {
 
     /// Model and price for the next turn, read from the current settings.
     pub fn turn_config(&self) -> TurnConfig {
-        let model = self.settings.get().model;
+        let settings = self.settings.get();
+        let model = settings.model;
+        // Validated to 1..=50 when saved; a file edited by hand is clamped the same way.
+        let max_tool_calls = (settings.max_tool_calls as usize).clamp(
+            *MAX_TOOL_CALLS_RANGE.start() as usize,
+            *MAX_TOOL_CALLS_RANGE.end() as usize,
+        );
         match self.prices.price(&model) {
-            Ok(price) => TurnConfig { model, price },
+            Ok(price) => TurnConfig {
+                model,
+                price,
+                max_tool_calls,
+            },
             // Settings are validated against the table, so this is only a safety net.
             Err(_) => TurnConfig {
                 model: DEFAULT_MODEL.into(),
@@ -312,6 +324,7 @@ impl Services {
                     .prices
                     .price(DEFAULT_MODEL)
                     .expect("default model is priced"),
+                max_tool_calls,
             },
         }
     }
@@ -574,6 +587,18 @@ mod tests {
         let s = svc.spotify_disconnect();
         assert!(!s.connected);
         assert_eq!(s.client_id.as_deref(), Some(SPOTIFY_ID));
+    }
+
+    #[test]
+    fn the_action_limit_setting_reaches_the_next_turn() {
+        let svc = services("http://127.0.0.1:1");
+        assert_eq!(svc.turn_config().max_tool_calls, 5);
+        svc.set_settings(&crate::ipc::types::SettingsPatch {
+            max_tool_calls: Some(8),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(svc.turn_config().max_tool_calls, 8);
     }
 
     #[test]

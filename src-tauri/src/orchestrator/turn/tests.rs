@@ -158,6 +158,7 @@ fn runner(
         Box::new(|| TurnConfig {
             model: "test-model".into(),
             price: PRICE,
+            max_tool_calls: 5,
         }),
         Box::new(|| NOW),
     ));
@@ -872,7 +873,7 @@ async fn at_most_five_tool_calls_per_turn() {
     t.sink.wait_done().await;
     assert_eq!(lock(&t.sink.activity).len(), 5);
     assert_eq!(t.sink.dones(), vec![StopReason::End]);
-    assert!(t.sink.text().contains("limit"));
+    assert!(t.sink.text().contains("limit of five actions"));
     assert_eq!(lock(&fake.seen).len(), 1);
     // History stays valid for the next turn: every tool_use has its result.
     let h = lock(&t.r.history);
@@ -887,6 +888,60 @@ async fn at_most_five_tool_calls_per_turn() {
         .filter(|b| matches!(b, Block::ToolResult { .. }))
         .count();
     assert_eq!((uses, outs), (6, 6));
+}
+
+/// A tooled runner whose action limit is `n` (the setting, read at the start of each turn).
+fn limited(mut t: Tooled, n: usize) -> Tooled {
+    t.r = Arc::new(
+        Arc::into_inner(t.r)
+            .unwrap()
+            .with_config(Box::new(move || TurnConfig {
+                model: "test-model".into(),
+                price: PRICE,
+                max_tool_calls: n,
+            })),
+    );
+    t
+}
+
+#[tokio::test]
+async fn the_action_limit_is_the_setting_and_the_message_names_it() {
+    for (limit, said) in [
+        (1usize, "limit of one action for"),
+        (2, "limit of two actions for"),
+        (7, "limit of seven actions for"),
+        (12, "limit of 12 actions for"),
+    ] {
+        let many: Vec<TurnEvent> = (0..limit + 1)
+            .map(|i| call(&format!("t{i}"), "time.now", json!({})))
+            .chain([done(ProviderStop::ToolUse)])
+            .collect();
+        let (t, _fake) = tooled(|_| rounds(vec![many]), false);
+        let t = limited(t, limit);
+        t.r.start("spam".into(), t.sink.clone()).unwrap();
+        t.sink.wait_done().await;
+        assert_eq!(lock(&t.sink.activity).len(), limit, "limit {limit}");
+        assert!(t.sink.text().contains(said), "{}", t.sink.text());
+        assert_eq!(t.sink.dones(), vec![StopReason::End]);
+    }
+}
+
+#[tokio::test]
+async fn a_turn_within_a_raised_limit_runs_every_call() {
+    let six: Vec<TurnEvent> = (0..6)
+        .map(|i| call(&format!("t{i}"), "time.now", json!({})))
+        .chain([done(ProviderStop::ToolUse)])
+        .collect();
+    let (t, _fake) = tooled(
+        |_| rounds(vec![six, vec![say("Done."), done(ProviderStop::EndTurn)]]),
+        false,
+    );
+    let t = limited(t, 6);
+    t.r.start("six".into(), t.sink.clone()).unwrap();
+    t.sink.wait_done().await;
+    assert_eq!(lock(&t.sink.activity).len(), 6);
+    assert!(!t.sink.text().contains("limit"));
+    assert_eq!(t.sink.text(), "Done.");
 }
 
 #[tokio::test]
@@ -1496,6 +1551,7 @@ async fn a_new_database_conversation_starts_the_models_context_fresh() {
             Box::new(|| TurnConfig {
                 model: "test-model".into(),
                 price: PRICE,
+                max_tool_calls: 5,
             }),
             Box::new(move || c.load(Ordering::SeqCst)),
         )

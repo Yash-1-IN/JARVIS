@@ -22,6 +22,8 @@ interface ChatStore {
   /** Applies one stream event to the turn's transcript (display data only). */
   apply: (key: string, event: TurnStreamEvent) => void;
   fail: (key: string) => void;
+  /** Empties the conversation on the screen (display only). */
+  clear: () => void;
   /** From `turn.interrupted`, keyed by the backend requestId. */
   markInterrupted: (requestId: string, reason: InterruptReason) => void;
   /** Interrupts that arrived before their turn's requestId resolved. */
@@ -75,6 +77,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         }
       }),
     })),
+  clear: () => set({ turns: [], pendingInterrupts: {} }),
   fail: (key) =>
     set((s) => ({
       turns: update(s.turns, key, (t) =>

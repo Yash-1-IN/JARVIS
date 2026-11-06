@@ -8,6 +8,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 pub const SCHEMA_VERSION: u32 = 1;
+
+/// How many tool calls one request may make unless the person changes it (spec §7.2).
+pub const DEFAULT_MAX_TOOL_CALLS: u32 = 5;
+/// The range the setting accepts. The ceiling stays for any model: the limit is also the guard
+/// against a loop or an injected "keep going", which does not depend on what a call costs.
+pub const MAX_TOOL_CALLS_RANGE: std::ops::RangeInclusive<u32> = 1..=50;
+
+fn default_max_tool_calls() -> u32 {
+    DEFAULT_MAX_TOOL_CALLS
+}
 /// Sanity limit for a spend cap: $100,000 in micro-dollars.
 pub const MAX_CAP_MICRO_USD: u64 = 100_000_000_000;
 pub const MAX_ALLOWED_FOLDERS: usize = 50;
@@ -28,6 +38,9 @@ pub struct StoredSettings {
     pub allowed_apps: Vec<AllowedApp>,
     #[serde(default)]
     pub auto_allow_medium: bool,
+    /// The most tool calls one request may make. Older files lack this field.
+    #[serde(default = "default_max_tool_calls")]
+    pub max_tool_calls: u32,
     /// The Spotify developer app's Client ID (not a secret). Older files lack this field.
     #[serde(default)]
     pub spotify_client_id: Option<String>,
@@ -86,6 +99,7 @@ impl Default for StoredSettings {
             allowed_folders: vec![],
             allowed_apps: vec![],
             auto_allow_medium: false,
+            max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
             spotify_client_id: None,
             voice: StoredVoice::default(),
         }
@@ -104,6 +118,8 @@ pub enum SettingsError {
     UnknownApp(String),
     #[error("too many entries in an allow-list")]
     TooMany,
+    #[error("the most actions in one request must be a whole number from 1 to 50")]
+    BadMaxToolCalls,
     #[error("that does not look like a Spotify Client ID (32 characters, 0-9 and a-f)")]
     BadClientId,
     #[error("read and accept the wake word notice first")]
@@ -198,6 +214,12 @@ impl SettingsStore {
         }
         if let Some(on) = patch.auto_allow_medium {
             next.auto_allow_medium = on;
+        }
+        if let Some(n) = patch.max_tool_calls {
+            if !MAX_TOOL_CALLS_RANGE.contains(&n) {
+                return Err(SettingsError::BadMaxToolCalls);
+            }
+            next.max_tool_calls = n;
         }
         if [next.daily_cap_micro_usd, next.monthly_cap_micro_usd]
             .into_iter()
@@ -547,6 +569,42 @@ mod tests {
         std::fs::write(&old, r#"{"schemaVersion":1,"model":"claude-haiku-5-5","dailyCapMicroUsd":null,"monthlyCapMicroUsd":null}"#).unwrap();
         let o = SettingsStore::load(old, &prices()).get();
         assert!(o.allowed_folders.is_empty() && o.allowed_apps.is_empty() && !o.auto_allow_medium);
+        // ... and the action limit it did not have is the default of five.
+        assert_eq!(o.max_tool_calls, DEFAULT_MAX_TOOL_CALLS);
+    }
+
+    #[test]
+    fn the_action_limit_is_five_by_default_and_must_be_one_to_fifty() {
+        let path = tmp_path();
+        let s = SettingsStore::load(path.clone(), &prices());
+        assert_eq!(s.get().max_tool_calls, 5);
+        for n in [1, 5, 50] {
+            let patch = SettingsPatch {
+                max_tool_calls: Some(n),
+                ..Default::default()
+            };
+            assert_eq!(s.apply(&patch, &prices()).unwrap().max_tool_calls, n);
+        }
+        // Saved, so it survives a restart.
+        assert_eq!(
+            SettingsStore::load(path, &prices()).get().max_tool_calls,
+            50
+        );
+        // Out of range is refused, and nothing else in the same patch is applied.
+        for n in [0, 51, u32::MAX] {
+            let patch = SettingsPatch {
+                max_tool_calls: Some(n),
+                auto_allow_medium: Some(true),
+                ..Default::default()
+            };
+            assert_eq!(
+                s.apply(&patch, &prices()),
+                Err(SettingsError::BadMaxToolCalls),
+                "{n}"
+            );
+        }
+        assert_eq!(s.get().max_tool_calls, 50);
+        assert!(!s.get().auto_allow_medium);
     }
 
     #[test]
