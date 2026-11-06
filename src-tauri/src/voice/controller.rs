@@ -481,6 +481,21 @@ impl VoiceController {
         }
     }
 
+    /// Loads the speech model on a background thread so the first sentence does not pay for the
+    /// load inside the recognition time limit. Safe to call any number of times: a model that is
+    /// already loaded, or not installed yet, makes it a no-op. A request that arrives while the load
+    /// is running waits for the same lock (and is still bounded by its own timeout).
+    pub fn warm_up(&self) {
+        let t = Arc::clone(&self.transcriber);
+        let _ = std::thread::Builder::new()
+            .name("jarvis-stt-warm".into())
+            .spawn(move || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    lock(&t).warm_up();
+                }));
+            });
+    }
+
     /// Recognition on its own thread with a time limit. A call that overruns is abandoned (its
     /// result is dropped), so one slow request cannot hold the assistant in `transcribing`.
     fn transcribe_bounded(&self, audio: Vec<f32>) -> Result<String, VoiceError> {
@@ -748,6 +763,15 @@ mod tests {
         fn transcribe(&mut self, audio: &[f32]) -> Result<String, VoiceError> {
             assert!(!audio.is_empty());
             Ok(self.0.to_owned())
+        }
+    }
+    struct Warm(Arc<std::sync::atomic::AtomicUsize>);
+    impl Transcriber for Warm {
+        fn transcribe(&mut self, _: &[f32]) -> Result<String, VoiceError> {
+            Ok(String::new())
+        }
+        fn warm_up(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
     struct Slow;
@@ -1318,5 +1342,24 @@ mod tests {
             Vec::new(),
         );
         assert!(matches!(out, Outcome::Audio(_)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn warm_up_loads_the_model_in_the_background_without_a_capture() {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let s = setup(Vec::new(), false, None, Box::new(Warm(n.clone())));
+        s.ctl.warm_up();
+        for _ in 0..100 {
+            if n.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            s.opened.load(Ordering::SeqCst),
+            0,
+            "no microphone was opened"
+        );
     }
 }

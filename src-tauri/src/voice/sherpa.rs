@@ -8,7 +8,7 @@
 //! Runs only on the voice recognition thread (`VoiceController::transcribe_bounded`), never on a
 //! Tokio worker, and never writes the audio anywhere.
 
-use super::transcribe::{Transcriber, VoiceError};
+use super::transcribe::{Transcriber, VoiceError, without_invented_text};
 use sherpa_onnx::{OfflineModelConfig, OfflineRecognizer, OfflineRecognizerConfig};
 use std::path::{Path, PathBuf};
 
@@ -142,10 +142,37 @@ impl Transcriber for SherpaTranscriber {
         let stream = rec.create_stream();
         stream.accept_waveform(RATE, audio);
         rec.decode(&stream);
-        Ok(stream
+        let heard = stream
             .get_result()
             .map(|r| r.text.trim().to_owned())
-            .unwrap_or_default())
+            .unwrap_or_default();
+        let text = without_invented_text(&heard, audio);
+        if text.is_empty() && !heard.is_empty() {
+            // Facts only: never the words.
+            tracing::info!(
+                seconds = format!("{:.1}", audio.len() as f32 / f32::from(16_000u16)),
+                "voice: dropped text the model invented for silence or noise"
+            );
+        }
+        Ok(text)
+    }
+
+    fn warm_up(&mut self) {
+        if self.recogniser.is_some() {
+            return;
+        }
+        let started = std::time::Instant::now();
+        match self.load() {
+            Ok(rec) => {
+                self.recogniser = Some(rec);
+                tracing::info!(
+                    millis = started.elapsed().as_millis() as u64,
+                    "voice: speech model loaded ahead of use"
+                );
+            }
+            // Not installed yet, or not loadable: the first request tries again and reports it.
+            Err(_) => tracing::debug!("voice: speech model not warmed up"),
+        }
     }
 }
 
