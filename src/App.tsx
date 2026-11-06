@@ -86,6 +86,11 @@ export default function App({ transport }: { transport: Transport }) {
     [transport, run],
   );
 
+  const onTalkTap = useCallback(
+    () => run(transport.voiceCaptureTap()),
+    [transport, run],
+  );
+
   const turns = useChatStore((s) => s.turns);
   // Clears what is on the screen only. The saved conversations stay in History, and the model
   // still has its recent context (a "new conversation" that resets that needs a backend command).
@@ -238,6 +243,7 @@ export default function App({ transport }: { transport: Transport }) {
                     onToggleMute={onToggleMute}
                     onTalkStart={onTalkStart}
                     onTalkStop={onTalkStop}
+                    onTalkTap={onTalkTap}
                   />
                 </aside>
               </div>

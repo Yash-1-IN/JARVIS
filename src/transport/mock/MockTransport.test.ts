@@ -451,14 +451,33 @@ describe("MockTransport action limit (contract: Settings.maxToolCalls)", () => {
 });
 
 describe("MockTransport voice_capture_tap (contract, issue #143)", () => {
-  it("is accepted at any time and changes nothing yet", async () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("is safe when nothing is capturing", async () => {
     const t = new MockTransport();
-    // Nothing capturing: safe.
     await expect(t.voiceCaptureTap()).resolves.toBeUndefined();
+    expect((await t.getSnapshot()).phase).toBe("idle");
+  });
+
+  it("a capture is held until the tap, then ends by itself", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
     await t.voiceAttach(() => {});
     await t.voiceCaptureStart();
-    const before = await t.getSnapshot();
-    await expect(t.voiceCaptureTap()).resolves.toBeUndefined();
-    expect((await t.getSnapshot()).phase).toBe(before.phase);
+    await vi.advanceTimersByTimeAsync(10_000);
+    // Held: ten seconds pass and it is still listening (the cap is 15 s).
+    expect((await t.getSnapshot()).phase).toBe("listening");
+    await t.voiceCaptureTap();
+    await vi.advanceTimersByTimeAsync(3_100);
+    expect((await t.getSnapshot()).phase).not.toBe("listening");
+  });
+
+  it("a held capture nobody taps ends at the cap", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    await t.voiceAttach(() => {});
+    await t.voiceCaptureStart();
+    await vi.advanceTimersByTimeAsync(15_100);
+    expect((await t.getSnapshot()).phase).not.toBe("listening");
   });
 });

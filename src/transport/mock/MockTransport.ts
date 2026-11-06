@@ -43,8 +43,10 @@ const APPROVAL_TTL_MS = 60_000;
 const FIRST_TOKEN_MS = 400;
 /** How long the mock microphone takes to open, as a real device can. */
 const MOCK_MIC_OPEN_MS = 400;
-/** The mock "hears a quiet gap" this long after the microphone opens and ends the capture itself. */
+/** After a tap the mock "hears a quiet gap" this long later and ends the capture itself. */
 const MOCK_END_OF_SPEECH_MS = 3000;
+/** A held capture nobody stops or taps ends at this cap, as the backend's does (15 s). */
+const MOCK_CAPTURE_CAP_MS = 15_000;
 const TOKEN_MS = 60;
 /** What one mock reply "costs", so the usage panel and caps can be exercised. */
 const MOCK_TURN_COST_MICRO_USD = 1_500;
@@ -110,6 +112,7 @@ export class MockTransport implements Transport {
   private voiceListener: TurnListener | null = null;
   private modelsReady = false;
   private inputDevice: string | null = null;
+  private captureTapped = false;
   private wakeEnabled = false;
   private wakeNoticeAccepted = false;
   private wakeReady = false;
@@ -421,21 +424,26 @@ export class MockTransport implements Transport {
         }
       }, MOCK_MIC_OPEN_MS),
     );
-    // Like the backend's end-of-speech detector: a capture nobody stops ends by itself.
+    // Like the backend (contract "Hold and tap"): a capture from `voiceCaptureStart` is held, so
+    // the end-of-speech detector is ignored until a tap; only the cap ends it by itself.
+    this.captureTapped = false;
     this.timers.push(
-      setTimeout(
-        () => void this.voiceCaptureStop(),
-        MOCK_MIC_OPEN_MS + MOCK_END_OF_SPEECH_MS,
-      ),
+      setTimeout(() => void this.voiceCaptureStop(), MOCK_CAPTURE_CAP_MS),
     );
   }
 
   /**
-   * Contract `voice_capture_tap`: accepted, no effect yet, like the backend until Developer A's side
-   * lands (issue #143). The mock still ends an unstopped capture by itself after a short while; it will
-   * hold the capture until a tap, as the contract says, together with the window change that sends it.
+   * Contract `voice_capture_tap`: switches the held capture to ending by itself, as the backend's
+   * end-of-speech detector would a moment after you stop talking. Safe at any time; nothing happens
+   * when nothing is capturing.
    */
-  async voiceCaptureTap(): Promise<void> {}
+  async voiceCaptureTap(): Promise<void> {
+    if (this.snapshot.phase !== "listening" || this.captureTapped) return;
+    this.captureTapped = true;
+    this.timers.push(
+      setTimeout(() => void this.voiceCaptureStop(), MOCK_END_OF_SPEECH_MS),
+    );
+  }
 
   /** Nothing is heard in the mock: key up plays a fixed, labelled sentence as the transcript. */
   async voiceCaptureStop(): Promise<void> {

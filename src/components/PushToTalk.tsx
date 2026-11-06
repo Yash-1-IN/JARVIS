@@ -18,6 +18,8 @@ interface Props {
   onStart: () => Promise<void>;
   /** Send what was said so far, or end the capture. Safe to call when nothing is capturing. */
   onStop: () => void;
+  /** A release under about 300 ms: the backend switches the held capture to ending by itself. */
+  onTap: () => void;
 }
 
 type Mode = "idle" | "held" | "tap";
@@ -38,6 +40,7 @@ export function PushToTalk({
   micOpen,
   onStart,
   onStop,
+  onTap,
 }: Props) {
   const [mode, setModeState] = useState<Mode>("idle");
   const modeRef = useRef<Mode>("idle");
@@ -72,6 +75,7 @@ export function PushToTalk({
     if (modeRef.current !== "held") return;
     if (Date.now() - pressedAt.current < TAP_MS) {
       setMode("tap"); // the capture carries on by itself
+      onTap(); // a capture is held until the backend is told (contract: "Hold and tap")
     } else {
       end();
     }
