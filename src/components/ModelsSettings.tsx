@@ -57,6 +57,11 @@ export function ModelsSettings({ transport }: { transport: Transport }) {
         )
       : 0;
 
+  // The whole file is here but the download call has not answered yet: JARVIS is checking it against
+  // its checksum and unpacking it, which takes a while for the big speech archive.
+  const unpacking =
+    progress !== null && progress.totalBytes > 0 && percent >= 100;
+
   return (
     <div className="models-settings">
       <h3>Speech models</h3>
@@ -79,12 +84,14 @@ export function ModelsSettings({ transport }: { transport: Transport }) {
           <progress
             aria-label="Speech model download"
             max={100}
-            value={progress ? percent : undefined}
+            value={progress && !unpacking ? percent : undefined}
           />{" "}
           <span role="status" data-testid="models-progress">
-            {progress
-              ? `${mb(progress.doneBytes)} of ${mb(progress.totalBytes)} MB (${percent}%)`
-              : "Starting…"}
+            {unpacking
+              ? "Downloaded. Checking and unpacking, this can take a minute or two…"
+              : progress
+                ? `${mb(progress.doneBytes)} of ${mb(progress.totalBytes)} MB (${percent}%)`
+                : "Starting…"}
           </span>
         </p>
       )}
@@ -95,7 +102,7 @@ export function ModelsSettings({ transport }: { transport: Transport }) {
       )}
       <p className="hint">
         Push to talk needs these to turn what you say into text. It is a
-        one-time download of about 250 MB from the official sherpa-onnx releases
+        one-time download of about 640 MB from the official sherpa-onnx releases
         on github.com. JARVIS checks the file against a checksum built into the
         app before it uses it, and throws it away if it does not match. If the
         download is interrupted, press the button again and it continues where
