@@ -10,3 +10,39 @@
 # makes sure the other person always reviews.
 
 *    @Yash-1-IN @kibong2
+
+# ---- Developer C (@Jarvis-C-Dev), decision D-32 (proposed) ----
+# GitHub uses the LAST matching line for a path. A rule is satisfied by ONE of its owners, so on the
+# C lines below, an approval from A, B or C counts. C still cannot approve its own PR, and it may only
+# be the second approver for low-risk PRs (docs/developer-c.md). Do not merge this block before the
+# owner has given @Jarvis-C-Dev write access: an owner without write access makes GitHub skip the whole
+# line, which falls back to the `*` rule above (A and B), so it fails safe.
+#
+# Lane 1, the visual layer (behaviour, state and the transport stay with B):
+/src/styles.css                @Yash-1-IN @kibong2 @Jarvis-C-Dev
+/src/styles/                   @Yash-1-IN @kibong2 @Jarvis-C-Dev
+/src/state/layoutPref.ts       @Yash-1-IN @kibong2 @Jarvis-C-Dev
+# Lane 2, release docs and scripts (NOT the workflows: CI files run with repository secrets in scope):
+/scripts/                      @Yash-1-IN @kibong2 @Jarvis-C-Dev
+/docs/setup-*.md               @Yash-1-IN @kibong2 @Jarvis-C-Dev
+/docs/first-run.md             @Yash-1-IN @kibong2 @Jarvis-C-Dev
+# Lane 3, test infrastructure:
+/e2e/                          @Yash-1-IN @kibong2 @Jarvis-C-Dev
+
+# ---- Never co-owned by C: written out so a later, wider rule cannot hand them over by accident ----
+/src-tauri/src/permissions/    @Yash-1-IN @kibong2
+/src-tauri/src/orchestrator/   @Yash-1-IN @kibong2
+/src-tauri/src/voice/          @Yash-1-IN @kibong2
+/src-tauri/src/intelligence/   @Yash-1-IN @kibong2
+/src-tauri/src/tools/          @Yash-1-IN @kibong2
+/src-tauri/src/audio/          @Yash-1-IN @kibong2
+/src-tauri/src/memory/         @Yash-1-IN @kibong2
+/src-tauri/src/wake/           @Yash-1-IN @kibong2
+/src-tauri/src/ipc/            @Yash-1-IN @kibong2
+/src-tauri/capabilities/       @Yash-1-IN @kibong2
+/src-tauri/Entitlements.plist  @Yash-1-IN @kibong2
+/src-tauri/tauri.conf.json     @Yash-1-IN @kibong2
+/src/types/generated/          @Yash-1-IN @kibong2
+/docs/contracts.md             @Yash-1-IN @kibong2
+/.github/workflows/            @Yash-1-IN @kibong2
+/.github/CODEOWNERS            @Yash-1-IN @kibong2

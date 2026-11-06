@@ -9,10 +9,16 @@ The full specification is `docs/spec.md`; decisions are in `docs/decisions.md` a
 3. Work on one milestone task at a time. Do not start the next milestone's work.
 
 ## Ownership
-- Developer A: `src-tauri/src/{orchestrator,audio,voice,intelligence,tools,permissions,memory}`.
+- Developer A: `src-tauri/src/{orchestrator,audio,voice,intelligence,tools,permissions,memory,wake}`.
 - Developer B: `src/**`, `src-tauri/src/{platform,models}` (A reviews).
+- Developer C (`Jarvis-C-Dev`, a cloud agent working from a fork), three lanes, decision D-32:
+  1. the visual layer of the window: `src/styles.css` (or `src/styles/**`), presentation-only changes in `src/components/**` (class names and markup, no behaviour), `src/state/layoutPref.ts`;
+  2. release and CI help: `scripts/**`, `docs/setup-*.md`, `docs/first-run.md`, installer and first-run checks (not `.github/workflows/**` security settings, `src-tauri/capabilities/**`, `Entitlements.plist` or `tauri.conf.json`);
+  3. test infrastructure: `e2e/**` against the mock transport, regression tests for fixed bugs, measurement scripts.
+- Developer D (`backendcodinga`): audits and tests; opens no feature PRs.
 - Shared: `src-tauri/src/ipc/**`, `src/types/generated/**`, `docs/contracts.md`. Change only with both developers' agreement; bump `PROTOCOL_VERSION` on breaking changes.
-- Do not edit the other developer's modules unless the task says so.
+- Do not edit another developer's modules unless the task says so.
+- Developer C's work is reviewed by A or B. C may be the second approver only for low-risk PRs in its own lanes (docs, scripts, CSS, tests), never approves or merges its own PR, and has one open PR per lane at a time. Anything touching permissions, approvals, the contract, `ipc/`, `capabilities/` or the entitlements waits for a review by Developer A (security paths stay with Claude, not with a model from C's family). `.github/CODEOWNERS` lists the paths.
 
 ## Workflow between the two developers
 - One session = one GitHub issue = one branch = one PR into `main`. Branch names: `a/<issue>-<slug>` or `b/<issue>-<slug>`.
