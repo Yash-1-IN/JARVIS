@@ -1,7 +1,12 @@
 # Developer C: brief
 
-Status: **proposed**. Needs the owner's go-ahead and both developers' agreement before anyone starts.
-`CLAUDE.md` still names only Developer A and Developer B; it changes only after that agreement.
+Status: **proposed, partly replaced by D-32** (2026-11-06). D-32 makes Developer C a main developer
+with three lanes (the visual layer, release and CI help, test infrastructure); `CLAUDE.md`
+(Ownership) and `.github/CODEOWNERS` carry the same lanes. Where this page's *Lane* and *Off limits*
+tables disagree with D-32, **D-32 wins**: in particular `src/styles.css`, `src/styles/**` and
+`src/state/layoutPref.ts` are now C's, and `src/**` is no longer wholly off limits. The rules, the
+second tier, the token-use habits and the secrets rules below stand. Nothing here takes effect until
+the owner gives C write access and both developers have agreed.
 
 Developer C is a third contributor (the owner's Google Antigravity access, an AI coding agent) that takes
 work which does not collide with the two existing lanes. The aim is more finished work, not more risk.
@@ -104,7 +109,7 @@ if handing work over costs less than doing it:
 | Spotify sign-in, token storage, OAuth redirect handling | Security-sensitive. It is built by Developer B on `b/68-spotify-keychain` and will be merged code by the time Developer C starts; it stays off limits. |
 | `src-tauri/src/orchestrator/**`, `audio/**`, `voice/**` | The only state machine, and the M3 voice pipeline (`docs/m3-plan.md`). |
 | `src-tauri/capabilities/**`, `tauri.conf.json` | Webview permissions. |
-| `src/**` (the frontend), including `src/transport/mock/` | Developer B's lane. A wrong mock can be mistaken for real behaviour (it shows the MOCK badge), so mock parity for new commands is not delegated. |
+| The rest of `src/**` (behaviour, state, hooks, the transport), including `src/transport/mock/`; C owns only the visual layer (D-32) | Developer B's lane. A wrong mock can be mistaken for real behaviour (it shows the MOCK badge), so mock parity for new commands is not delegated. |
 | Wake-word model files (D-23), any recorded audio | Never committed, bundled or published; audio is never written to disk. |
 
 ## Secrets and data
