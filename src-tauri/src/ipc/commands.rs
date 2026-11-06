@@ -374,6 +374,15 @@ pub fn voice_capture_stop(voice: tauri::State<'_, Arc<crate::voice::controller::
     voice.stop_capture()
 }
 
+/// Push to talk, key up after a **tap** (a press shorter than about 300 ms): the capture it started is
+/// switched from *held* to *auto*, so the end of speech may end it, and silence already heard counts.
+/// Safe at any time, including before the microphone has opened and when nothing is capturing; it
+/// changes only the capture running now (issue #143).
+#[tauri::command]
+pub fn voice_capture_tap(voice: tauri::State<'_, Arc<crate::voice::controller::VoiceController>>) {
+    voice.tap()
+}
+
 /// Downloads the voice models that are not installed yet. Progress arrives as `voice.models_progress`;
 /// the answer comes when every file has been downloaded and verified (a checksum for the archive and
 /// one for each file). A download that was interrupted resumes where it stopped. One download at a time.

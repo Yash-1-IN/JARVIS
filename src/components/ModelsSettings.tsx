@@ -4,6 +4,7 @@ import type { Transport } from "../transport";
 import type { ModelProgress } from "../types/generated/ModelProgress";
 import type { VoiceStatus } from "../types/generated/VoiceStatus";
 import { MicrophoneSettings } from "./MicrophoneSettings";
+import { WakeWordSettings } from "./WakeWordSettings";
 
 const MB = 1_000_000;
 const mb = (bytes: number) => Math.round(bytes / MB);
@@ -106,6 +107,7 @@ export function ModelsSettings({ transport }: { transport: Transport }) {
         audio is never saved.
       </p>
       <MicrophoneSettings transport={transport} />
+      <WakeWordSettings transport={transport} />
     </div>
   );
 }

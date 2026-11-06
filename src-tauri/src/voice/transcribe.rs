@@ -1,4 +1,4 @@
-//! Speech to text. The real model is Moonshine through sherpa-onnx (`sherpa.rs`, D-04, D-26); this
+//! Speech to text. The real model is Whisper through sherpa-onnx (`sherpa.rs`, D-04, D-26, D-31); this
 //! file holds the trait it implements and the errors the pipeline understands.
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

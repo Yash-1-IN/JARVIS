@@ -66,6 +66,11 @@ struct Active {
     id: String,
     /// Set by the key release: end the capture and use what was said.
     stop: Arc<AtomicBool>,
+    /// The capture's mode (#143). `false` is *held*: the person is holding the key, so a pause never
+    /// ends the capture. `voice_capture_tap` sets it to `true` (*auto*: a pause may end it). A capture
+    /// started by the wake word is auto from the start. Kept here, on the capture, so a tap that
+    /// arrives before the microphone has opened is not lost.
+    auto: Arc<AtomicBool>,
     /// Set by a cancel: drop everything.
     #[cfg_attr(not(test), allow(dead_code))] // read by `cancel`, which the wake word will call
     cancel: CancellationToken,
@@ -217,9 +222,12 @@ impl VoiceController {
         self.sink.snapshot(snap);
         let stop = Arc::new(AtomicBool::new(false));
         let cancel = CancellationToken::new();
+        // A key press starts *held*; the wake word has no key down, so it starts *auto*.
+        let auto = Arc::new(AtomicBool::new(matches!(source, Source::Feed { .. })));
         *active = Some(Active {
             id: id.clone(),
             stop: stop.clone(),
+            auto: auto.clone(),
             cancel: cancel.clone(),
         });
         drop(active);
@@ -231,7 +239,7 @@ impl VoiceController {
                 // A panic in a driver or model must not take the app down, and must not leave the
                 // assistant stuck in `listening`.
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    me.session(&rid, &stop, &cancel, &handle, source);
+                    me.session(&rid, &stop, &auto, &cancel, &handle, source);
                 }));
                 if r.is_err() {
                     tracing::error!("the voice session panicked");
@@ -265,6 +273,15 @@ impl VoiceController {
     pub fn stop_capture(&self) {
         if let Some(a) = lock(&self.active).as_ref() {
             a.stop.store(true, Ordering::Release);
+        }
+    }
+
+    /// Push to talk, key up after a tap (a press under about 300 ms): the running capture becomes
+    /// *auto*, so the end of speech may end it, and silence already heard counts. Safe at any time,
+    /// including before the microphone has opened; does nothing when nothing is capturing.
+    pub fn tap(&self) {
+        if let Some(a) = lock(&self.active).as_ref() {
+            a.auto.store(true, Ordering::Release);
         }
     }
 
@@ -307,6 +324,7 @@ impl VoiceController {
         &self,
         id: &str,
         stop: &AtomicBool,
+        auto: &AtomicBool,
         cancel: &CancellationToken,
         handle: &tokio::runtime::Handle,
         source: Source,
@@ -331,7 +349,8 @@ impl VoiceController {
             }
             Source::Feed { lead, rx } => (rx, lead, None, true),
         };
-        let mut endpoint = Endpointer::new(self.cfg.endpoint);
+        let mut endpoint =
+            Endpointer::new(self.cfg.endpoint).with_held(!auto.load(Ordering::Acquire));
         // The capture ends at once when the person mutes (the button, the hotkey, a typed or a
         // spoken "mute") or when the request is cancelled from outside (Esc, "stop"): the
         // orchestrator's snapshot is the single place that is looked at, so the microphone can
@@ -353,6 +372,7 @@ impl VoiceController {
             &rx,
             &mut endpoint,
             stop,
+            auto,
             cancel,
             &muted,
             self.cfg.no_audio_timeout,
@@ -485,12 +505,21 @@ impl VoiceController {
 
 /// One line about how a capture ended: facts only, never audio and never text. It tells apart the
 /// usual causes of a garbled sentence: cut short by a pause or by the key, too quiet, or too long.
-fn log_capture_end(why: &str, audio: &[f32]) {
+fn log_capture_end(why: &str, audio: &[f32], endpoint: &Endpointer) {
     let peak = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let s = endpoint.stats();
+    let level = |v: Option<f32>| v.map_or("none".to_owned(), |x| format!("{x:.3}"));
     tracing::info!(
         why,
+        // *held* while the key was down and no tap had come; *auto* after a tap or from the wake word.
+        mode = if endpoint.is_held() { "held" } else { "auto" },
         seconds = format!("{:.1}", audio.len() as f32 / 16_000.0),
         peak = format!("{peak:.2}"),
+        // What the speech-end detector learned: the background level, the level a frame had to
+        // exceed to count as speech, and the average level of the frames counted as speech.
+        noise_floor = level(s.floor),
+        threshold = format!("{:.3}", s.threshold),
+        speech_level = level(s.speech_level),
         "voice: capture ended"
     );
 }
@@ -505,6 +534,7 @@ fn collect(
     rx: &Receiver<Msg>,
     endpoint: &mut Endpointer,
     stop: &AtomicBool,
+    auto: &AtomicBool,
     cancel: &CancellationToken,
     muted: &dyn Fn() -> bool,
     no_audio_timeout: Duration,
@@ -515,6 +545,7 @@ fn collect(
         rx,
         endpoint,
         stop,
+        auto,
         cancel,
         muted,
         no_audio_timeout,
@@ -532,6 +563,7 @@ fn collect_until_done(
     rx: &Receiver<Msg>,
     endpoint: &mut Endpointer,
     stop: &AtomicBool,
+    auto: &AtomicBool,
     cancel: &CancellationToken,
     muted: &dyn Fn() -> bool,
     no_audio_timeout: Duration,
@@ -550,6 +582,15 @@ fn collect_until_done(
         if !heard && started.elapsed() >= no_audio_timeout {
             return Outcome::NoAudio;
         }
+        // A tap switches a held capture to auto. A pause that was already heard then ends it at
+        // once, without waiting for another 700 ms.
+        if auto.load(Ordering::Acquire)
+            && endpoint.is_held()
+            && endpoint.release_hold() == Decision::SpeechEnded
+        {
+            log_capture_end("a pause after speech, after a tap", &audio, endpoint);
+            return Outcome::Audio(audio);
+        }
         match rx.recv_timeout(Duration::from_millis(20)) {
             Ok(Msg::Audio(c)) => {
                 if !heard {
@@ -563,15 +604,15 @@ fn collect_until_done(
                 match endpoint.push(&c) {
                     Decision::Continue => {}
                     Decision::SpeechEnded => {
-                        log_capture_end("a pause after speech", &audio);
+                        log_capture_end("a pause after speech", &audio, endpoint);
                         return Outcome::Audio(audio);
                     }
                     Decision::TooLong => {
-                        log_capture_end("the 15 s limit", &audio);
+                        log_capture_end("the 15 s limit", &audio, endpoint);
                         return Outcome::Audio(audio);
                     }
                     Decision::NoSpeech => {
-                        log_capture_end("no speech heard", &audio);
+                        log_capture_end("no speech heard", &audio, endpoint);
                         return Outcome::NoSpeech;
                     }
                 }
@@ -598,10 +639,10 @@ fn collect_until_done(
                 }
             }
             return if endpoint.has_speech() {
-                log_capture_end("the key was released", &audio);
+                log_capture_end("the key was released", &audio, endpoint);
                 Outcome::Audio(audio)
             } else {
-                log_capture_end("the key was released, no speech heard", &audio);
+                log_capture_end("the key was released, no speech heard", &audio, endpoint);
                 Outcome::NoSpeech
             };
         }
@@ -809,6 +850,7 @@ mod tests {
     async fn a_spoken_phrase_becomes_a_transcript_and_a_normal_turn() {
         let s = setup(phrase(), false, None, Box::new(Says("what can you do")));
         s.ctl.start_capture().unwrap();
+        s.ctl.tap(); // a tap: the pause detector may end this capture
         // The phase went listening at once, the microphone became capturing when the device had
         // opened, then the turn ran and ended.
         assert_eq!(s.sink.snaps_first().phase, AssistantPhase::Listening);
@@ -965,6 +1007,7 @@ mod tests {
     async fn models_that_are_not_installed_say_so() {
         let s = setup(phrase(), false, None, Box::new(MissingModels));
         s.ctl.start_capture().unwrap();
+        s.ctl.tap(); // a tap: the pause detector may end this capture
         wait_for("an error", || {
             s.orch.snapshot().phase == AssistantPhase::Error
         });
@@ -978,6 +1021,7 @@ mod tests {
         let s = setup(phrase(), false, None, Box::new(Slow));
         let t = Instant::now();
         s.ctl.start_capture().unwrap();
+        s.ctl.tap(); // a tap: the pause detector may end this capture
         wait_for("an error", || {
             s.orch.snapshot().phase == AssistantPhase::Error
         });
@@ -988,6 +1032,7 @@ mod tests {
         assert!(t.elapsed() < Duration::from_secs(3));
         let s = setup(phrase(), false, None, Box::new(Panics));
         s.ctl.start_capture().unwrap();
+        s.ctl.tap();
         wait_for("an error", || {
             s.orch.snapshot().phase == AssistantPhase::Error
         });
@@ -1001,6 +1046,7 @@ mod tests {
     async fn a_spoken_mute_mutes_and_starts_no_turn() {
         let s = setup(phrase(), false, None, Box::new(Says("mute")));
         s.ctl.start_capture().unwrap();
+        s.ctl.tap(); // a tap: the pause detector may end this capture
         wait_for("muted", || s.orch.snapshot().mic == MicState::Muted);
         let n = s.orch.snapshot();
         assert_eq!((n.phase, n.active_request_id), (AssistantPhase::Idle, None));
@@ -1135,6 +1181,99 @@ mod tests {
         s.ctl.cancel();
     }
 
+    // ---- hold and tap (#143) ----
+
+    fn heard_text(s: &Setup) -> Vec<String> {
+        lock(&s.sink.heard).iter().map(|t| t.text.clone()).collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_held_capture_is_not_cut_off_by_a_pause_and_the_release_sends_what_was_said() {
+        // Speech, then a second of quiet: more than the 700 ms that ends a tap.
+        let s = setup(phrase(), false, None, Box::new(Says("held")));
+        s.ctl.start_capture().unwrap();
+        wait_for("capturing", || s.orch.snapshot().mic == MicState::Capturing);
+        std::thread::sleep(Duration::from_millis(1_500));
+        assert_eq!(s.orch.snapshot().phase, AssistantPhase::Listening);
+        assert!(
+            heard_text(&s).is_empty(),
+            "the pause must not end a held capture"
+        );
+        s.ctl.stop_capture(); // the key is released after a hold
+        wait_for("the words", || heard_text(&s) == ["held"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_tap_after_a_pause_ends_the_capture_at_once() {
+        let s = setup(phrase(), false, None, Box::new(Says("tapped")));
+        s.ctl.start_capture().unwrap();
+        wait_for("capturing", || s.orch.snapshot().mic == MicState::Capturing);
+        std::thread::sleep(Duration::from_millis(1_500));
+        assert!(heard_text(&s).is_empty());
+        s.ctl.tap(); // the silence already heard counts
+        wait_for("the words", || heard_text(&s) == ["tapped"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_tap_that_arrives_before_the_microphone_has_opened_is_not_lost() {
+        let script = phrase();
+        let opened = Arc::new(AtomicU64::new(0));
+        let o = opened.clone();
+        let s = setup_with(
+            Box::new(move || {
+                Box::new(SlowOpen(Mic {
+                    script: script.clone(),
+                    lost: false,
+                    fail: None,
+                    opened: o.clone(),
+                }))
+            }),
+            opened,
+            Box::new(Says("early")),
+            Duration::from_secs(20),
+        );
+        s.ctl.start_capture().unwrap();
+        s.ctl.tap(); // the device is still opening (400 ms)
+        assert_eq!(s.orch.snapshot().mic, MicState::Off, "still opening");
+        wait_for("the words", || heard_text(&s) == ["early"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_tap_with_nothing_capturing_does_nothing() {
+        let s = setup(phrase(), false, None, Box::new(Says("never")));
+        s.ctl.tap();
+        assert_eq!(s.orch.snapshot().phase, AssistantPhase::Idle);
+        // And it does not leak into the next capture: that one is held again.
+        s.ctl.start_capture().unwrap();
+        wait_for("capturing", || s.orch.snapshot().mic == MicState::Capturing);
+        std::thread::sleep(Duration::from_millis(1_500));
+        assert!(heard_text(&s).is_empty());
+        s.ctl.cancel();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_wake_word_capture_is_auto_and_ends_at_a_pause_with_no_tap() {
+        let s = setup(Vec::new(), false, None, Box::new(Says("woken")));
+        let (tx, rx) = mpsc::channel::<Msg>();
+        s.ctl.start_from_wake(Vec::new(), rx).unwrap();
+        tx.send(Msg::Audio(phrase())).unwrap();
+        wait_for("the words", || heard_text(&s) == ["woken"]);
+        drop(tx);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_held_capture_still_ends_with_no_speech_after_six_seconds() {
+        // Only quiet: a held button with silence still ends ("I did not hear anything").
+        let mut quiet = tone(6_500, 0.002);
+        quiet.extend(tone(100, 0.002));
+        let s = setup(quiet, false, None, Box::new(Says("never")));
+        s.ctl.start_capture().unwrap();
+        wait_for("it ended", || {
+            s.orch.snapshot().phase != AssistantPhase::Listening
+        });
+        assert!(heard_text(&s).is_empty());
+    }
+
     #[test]
     fn a_mute_that_lands_with_the_key_release_still_discards_what_was_heard() {
         // Speech with no quiet after it; the key release is already flagged.
@@ -1153,6 +1292,7 @@ mod tests {
             &rx,
             &mut ep,
             &stop,
+            &AtomicBool::new(true),
             &cancel,
             &muted,
             Duration::from_secs(5),
@@ -1170,6 +1310,7 @@ mod tests {
             &rx,
             &mut ep,
             &stop,
+            &AtomicBool::new(true),
             &cancel,
             &|| false,
             Duration::from_secs(5),

@@ -43,8 +43,10 @@ const APPROVAL_TTL_MS = 60_000;
 const FIRST_TOKEN_MS = 400;
 /** How long the mock microphone takes to open, as a real device can. */
 const MOCK_MIC_OPEN_MS = 400;
-/** The mock "hears a quiet gap" this long after the microphone opens and ends the capture itself. */
+/** After a tap the mock "hears a quiet gap" this long later and ends the capture itself. */
 const MOCK_END_OF_SPEECH_MS = 3000;
+/** A held capture nobody stops or taps ends at this cap, as the backend's does (15 s). */
+const MOCK_CAPTURE_CAP_MS = 15_000;
 const TOKEN_MS = 60;
 /** What one mock reply "costs", so the usage panel and caps can be exercised. */
 const MOCK_TURN_COST_MICRO_USD = 1_500;
@@ -110,6 +112,10 @@ export class MockTransport implements Transport {
   private voiceListener: TurnListener | null = null;
   private modelsReady = false;
   private inputDevice: string | null = null;
+  private captureTapped = false;
+  private wakeEnabled = false;
+  private wakeNoticeAccepted = false;
+  private wakeReady = false;
   private installing = false;
   private progressListeners = new Set<(p: ModelProgress) => void>();
   private transcriptListeners = new Set<(t: Transcript) => void>();
@@ -285,17 +291,18 @@ export class MockTransport implements Transport {
 
   private voiceStatusNow(): VoiceStatus {
     return {
-      wakeEnabled: false,
+      wakeEnabled: this.wakeEnabled,
       followUpWindow: true,
       voice: "",
       availableVoices: [],
       inputDevice: this.inputDevice,
       micPermission: "unknown",
       modelsReady: this.modelsReady,
-      // MOCK: the wake word is not simulated; the window can show its switch but nothing listens.
+      // MOCK: nothing listens and nothing is downloaded; only the settings and the gate behave as the
+      // backend's do, so the window's switch can be tried.
       wakeSupported: true,
-      wakeReady: false,
-      wakeNoticeAccepted: false,
+      wakeReady: this.wakeReady,
+      wakeNoticeAccepted: this.wakeNoticeAccepted,
     };
   }
 
@@ -320,6 +327,26 @@ export class MockTransport implements Transport {
         );
       }
       this.inputDevice = name === "" ? null : name;
+    }
+    // The licence gate, as the backend enforces it: the wake word cannot be on without the notice.
+    const accepted = patch.wakeNoticeAccepted ?? this.wakeNoticeAccepted;
+    const enabled = patch.wakeEnabled ?? this.wakeEnabled;
+    if (
+      (patch.wakeEnabled !== undefined ||
+        patch.wakeNoticeAccepted !== undefined) &&
+      enabled &&
+      !accepted
+    ) {
+      throw jarvisError(
+        "INTERNAL",
+        "Read and accept the wake word notice first.",
+      );
+    }
+    this.wakeNoticeAccepted = accepted;
+    this.wakeEnabled = enabled;
+    if (!enabled && this.snapshot.mic === "standby") this.apply({ mic: "off" });
+    if (enabled && this.wakeReady && this.snapshot.mic === "off") {
+      this.apply({ mic: "standby" });
     }
     return this.voiceStatusNow();
   }
@@ -350,6 +377,10 @@ export class MockTransport implements Transport {
         for (const l of this.progressListeners) l(p);
       }
       this.modelsReady = true;
+      if (this.wakeEnabled && this.wakeNoticeAccepted) {
+        this.wakeReady = true;
+        if (this.snapshot.mic === "off") this.apply({ mic: "standby" });
+      }
       return this.voiceStatusNow();
     } finally {
       this.installing = false;
@@ -393,12 +424,24 @@ export class MockTransport implements Transport {
         }
       }, MOCK_MIC_OPEN_MS),
     );
-    // Like the backend's end-of-speech detector: a capture nobody stops ends by itself.
+    // Like the backend (contract "Hold and tap"): a capture from `voiceCaptureStart` is held, so
+    // the end-of-speech detector is ignored until a tap; only the cap ends it by itself.
+    this.captureTapped = false;
     this.timers.push(
-      setTimeout(
-        () => void this.voiceCaptureStop(),
-        MOCK_MIC_OPEN_MS + MOCK_END_OF_SPEECH_MS,
-      ),
+      setTimeout(() => void this.voiceCaptureStop(), MOCK_CAPTURE_CAP_MS),
+    );
+  }
+
+  /**
+   * Contract `voice_capture_tap`: switches the held capture to ending by itself, as the backend's
+   * end-of-speech detector would a moment after you stop talking. Safe at any time; nothing happens
+   * when nothing is capturing.
+   */
+  async voiceCaptureTap(): Promise<void> {
+    if (this.snapshot.phase !== "listening" || this.captureTapped) return;
+    this.captureTapped = true;
+    this.timers.push(
+      setTimeout(() => void this.voiceCaptureStop(), MOCK_END_OF_SPEECH_MS),
     );
   }
 

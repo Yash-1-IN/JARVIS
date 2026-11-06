@@ -63,6 +63,24 @@ pub struct Endpointer {
     quiet_run: u32,
     speech: bool,
     done: Option<Decision>,
+    /// Held: the person is holding the key, so a pause never ends the capture (#143). Only the cap,
+    /// the "no speech" limit and the caller's own stop do. `release_hold` switches to auto.
+    held: bool,
+    /// Sum and count of the levels of frames louder than the threshold since speech began: the
+    /// average level of what was counted as speech, for the log line.
+    speech_sum: f32,
+    speech_n: u32,
+}
+
+/// What the detector learned, for the `voice: capture ended` log line (numbers only).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EndpointStats {
+    /// The background level learned from the first frames; `None` before they have all arrived.
+    pub floor: Option<f32>,
+    /// The level a frame must exceed to count as speech.
+    pub threshold: f32,
+    /// The average level of the frames counted as speech; `None` if there were none.
+    pub speech_level: Option<f32>,
 }
 
 fn rms(frame: &[f32]) -> f32 {
@@ -82,6 +100,44 @@ impl Endpointer {
             quiet_run: 0,
             speech: false,
             done: None,
+            held: false,
+            speech_sum: 0.0,
+            speech_n: 0,
+        }
+    }
+
+    /// Starts in the held state (a push-to-talk capture): a pause does not end it.
+    pub fn with_held(mut self, held: bool) -> Self {
+        self.held = held;
+        self
+    }
+
+    pub fn is_held(&self) -> bool {
+        self.held
+    }
+
+    /// The key was released after a tap: from now on a pause may end the capture. Silence that was
+    /// already heard counts, so if 700 ms or more of quiet has passed since the last speech, this
+    /// returns `SpeechEnded` at once. Otherwise `Continue` (or the decision already reached).
+    pub fn release_hold(&mut self) -> Decision {
+        if let Some(d) = self.done {
+            return d;
+        }
+        self.held = false;
+        if self.speech && self.quiet_run >= self.cfg.end_silence_frames {
+            self.done = Some(Decision::SpeechEnded);
+            self.carry.clear();
+            return Decision::SpeechEnded;
+        }
+        Decision::Continue
+    }
+
+    pub fn stats(&self) -> EndpointStats {
+        EndpointStats {
+            floor: (self.floor_n >= self.cfg.floor_frames && self.floor_n > 0)
+                .then(|| self.floor_sum / self.floor_n as f32),
+            threshold: self.threshold,
+            speech_level: (self.speech_n > 0).then(|| self.speech_sum / self.speech_n as f32),
         }
     }
 
@@ -124,7 +180,11 @@ impl Endpointer {
         let loud = level > self.threshold;
         if self.speech {
             self.quiet_run = if loud { 0 } else { self.quiet_run + 1 };
-            if self.quiet_run >= self.cfg.end_silence_frames {
+            if loud {
+                self.speech_sum += level;
+                self.speech_n += 1;
+            }
+            if self.quiet_run >= self.cfg.end_silence_frames && !self.held {
                 return Some(Decision::SpeechEnded);
             }
             if self.frames >= self.cfg.max_frames {
@@ -227,5 +287,68 @@ mod tests {
         let mut a = tone(600, 0.3); // the floor is learned from speech, so the threshold is capped
         a.extend(tone(900, 0.001));
         assert_eq!(feed(&mut e, &a, 320), Decision::SpeechEnded);
+    }
+
+    #[test]
+    fn a_held_capture_is_not_ended_by_a_pause_but_keeps_the_audio_and_the_cap() {
+        let mut e = Endpointer::new(EndpointConfig::default()).with_held(true);
+        let mut a = tone(300, 0.002); // background
+        a.extend(tone(800, 0.3)); // speech
+        a.extend(tone(2_000, 0.002)); // a long pause: 2 s, well past 700 ms
+        assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
+        assert!(e.has_speech() && e.is_held());
+        // Speech resumes, and then the 15 s cap still ends it.
+        assert_eq!(e.push(&tone(500, 0.3)), Decision::Continue);
+        assert_eq!(e.push(&tone(12_000, 0.3)), Decision::TooLong);
+    }
+
+    #[test]
+    fn a_held_capture_with_no_speech_still_times_out() {
+        let mut e = Endpointer::new(EndpointConfig::default()).with_held(true);
+        assert_eq!(e.push(&tone(6_500, 0.002)), Decision::NoSpeech);
+    }
+
+    #[test]
+    fn a_tap_after_a_long_pause_ends_at_once_and_after_a_short_one_waits_for_the_rest() {
+        // Long pause already heard: the release ends it with no further delay.
+        let mut e = Endpointer::new(EndpointConfig::default()).with_held(true);
+        let mut a = tone(300, 0.002);
+        a.extend(tone(800, 0.3));
+        a.extend(tone(900, 0.002));
+        assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
+        assert_eq!(e.release_hold(), Decision::SpeechEnded);
+        assert!(!e.is_held());
+        // A decision, once reached, stays.
+        assert_eq!(e.push(&tone(1_000, 0.3)), Decision::SpeechEnded);
+        // Short pause: it carries on as an auto capture and ends when the 700 ms is complete.
+        let mut e = Endpointer::new(EndpointConfig::default()).with_held(true);
+        let mut a = tone(300, 0.002);
+        a.extend(tone(800, 0.3));
+        a.extend(tone(300, 0.002));
+        assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
+        assert_eq!(e.release_hold(), Decision::Continue);
+        assert_eq!(e.push(&tone(300, 0.002)), Decision::Continue);
+        assert_eq!(e.push(&tone(200, 0.002)), Decision::SpeechEnded);
+    }
+
+    #[test]
+    fn a_release_before_any_speech_changes_nothing_but_the_mode() {
+        let mut e = Endpointer::new(EndpointConfig::default()).with_held(true);
+        e.push(&tone(300, 0.002));
+        assert_eq!(e.release_hold(), Decision::Continue);
+        assert!(!e.is_held());
+    }
+
+    #[test]
+    fn the_stats_say_what_the_detector_learned() {
+        let mut e = Endpointer::new(EndpointConfig::default());
+        assert_eq!(e.stats().floor, None);
+        let mut a = tone(300, 0.004); // background learned from the first 200 ms
+        a.extend(tone(600, 0.3)); // speech
+        e.push(&a);
+        let s = e.stats();
+        assert!(s.floor.is_some_and(|f| f > 0.0 && f < 0.01), "{s:?}");
+        assert!(s.threshold >= 0.015 && s.threshold <= 0.05);
+        assert!(s.speech_level.is_some_and(|l| l > 0.15), "{s:?}");
     }
 }

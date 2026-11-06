@@ -2,44 +2,29 @@
   "version": 1,
   "models": [
     {
-      "id": "stt-moonshine-base-en-int8",
-      "name": "Speech recognition (Moonshine base, English)",
+      "id": "stt-whisper-small-en-int8",
+      "name": "Speech recognition (Whisper small, English)",
       "purpose": "speech-to-text",
       "licence": "MIT",
-      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2",
-      "archiveBytes": 250807309,
-      "archiveSha256": "21870cecaa2e44e4e2bf63e02d1072bed183ccd10284871353bd9d24dad14e5e",
-      "dir": "stt/moonshine-base-en-int8",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.en.tar.bz2",
+      "archiveBytes": 635693775,
+      "archiveSha256": "0cdba2b8aaab69e04847f3427cc9709574112e67913a1a84b7fec3a8729faa9a",
+      "dir": "stt/whisper-small-en-int8",
       "files": [
         {
-          "name": "LICENSE",
-          "bytes": 1071,
-          "sha256": "29f60769d1779eb7e196d96b8d2dd471d0263cf8200c79e55c0c00183971ee1b"
+          "name": "small.en-tokens.txt",
+          "bytes": 835554,
+          "sha256": "306cd27f03c1a714eca7108e03d66b7dc042abe8c258b44c199a7ed9838dd930"
         },
         {
-          "name": "tokens.txt",
-          "bytes": 436688,
-          "sha256": "1165c2aeb9f72f457a83be2d459a09054f27490acd9b41bd43794dfd25e296ea"
+          "name": "small.en-encoder.int8.onnx",
+          "bytes": 112442483,
+          "sha256": "8bdac288f369aa94ee2194059238c465ed82ea9d47ee8fa4a8c0a891873e462f"
         },
         {
-          "name": "preprocess.onnx",
-          "bytes": 14077290,
-          "sha256": "ffa630d395c5ccf76f5d4954be5b882df76aaf6491519ec01fd82ea7a3819fb2"
-        },
-        {
-          "name": "encode.int8.onnx",
-          "bytes": 50311494,
-          "sha256": "7e38770f776f2e5583a53b052936005df2ba5c833d7e09c2a5fd796b94bf73e2"
-        },
-        {
-          "name": "uncached_decode.int8.onnx",
-          "bytes": 122120451,
-          "sha256": "c01f4b35093bcac20d352d23a75a539e772964579f9d024a90e5e6f09cae9987"
-        },
-        {
-          "name": "cached_decode.int8.onnx",
-          "bytes": 99983837,
-          "sha256": "2db74e51cedf64a8b1be3c8192e0bb5e4923af0e90bd9e87f8e8771873f8ea03"
+          "name": "small.en-decoder.int8.onnx",
+          "bytes": 262223042,
+          "sha256": "710ccf890e10f3faa15f51ec346081a2723c9f3adb6e4da81c6573a5a6f877fb"
         }
       ],
       "set": "speech",

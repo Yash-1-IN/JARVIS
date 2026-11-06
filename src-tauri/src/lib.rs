@@ -143,7 +143,7 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
                 }
             });
-            // Voice (M3 step 4): push to talk with Moonshine (D-26). The model files are downloaded
+            // Voice (M3 step 4): push to talk with Whisper (D-26, D-31). The model files are downloaded
             // and verified by the model manager into `<app data>/models`; the speech engine reads
             // them when something is first said, so a finished download needs no restart.
             let voice_stream = Arc::new(ipc::voice_stream::VoiceStream::default());
@@ -151,7 +151,7 @@ pub fn run() {
                 app.path().app_data_dir()?.join("models"),
             ));
             let stt_dir = models
-                .dir_of("stt-moonshine-base-en-int8")
+                .dir_of("stt-whisper-small-en-int8")
                 .ok_or("the speech model is not in the manifest")?;
             let for_device = svc.clone();
             let voice = voice::controller::VoiceController::new(
@@ -234,6 +234,7 @@ pub fn run() {
             ipc::commands::voice_devices,
             ipc::commands::voice_capture_start,
             ipc::commands::voice_capture_stop,
+            ipc::commands::voice_capture_tap,
             ipc::commands::voice_models_install,
             ipc::commands::resolve_approval,
             ipc::commands::activity_list,

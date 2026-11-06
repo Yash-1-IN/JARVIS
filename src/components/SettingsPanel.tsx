@@ -94,9 +94,9 @@ function SettingsTabs({ children }: { children: Record<TabId, ReactNode> }) {
     const i = TAB_IDS.indexOf(current);
     const n = TAB_IDS.length;
     const next =
-      e.key === "ArrowRight"
+      e.key === "ArrowRight" || e.key === "ArrowDown"
         ? TAB_IDS[(i + 1) % n]
-        : e.key === "ArrowLeft"
+        : e.key === "ArrowLeft" || e.key === "ArrowUp"
           ? TAB_IDS[(i - 1 + n) % n]
           : e.key === "Home"
             ? TAB_IDS[0]
@@ -109,7 +109,7 @@ function SettingsTabs({ children }: { children: Record<TabId, ReactNode> }) {
     }
   };
   return (
-    <>
+    <div className="settings-tabs">
       <div
         role="tablist"
         aria-label="Settings sections"
@@ -146,7 +146,7 @@ function SettingsTabs({ children }: { children: Record<TabId, ReactNode> }) {
           {children[id]}
         </div>
       ))}
-    </>
+    </div>
   );
 }
 

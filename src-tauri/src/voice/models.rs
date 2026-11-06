@@ -35,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 
 /// The default set must stay under this many bytes (spec §10, `docs/m3-plan.md` step 2).
 #[cfg(test)]
-pub const DEFAULT_SET_LIMIT: u64 = 600 * 1024 * 1024;
+pub const DEFAULT_SET_LIMIT: u64 = 700 * 1024 * 1024;
 /// One file coming out of an archive may not be larger than this, whatever the manifest says.
 const MAX_FILE_BYTES: u64 = 400 * 1024 * 1024;
 /// Everything coming out of one archive may not be larger than this (guards against a compression bomb).

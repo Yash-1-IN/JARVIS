@@ -449,3 +449,35 @@ describe("MockTransport action limit (contract: Settings.maxToolCalls)", () => {
     expect(s.autoAllowMedium).toBe(false);
   });
 });
+
+describe("MockTransport voice_capture_tap (contract, issue #143)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("is safe when nothing is capturing", async () => {
+    const t = new MockTransport();
+    await expect(t.voiceCaptureTap()).resolves.toBeUndefined();
+    expect((await t.getSnapshot()).phase).toBe("idle");
+  });
+
+  it("a capture is held until the tap, then ends by itself", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    await t.voiceAttach(() => {});
+    await t.voiceCaptureStart();
+    await vi.advanceTimersByTimeAsync(10_000);
+    // Held: ten seconds pass and it is still listening (the cap is 15 s).
+    expect((await t.getSnapshot()).phase).toBe("listening");
+    await t.voiceCaptureTap();
+    await vi.advanceTimersByTimeAsync(3_100);
+    expect((await t.getSnapshot()).phase).not.toBe("listening");
+  });
+
+  it("a held capture nobody taps ends at the cap", async () => {
+    vi.useFakeTimers();
+    const t = new MockTransport();
+    await t.voiceAttach(() => {});
+    await t.voiceCaptureStart();
+    await vi.advanceTimersByTimeAsync(15_100);
+    expect((await t.getSnapshot()).phase).not.toBe("listening");
+  });
+});

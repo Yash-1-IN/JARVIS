@@ -1,4 +1,4 @@
-//! Speech to text with Moonshine through the `sherpa-onnx` crate (D-04, D-26).
+//! Speech to text with Whisper through the `sherpa-onnx` crate (D-04, D-26, D-31).
 //!
 //! The model files are not part of the installer. They live in a folder the app is told about, and
 //! are loaded the first time something is said (so a start-up never pays for the model, and an app
@@ -14,6 +14,12 @@ use std::path::{Path, PathBuf};
 
 /// The sample rate the capture engine delivers and the model expects.
 const RATE: i32 = 16_000;
+
+/// Environment variable that asks for another ONNX Runtime execution provider (`coreml` on a Mac,
+/// for example). Unset means `cpu`. It is an experiment switch for measuring on real hardware
+/// (D-31); a provider that cannot be used makes the model load fail, and the engine then retries
+/// on the CPU.
+const PROVIDER_VAR: &str = "JARVIS_STT_PROVIDER";
 
 /// First file in `dir` whose lower-case name contains every `has` part, none of `not`, and ends
 /// with `ext`. An `int8` file wins over a full-precision one. The sherpa-onnx release archives
@@ -42,24 +48,12 @@ fn pick(dir: &Path, has: &[&str], not: &[&str], ext: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// The Moonshine files found in a folder, before anything is loaded.
+/// The Whisper files found in a folder, before anything is loaded.
 #[derive(Debug, PartialEq, Eq)]
 struct Files {
     tokens: String,
-    parts: Parts,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Parts {
-    /// Newer archives: one encoder and one merged decoder.
-    Merged { encoder: String, decoder: String },
-    /// The first release: preprocessor, encoder, and two decoders.
-    Split {
-        preprocessor: String,
-        encoder: String,
-        uncached: String,
-        cached: String,
-    },
+    encoder: String,
+    decoder: String,
 }
 
 /// Finds the files, or says which kind of problem it is: no folder or no tokens file means the
@@ -74,53 +68,32 @@ fn find_files(dir: &Path) -> Result<Files, VoiceError> {
     };
     let incomplete =
         || VoiceError::Failed("the speech model folder is incomplete; download it again".into());
-    let parts = if let Some(decoder) = pick(dir, &["merged"], &[], ".onnx") {
-        Parts::Merged {
-            encoder: pick(dir, &["encode"], &["merged"], ".onnx").ok_or_else(incomplete)?,
-            decoder,
-        }
-    } else {
-        Parts::Split {
-            preprocessor: pick(dir, &["preprocess"], &[], ".onnx").ok_or_else(incomplete)?,
-            encoder: pick(dir, &["encode"], &[], ".onnx").ok_or_else(incomplete)?,
-            uncached: pick(dir, &["uncached"], &[], ".onnx").ok_or_else(incomplete)?,
-            cached: pick(dir, &["cached"], &["uncached"], ".onnx").ok_or_else(incomplete)?,
-        }
-    };
-    Ok(Files { tokens, parts })
+    Ok(Files {
+        tokens,
+        encoder: pick(dir, &["encoder"], &[], ".onnx").ok_or_else(incomplete)?,
+        decoder: pick(dir, &["decoder"], &[], ".onnx").ok_or_else(incomplete)?,
+    })
 }
 
-fn config(f: Files, threads: i32) -> OfflineRecognizerConfig {
+fn config(f: &Files, threads: i32, provider: &str) -> OfflineRecognizerConfig {
     let mut m = OfflineModelConfig {
         num_threads: threads,
-        provider: Some("cpu".into()),
-        tokens: Some(f.tokens),
+        provider: Some(provider.into()),
+        tokens: Some(f.tokens.clone()),
         ..Default::default()
     };
-    match f.parts {
-        Parts::Merged { encoder, decoder } => {
-            m.moonshine.encoder = Some(encoder);
-            m.moonshine.merged_decoder = Some(decoder);
-        }
-        Parts::Split {
-            preprocessor,
-            encoder,
-            uncached,
-            cached,
-        } => {
-            m.moonshine.preprocessor = Some(preprocessor);
-            m.moonshine.encoder = Some(encoder);
-            m.moonshine.uncached_decoder = Some(uncached);
-            m.moonshine.cached_decoder = Some(cached);
-        }
-    }
+    m.whisper.encoder = Some(f.encoder.clone());
+    m.whisper.decoder = Some(f.decoder.clone());
+    // The English-only model: no language detection pass, and transcribe rather than translate.
+    m.whisper.language = Some("en".into());
+    m.whisper.task = Some("transcribe".into());
     OfflineRecognizerConfig {
         model_config: m,
         ..Default::default()
     }
 }
 
-/// Moonshine, loaded on first use from `dir`.
+/// Whisper, loaded on first use from `dir`.
 pub struct SherpaTranscriber {
     dir: PathBuf,
     threads: i32,
@@ -131,15 +104,27 @@ impl SherpaTranscriber {
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
-            // Two threads is plenty for a short utterance and leaves cores for the rest of the app.
-            threads: 2,
+            // Whisper small is heavier than the model it replaced: four threads keep a short
+            // utterance to a couple of seconds on a laptop.
+            threads: 4,
             recogniser: None,
         }
     }
 
     fn load(&self) -> Result<OfflineRecognizer, VoiceError> {
         let files = find_files(&self.dir)?;
-        OfflineRecognizer::create(&config(files, self.threads))
+        let wanted = std::env::var(PROVIDER_VAR)
+            .ok()
+            .map(|v| v.trim().to_lowercase())
+            .filter(|v| !v.is_empty() && v != "cpu");
+        if let Some(p) = wanted {
+            if let Some(rec) = OfflineRecognizer::create(&config(&files, self.threads, &p)) {
+                tracing::info!(provider = %p, "speech model loaded");
+                return Ok(rec);
+            }
+            tracing::warn!(provider = %p, "speech provider not usable; using the CPU");
+        }
+        OfflineRecognizer::create(&config(&files, self.threads, "cpu"))
             .ok_or_else(|| VoiceError::Failed("the speech model could not be loaded".into()))
     }
 }
@@ -194,7 +179,7 @@ mod tests {
     #[test]
     fn a_partly_downloaded_model_is_a_failure_that_says_so_not_a_crash() {
         let d = dir("partial");
-        touch(&d, &["tokens.txt", "encode.int8.onnx"]);
+        touch(&d, &["small.en-tokens.txt", "small.en-encoder.int8.onnx"]);
         match find_files(&d) {
             Err(VoiceError::Failed(m)) => assert!(m.contains("incomplete")),
             other => panic!("{other:?}"),
@@ -208,61 +193,54 @@ mod tests {
     }
 
     #[test]
-    fn both_moonshine_layouts_are_found_and_int8_wins() {
-        let split = dir("split");
+    fn the_whisper_files_are_found_and_int8_wins() {
+        let d = dir("whisper");
         touch(
-            &split,
+            &d,
             &[
-                "tokens.txt",
-                "preprocess.onnx",
-                "encode.onnx",
-                "encode.int8.onnx",
-                "uncached_decode.int8.onnx",
-                "cached_decode.int8.onnx",
+                "small.en-tokens.txt",
+                "small.en-encoder.onnx",
+                "small.en-encoder.int8.onnx",
+                "small.en-decoder.onnx",
+                "small.en-decoder.int8.onnx",
             ],
         );
-        let f = find_files(&split).unwrap();
-        match f.parts {
-            Parts::Split {
-                encoder,
-                uncached,
-                cached,
-                ..
-            } => {
-                assert!(encoder.ends_with("encode.int8.onnx"), "{encoder}");
-                assert!(uncached.ends_with("uncached_decode.int8.onnx"));
-                assert!(cached.ends_with("cached_decode.int8.onnx"));
-                assert!(!cached.contains("uncached"));
-            }
-            other => panic!("{other:?}"),
-        }
-        let merged = dir("merged");
-        touch(
-            &merged,
-            &[
-                "tokens.txt",
-                "encoder_model.onnx",
-                "decoder_model_merged.onnx",
-            ],
+        let f = find_files(&d).unwrap();
+        assert!(
+            f.encoder.ends_with("small.en-encoder.int8.onnx"),
+            "{}",
+            f.encoder
         );
-        match find_files(&merged).unwrap().parts {
-            Parts::Merged { encoder, decoder } => {
-                assert!(encoder.ends_with("encoder_model.onnx"));
-                assert!(decoder.ends_with("decoder_model_merged.onnx"));
-            }
-            other => panic!("{other:?}"),
-        }
-        let _ = std::fs::remove_dir_all(split);
-        let _ = std::fs::remove_dir_all(merged);
+        assert!(
+            f.decoder.ends_with("small.en-decoder.int8.onnx"),
+            "{}",
+            f.decoder
+        );
+        assert!(f.tokens.ends_with("small.en-tokens.txt"));
+        let _ = std::fs::remove_dir_all(d);
     }
 
-    /// Needs the real model: `JARVIS_TEST_MOONSHINE_DIR=<folder> cargo test -- --ignored`.
+    #[test]
+    fn the_config_asks_for_english_transcription_on_the_chosen_provider() {
+        let f = Files {
+            tokens: "t.txt".into(),
+            encoder: "e.onnx".into(),
+            decoder: "d.onnx".into(),
+        };
+        let c = config(&f, 4, "coreml");
+        assert_eq!(c.model_config.provider.as_deref(), Some("coreml"));
+        assert_eq!(c.model_config.whisper.language.as_deref(), Some("en"));
+        assert_eq!(c.model_config.whisper.task.as_deref(), Some("transcribe"));
+        assert_eq!(c.model_config.num_threads, 4);
+    }
+
+    /// Needs the real model: `JARVIS_TEST_WHISPER_DIR=<folder> cargo test -- --ignored`.
     /// A second of silence must give an answer (empty text is fine), not an error or a crash.
     #[test]
-    #[ignore = "needs the Moonshine model files"]
+    #[ignore = "needs the Whisper model files"]
     fn the_real_model_answers_for_silence() {
-        let Ok(d) = std::env::var("JARVIS_TEST_MOONSHINE_DIR") else {
-            panic!("set JARVIS_TEST_MOONSHINE_DIR to the model folder");
+        let Ok(d) = std::env::var("JARVIS_TEST_WHISPER_DIR") else {
+            panic!("set JARVIS_TEST_WHISPER_DIR to the model folder");
         };
         let mut t = SherpaTranscriber::new(PathBuf::from(d));
         assert!(t.transcribe(&vec![0.0; 16_000]).is_ok());
@@ -271,10 +249,10 @@ mod tests {
     /// The model's own sample recording, `test_wavs/0.wav` (16 kHz, 16-bit mono), against the
     /// sentence it ships with in `test_wavs/trans.txt`. Same environment variable.
     #[test]
-    #[ignore = "needs the Moonshine model files"]
+    #[ignore = "needs the Whisper model files"]
     fn the_real_model_hears_its_own_sample_sentence() {
-        let Ok(d) = std::env::var("JARVIS_TEST_MOONSHINE_DIR") else {
-            panic!("set JARVIS_TEST_MOONSHINE_DIR to the model folder");
+        let Ok(d) = std::env::var("JARVIS_TEST_WHISPER_DIR") else {
+            panic!("set JARVIS_TEST_WHISPER_DIR to the model folder");
         };
         let d = PathBuf::from(d);
         let bytes = std::fs::read(d.join("test_wavs/0.wav")).unwrap();

@@ -7,6 +7,7 @@ type Props = React.ComponentProps<typeof PushToTalk>;
 function setup(props: Partial<Props> = {}) {
   const onStart = vi.fn(() => Promise.resolve());
   const onStop = vi.fn();
+  const onTap = vi.fn();
   const base: Props = {
     unavailable: false,
     busy: false,
@@ -14,11 +15,12 @@ function setup(props: Partial<Props> = {}) {
     micOpen: false,
     onStart,
     onStop,
+    onTap,
   };
   const view = render(<PushToTalk {...base} {...props} />);
   const again = (p: Partial<Props>) =>
     view.rerender(<PushToTalk {...base} {...props} {...p} />);
-  return { onStart, onStop, again, ...view };
+  return { onStart, onStop, onTap, again, ...view };
 }
 
 const button = () =>
@@ -40,8 +42,8 @@ describe("PushToTalk", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("a hold starts on press and sends once on release", () => {
-    const { onStart, onStop } = setup();
+  it("a hold starts on press and sends once on release, without a tap", () => {
+    const { onStart, onStop, onTap } = setup();
     press();
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(button()).toHaveAttribute("aria-pressed", "true");
@@ -49,14 +51,16 @@ describe("PushToTalk", () => {
     release();
     release();
     expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onTap).not.toHaveBeenCalled();
     expect(button()).toHaveAttribute("aria-pressed", "false");
   });
 
   it("a tap does not send on release; the capture keeps running", () => {
-    const { onStart, onStop } = setup();
+    const { onStart, onStop, onTap } = setup();
     tap();
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(onStop).not.toHaveBeenCalled();
+    expect(onTap).toHaveBeenCalledTimes(1);
     expect(button()).toHaveAttribute("aria-pressed", "true");
   });
 

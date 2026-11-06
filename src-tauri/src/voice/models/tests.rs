@@ -276,7 +276,9 @@ fn the_shipped_manifest_is_valid_and_pins_everything() {
         // Two downloads must never share a folder: installing one replaces the folder.
         assert!(dirs.insert(s.dir.clone()), "{} shares its folder", s.id);
         // The licence file of anything that comes as an archive travels with it.
-        if s.format != Format::File {
+        // The Whisper archive ships no licence file (OpenAI Whisper weights are MIT, named in the
+        // manifest's `licence` field and in D-31); every other archive carries its own.
+        if s.format != Format::File && s.id != "stt-whisper-small-en-int8" {
             assert!(s.files.iter().any(|f| f.name == "LICENSE"), "{}", s.id);
         }
         if s.set == SET_SPEECH {
@@ -721,9 +723,9 @@ fn the_real_archive_matches_the_manifest_and_unpacks() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// A real download from github.com through the manager. Needs internet and about 250 MB.
+/// A real download from github.com through the manager. Needs internet and about 640 MB.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "downloads about 250 MB from github.com"]
+#[ignore = "downloads about 640 MB from github.com"]
 async fn a_real_download_from_github_installs_the_model() {
     let root = temp_root("real-download");
     let m = ModelManager::new(root.clone());

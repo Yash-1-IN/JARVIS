@@ -9,6 +9,7 @@ interface Props {
   onToggleMute: () => void;
   onTalkStart: () => Promise<void>;
   onTalkStop: () => void;
+  onTalkTap: () => void;
 }
 
 export function Controls({
@@ -17,6 +18,7 @@ export function Controls({
   onToggleMute,
   onTalkStart,
   onTalkStop,
+  onTalkTap,
 }: Props) {
   const muted = snapshot.mic === "muted";
   return (
@@ -28,6 +30,7 @@ export function Controls({
         micOpen={snapshot.mic === "capturing"}
         onStart={onTalkStart}
         onStop={onTalkStop}
+        onTap={onTalkTap}
       />
       <button
         type="button"

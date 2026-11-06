@@ -99,6 +99,12 @@ export interface Transport {
   voiceAttach(onEvent: TurnListener): Promise<void>;
   /** Contract `voice_capture_start`: push to talk, key down. Refused until `voiceAttach`. */
   voiceCaptureStart(): Promise<void>;
+  /**
+   * Contract `voice_capture_tap`: key up after a tap (a press under about 300 ms). The capture it
+   * started switches from held to auto, so the end of speech may end it. Safe at any time, including
+   * before the microphone has opened and when nothing is capturing.
+   */
+  voiceCaptureTap(): Promise<void>;
   /** Contract `voice_capture_stop`: key up. Safe when nothing is capturing. */
   voiceCaptureStop(): Promise<void>;
   /** `transcript.final`: the words heard; they open the voice turn the attached channel then streams. */

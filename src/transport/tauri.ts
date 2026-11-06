@@ -225,6 +225,10 @@ export class TauriTransport implements Transport {
     return invoke("voice_capture_start");
   }
 
+  voiceCaptureTap(): Promise<void> {
+    return invoke("voice_capture_tap");
+  }
+
   voiceCaptureStop(): Promise<void> {
     return invoke("voice_capture_stop");
   }

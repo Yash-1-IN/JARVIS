@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 
 import App from "./App";
 import { useChatStore } from "./state/chatStore";
+import { usePanelSplit } from "./state/layoutPref";
 import { useSnapshotStore } from "./state/snapshotStore";
 import { MockTransport } from "./transport/mock/MockTransport";
 import { TauriTransport } from "./transport/tauri";
@@ -316,40 +317,35 @@ describe("App panels (issue #37)", () => {
     expect(settingsBtn).toHaveFocus();
   });
 
-  it("keeps the top bar and the side panel's offset in one sticky block, with approvals inside it", async () => {
+  it("keeps the top bar and the approval cards in one block above the work area", async () => {
     const { container } = render(<App transport={new MockTransport()} />);
     await screen.findByTestId("phase");
     const top = container.querySelector(".app-top");
     expect(top).not.toBeNull();
-    // The header stays visible with the approval cards under it (CSS: position sticky).
+    // The header stays on top with the approval cards under it (the work area scrolls inside itself).
     expect(top?.querySelector("header.app-header")).not.toBeNull();
     expect(
       within(top as HTMLElement).getByRole("navigation", { name: "Panels" }),
     ).toBeInTheDocument();
-    // The conversation is not inside it, so it scrolls underneath.
+    // The conversation is not inside it.
     expect(top?.querySelector(".chat")).toBeNull();
   });
 
-  it("puts the page back where it was when a panel closes, and does not scroll to the button", async () => {
-    // jsdom does not scroll; give the page a scroll position that we can set and read.
-    let top = 0;
-    Object.defineProperty(document.documentElement, "scrollTop", {
-      configurable: true,
-      get: () => top,
-      set: (v: number) => {
-        top = v;
-      },
-    });
+  it("opening and closing a panel never hides or rebuilds the conversation, and never scrolls to the button", async () => {
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
     try {
-      render(<App transport={new MockTransport()} />);
+      const { container } = render(<App transport={new MockTransport()} />);
       await screen.findByTestId("phase");
-      top = 640; // scrolled down the conversation
+      const log = container.querySelector(".chat-scroll") as HTMLElement;
+      expect(log).not.toBeNull();
+      log.scrollTop = 640; // scrolled up the conversation
       await act(async () =>
         fireEvent.click(screen.getByRole("button", { name: "Settings" })),
       );
-      // On a narrow window the conversation is hidden and the page loses its place.
-      top = 0;
+      // The same scroll area is still there, beside the open panel, with the same position.
+      expect(container.querySelector(".chat-scroll")).toBe(log);
+      expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
+      expect(log.scrollTop).toBe(640);
       await act(async () =>
         fireEvent.click(
           within(screen.getByRole("region", { name: "Settings" })).getByRole(
@@ -358,33 +354,155 @@ describe("App panels (issue #37)", () => {
           ),
         ),
       );
-      expect(top).toBe(640);
-      // Neither moving focus into the panel nor back to its button may scroll the page.
+      expect(container.querySelector(".chat-scroll")).toBe(log);
+      expect(log.scrollTop).toBe(640);
+      // Neither moving focus into the panel nor back to its button may scroll anything.
       const calls = focus.mock.calls.filter(([opts]) => opts !== undefined);
       expect(calls.length).toBeGreaterThanOrEqual(2);
       for (const [opts] of calls) {
         expect(opts).toEqual({ preventScroll: true });
       }
-      // Switching between panels keeps the first saved position, not the one in between.
-      top = 300;
-      await act(async () =>
-        fireEvent.click(screen.getByRole("button", { name: "Activity" })),
-      );
-      top = 0;
-      await act(async () =>
-        fireEvent.click(screen.getByRole("button", { name: "Memory" })),
-      );
-      top = 0;
-      await act(async () =>
-        fireEvent.click(screen.getByRole("button", { name: "Memory" })),
-      );
-      expect(top).toBe(300);
     } finally {
       focus.mockRestore();
-      delete (document.documentElement as unknown as Record<string, unknown>)
-        .scrollTop;
     }
   });
+
+  it("opens a panel as a pop-up window by default: a modal dialog over a page that cannot be reached, closed by Esc, Close or a click outside", async () => {
+    usePanelSplit.setState({ split: "popup" });
+    try {
+      const { container } = render(<App transport={new MockTransport()} />);
+      await screen.findByTestId("phase");
+      const settingsBtn = screen.getByRole("button", { name: "Settings" });
+      const rail = container.querySelector("aside.rail");
+      const chat = container.querySelector("section.chat");
+      await act(async () => fireEvent.click(settingsBtn));
+      const dialog = screen.getByRole("dialog", { name: "Settings" });
+      expect(dialog).toHaveAttribute("aria-modal", "true");
+      expect(dialog.closest(".modal-backdrop")).not.toBeNull();
+      // The page behind is dimmed and cannot be reached, and nothing in it moved or was rebuilt.
+      expect(container.querySelector(".app-top")).toHaveAttribute("inert");
+      expect(container.querySelector(".app-main")).toHaveAttribute("inert");
+      expect(container.querySelector("aside.rail")).toBe(rail);
+      expect(container.querySelector("section.chat")).toBe(chat);
+      // A click inside does nothing; a click on the dimmed area closes it and gives the focus back.
+      fireEvent.mouseDown(dialog);
+      expect(
+        screen.getByRole("dialog", { name: "Settings" }),
+      ).toBeInTheDocument();
+      await act(async () =>
+        fireEvent.mouseDown(container.querySelector(".modal-backdrop")!),
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(settingsBtn).toHaveFocus();
+      expect(container.querySelector(".app-main")).not.toHaveAttribute("inert");
+      // Esc inside it closes it too, and does not cancel anything.
+      await act(async () => fireEvent.click(settingsBtn));
+      await act(async () =>
+        fireEvent.keyDown(screen.getByRole("dialog", { name: "Settings" }), {
+          key: "Escape",
+        }),
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(settingsBtn).toHaveFocus();
+    } finally {
+      usePanelSplit.setState({ split: "rail" });
+    }
+  });
+
+  it("hides the pop-up while an approval card waits, so the card is never behind it, and brings it back after", async () => {
+    vi.useFakeTimers();
+    usePanelSplit.setState({ split: "popup" });
+    try {
+      const t = new MockTransport();
+      const { container } = render(<App transport={t} />);
+      await act(async () => {});
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Settings" })),
+      );
+      expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
+      expect(container.querySelector(".app-top")).toHaveAttribute("inert");
+      // An approval arrives: the pop-up is hidden (still mounted) and the page can be reached.
+      act(() => {
+        t.runScript("approval");
+        vi.advanceTimersByTime(5000);
+      });
+      expect(container.querySelector(".approvals")).not.toBeNull();
+      expect(container.querySelector(".modal-backdrop")).toHaveAttribute(
+        "hidden",
+      );
+      expect(container.querySelector(".app-top")).not.toHaveAttribute("inert");
+      expect(container.querySelector(".app-main")).not.toHaveAttribute("inert");
+    } finally {
+      usePanelSplit.setState({ split: "rail" });
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps Tab inside the pop-up and moves between the settings sections with the arrow keys", async () => {
+    usePanelSplit.setState({ split: "popup" });
+    try {
+      render(<App transport={new MockTransport()} />);
+      await screen.findByTestId("phase");
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Settings" })),
+      );
+      const dialog = await screen.findByRole("dialog", { name: "Settings" });
+      const close = within(dialog).getByRole("button", { name: /Close/ });
+      // Shift+Tab from the first control goes to the last one inside, not to the page.
+      close.focus();
+      await act(async () =>
+        fireEvent.keyDown(close, { key: "Tab", shiftKey: true }),
+      );
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).not.toBe(close);
+      // Tab from the last control goes back to the first.
+      const last = document.activeElement as HTMLElement;
+      await act(async () => fireEvent.keyDown(last, { key: "Tab" }));
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      // The sections are a vertical list: Down and Up move between them.
+      const tabs = within(dialog).getAllByRole("tab");
+      tabs[0].focus();
+      await act(async () => fireEvent.keyDown(tabs[0], { key: "ArrowDown" }));
+      expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+      await act(async () => fireEvent.keyDown(tabs[1], { key: "ArrowUp" }));
+      expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+    } finally {
+      usePanelSplit.setState({ split: "rail" });
+    }
+  });
+
+  it.each([
+    ["rail", ".rail-col", "aside.rail"],
+    ["stage", ".stage", "section.chat"],
+    ["both", ".app-main", "main.workspace"],
+  ] as const)(
+    "opens a panel where the person chose (%s) and leaves the rest where it was",
+    async (split, parentSel, nextSel) => {
+      usePanelSplit.setState({ split });
+      try {
+        const { container } = render(<App transport={new MockTransport()} />);
+        await screen.findByTestId("phase");
+        const rail = container.querySelector("aside.rail") as HTMLElement;
+        const chat = container.querySelector("section.chat") as HTMLElement;
+        // Closed: the talk column and the conversation are side by side.
+        expect(rail.querySelector(".push-to-talk")).not.toBeNull();
+        await act(async () =>
+          fireEvent.click(screen.getByRole("button", { name: "Settings" })),
+        );
+        const panel = screen.getByRole("region", { name: "Settings" });
+        const parent = container.querySelector(parentSel) as HTMLElement;
+        // The panel is in the chosen place, above what it shares the space with.
+        expect(panel.parentElement).toBe(parent);
+        expect(panel.nextElementSibling).toBe(container.querySelector(nextSel));
+        // Nothing was rebuilt: the same talk button and conversation are still there.
+        expect(container.querySelector("aside.rail")).toBe(rail);
+        expect(container.querySelector("section.chat")).toBe(chat);
+        expect(rail.querySelector(".push-to-talk")).not.toBeNull();
+      } finally {
+        usePanelSplit.setState({ split: "rail" });
+      }
+    },
+  );
 
   it("Esc inside a panel closes it and does not cancel the reply; outside it still cancels", async () => {
     vi.useFakeTimers();
