@@ -6,7 +6,7 @@ This guide explains how to install and open JARVIS on macOS (Apple silicon only)
 
 ## What to expect in the alpha
 
-- **Voice input & typing**: push to talk is available—you can type, or hold the **Hold to talk** button in the window and speak. Speech to text uses Moonshine. The **wake word and spoken replies are not built**. Speech requires speech model files (about 250 MB), which are downloaded once and verified against fixed checksums (today by an app call or manual download, with a UI button coming); see [`docs/known-limitations.md`](known-limitations.md).
+- **Voice input & typing**: push to talk is available—you can type, or press the **Hold or tap to talk** button in the window and speak (hold it while you speak, or tap it and stop talking). Speech to text runs on your Mac. Spoken replies are not built. The **wake word ("hey jarvis") is not offered on a Mac** (it works on Windows and Linux), so the button is how you speak here. Speech needs model files, which you download once under **Settings → Models** (the size is shown there); they are verified against fixed checksums. See [`docs/known-limitations.md`](known-limitations.md).
 - **Apple silicon only**: the current alpha DMG build is compiled for Apple silicon Macs.
 - **No automatic updates**: when a newer build is ready, download and install the new DMG build by hand.
 - **Default icon**: the app uses the default Tauri icon until custom artwork exists.
@@ -53,7 +53,7 @@ In `src-tauri/Info.plist`, JARVIS declares:
 
 > _"JARVIS listens only while you use push to talk, and keeps the sound in memory only; it is never saved."_
 
-- **The prompt**: the first time you click and hold the **Hold to talk** button in the installed app, macOS asks for microphone access displaying this description (not checked on a Mac).
+- **The prompt**: the first time you press the **Hold or tap to talk** button in the installed app, macOS asks for microphone access displaying this description (not checked on a Mac).
 - Click **OK** (or Allow) to allow JARVIS to capture your voice while holding the button (not checked on a Mac).
 - **Privacy**: audio is kept in memory only while listening and is never written to disk (see [`docs/privacy.md`](privacy.md)).
 - If you ever need to check or grant microphone permission later, go to **System Settings** → **Privacy & Security** → **Microphone** and ensure the toggle for **JARVIS** is turned on (not checked on a Mac).
