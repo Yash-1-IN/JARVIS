@@ -6,7 +6,7 @@ This guide explains how to install and start JARVIS on Windows 10 or Windows 11.
 
 ## What to expect in the alpha
 
-- **Typing only today**: voice features (wake word, push-to-talk, speech-to-text, and spoken replies) are not built yet. You talk to JARVIS by typing.
+- **Typing or push to talk**: you can type, or press **Hold or tap to talk** after downloading the speech models in **Settings → Models** (about 250 MB, once). Spoken replies are not built yet. The wake word ("hey jarvis") engine exists, but its switch in the window is not built yet.
 - **No automatic updates**: when a newer build is ready, download and run the new installer by hand.
 - **Default icon**: the app uses the default Tauri icon until custom artwork is added.
 
@@ -31,16 +31,16 @@ Because JARVIS is an early alpha, the Windows installer is not signed with a pai
 
 ## 3. Check the Windows microphone privacy setting
 
-Voice input is **not built yet**, so JARVIS does not use your microphone today.
+JARVIS uses your microphone only while you use **Hold or tap to talk** (and the wake word, once it can be turned on). Sound is kept in memory only and is never saved.
 
-If you want to prepare your Windows microphone setting for when voice is added later (spec §6.7):
+To check that Windows allows it (spec §6.7):
 
 1. Open the Windows **Settings** app (not checked in the app).
 2. Click **Privacy & security** on Windows 11, or **Privacy** on Windows 10 (not checked in the app).
 3. Click **Microphone** (not checked in the app).
 4. Make sure **Let apps access your microphone** (and access for desktop apps) is switched on (not checked in the app).
 
-When voice support is turned on in a future build, if Windows blocks microphone access, JARVIS will show **Microphone blocked** (`MIC_PERMISSION_DENIED`) with the hint: "Allow microphone access for JARVIS in your system settings."
+If Windows blocks microphone access, the microphone may not start. JARVIS then reports that it could not hear anything, or that the microphone did not start and that you should check JARVIS is allowed to use it. The specific **Microphone blocked** message (`MIC_PERMISSION_DENIED`) is defined but is not shown yet, because JARVIS cannot read the Windows permission state. If push to talk does not hear you, check this setting first.
 
 ## 4. Start JARVIS
 

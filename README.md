@@ -15,15 +15,20 @@ Tauri 2 and Rust on the backend, React and TypeScript on the front.
 - Settings for the model, caps, allowed folders and allowed apps.
 - An activity view that lists every tool call, including refused ones, newest first.
 - Tools the model can ask for, all gated by a permission layer in Rust: `time.now`, `files.search`,
-  `files.read_text`, `files.move` and `files.rename`. Anything that changes or reads your files needs your
-  approval first, on an approval card; approvals are single-use and expire after 60 seconds.
+  `files.read_text`, `files.move`, `files.rename`, `apps.list_allowed`, `apps.launch`, `system.status`,
+  `memory.propose` and the music tools (`music.control`, `music.now_playing`, `music.play`,
+  `music.play_playlist`, `music.play_liked`, with Spotify). Anything that changes or reads your files needs
+  your approval first, on an approval card; approvals are single-use and expire after 60 seconds.
+- Push to talk: **Hold or tap to talk** turns your speech into text on this computer (Moonshine, after a
+  one-time model download in Settings → Models) and runs it as a normal request.
+- Conversation history and memories you confirm, kept on this computer.
 
 ## What does not work yet
 
-- Voice: wake word, speech-to-text and text-to-speech are not built.
+- Voice: spoken replies (text-to-speech) are not built, and the wake word cannot be turned on from the window yet (it is offered on Windows and Linux only).
 - Compact orb mode, tray icon and start at login.
 - Signed installers. CI builds unsigned (Windows) and ad-hoc signed (macOS) installers as
-  artifacts of the `installers` workflow; macOS needs right-click → Open the first time.
+  artifacts of the `installers` workflow; macOS needs System Settings → Privacy & Security → Open Anyway the first time.
 
 ## Run it from source
 

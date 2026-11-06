@@ -5,8 +5,13 @@ wrong, that is a bug: please say so (see `SECURITY.md`).
 
 ## What leaves your computer
 
-JARVIS talks to **one** service: the Anthropic API, using **your own API key**. There is no JARVIS server,
-no account, no analytics and no crash reporting. Nothing else is contacted.
+For its replies JARVIS talks to **one** service: the Anthropic API, using **your own API key**. There is no
+JARVIS server, no account, no analytics and no crash reporting. Two other things are contacted, and only
+when you choose them: **Spotify** (connecting it, and asking for a song or playlist, goes to
+`accounts.spotify.com` and `api.spotify.com`, see below) and the **speech model download** (the
+**Download speech models** button in Settings → Models fetches files from the release pages of the
+sherpa-onnx project on `github.com`; if you turn the wake word on, also from the onnxruntime and
+openWakeWord projects). `github.com` sees your internet address like any download; nothing you say is sent.
 
 When you send a message, these go to Anthropic with it:
 
@@ -31,13 +36,15 @@ time, system status, open-an-app and find-a-file questions are also answered on 
 | What | Where (typical) | How long | Protected by |
 | --- | --- | --- | --- |
 | Your **API key** | The operating system's credential store (Windows Credential Manager, macOS Keychain; on Linux the desktop's own secret store). If none is available it is kept only until the app closes. | Until you remove it | The OS |
-| **Settings** (model, spend caps, allowed folders and apps) | `settings.json` in the app config folder | Until you change it | OS file permissions |
+| **Settings** (model, spend caps, the most actions in one request, allowed folders and apps, the Spotify Client ID, and your voice choices: microphone, wake word on or off and whether its notice was accepted) | `settings.json` in the app config folder | Until you change it | OS file permissions |
+| Your **Spotify sign-in** (a refresh token, only when you connect Spotify; never shown, never in a file) | The operating system's credential store, under its own name (`spotify-refresh-token`). If none is available it is kept only until the app closes. | Until you press Disconnect or change the Client ID | The OS |
+| **Speech models** (only after you press Download; and the wake word's files if you turn it on) | `models` in the app data folder (about 250 MB for speech recognition) | Until you delete the folder | OS file permissions |
 | **Conversation history** (what you said, JARVIS's replies, one-line summaries of actions) | `jarvis.db` in the app data folder | **30 days by default**; you can choose off, 7 days, 1 year or forever | The OS disk encryption (see below) |
 | **Memories** you kept, and ones waiting for your answer | `jarvis.db` | Until you delete them | The OS disk encryption |
 | **Display preference** (3D hologram, 2D orb or automatic) | The window's local storage, inside the app data folder | Until you change it or clear the app's data | OS file permissions |
 | **Exported file** (when you press Export) | A plain-text `jarvis-export-<date>.json` in your Downloads folder, saved by the window's own download | Until you delete it. It is **your file** after that: it is not covered by retention, "Delete all history" or Delete on a memory. | Whatever protects your Downloads folder |
 | **Activity log** (every action JARVIS tried, who decided, how it ended; never file contents) | In memory only for now | Until the app closes | n/a |
-| **Logs** (events and errors, with key-shaped text masked; not your messages) | The app log folder | Rotated daily | OS file permissions |
+| **Logs** (events and errors, with key-shaped text masked; not your messages. Voice lines record technical facts only: the microphone's name, how long a capture lasted, its peak level and how many words were recognised, never the sound or the words) | The app log folder | Rotated daily; the last 14 days are kept | OS file permissions |
 
 Typical folders: Windows `%APPDATA%\com.jarvis.desktop` (data and settings) and
 `%LOCALAPPDATA%\com.jarvis.desktop\logs`; macOS `~/Library/Application Support/com.jarvis.desktop` and
