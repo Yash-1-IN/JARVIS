@@ -38,6 +38,14 @@
 /src-tauri/src/audio/          @Yash-1-IN @kibong2
 /src-tauri/src/memory/         @Yash-1-IN @kibong2
 /src-tauri/src/wake/           @Yash-1-IN @kibong2
+/src-tauri/src/platform/       @Yash-1-IN @kibong2
+/src-tauri/src/models/         @Yash-1-IN @kibong2
+# The approval and permission screens: a restyle can hide or recolour Deny, or make a card look like a
+# normal message, without touching any logic (a file-level line cannot split styles.css: see CLAUDE.md).
+/src/components/ApprovalCard*          @Yash-1-IN @kibong2
+/src/components/MemoryProposalCard*    @Yash-1-IN @kibong2
+/src/components/PolicySettings*        @Yash-1-IN @kibong2
+/src/components/WelcomeNotice*         @Yash-1-IN @kibong2
 /src-tauri/src/ipc/            @Yash-1-IN @kibong2
 /src-tauri/capabilities/       @Yash-1-IN @kibong2
 /src-tauri/Entitlements.plist  @Yash-1-IN @kibong2

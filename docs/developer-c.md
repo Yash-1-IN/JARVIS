@@ -1,12 +1,12 @@
 # Developer C: brief
 
-Status: **proposed, partly replaced by D-32** (2026-11-06). D-32 makes Developer C a main developer
+Status: **decided, partly replaced by D-32** (2026-11-08). D-32 makes Developer C a main developer
 with three lanes (the visual layer, release and CI help, test infrastructure); `CLAUDE.md`
 (Ownership) and `.github/CODEOWNERS` carry the same lanes. Where this page's *Lane* and *Off limits*
 tables disagree with D-32, **D-32 wins**: in particular `src/styles.css`, `src/styles/**` and
 `src/state/layoutPref.ts` are now C's, and `src/**` is no longer wholly off limits. The rules, the
-second tier, the token-use habits and the secrets rules below stand. Nothing here takes effect until
-the owner gives C write access and both developers have agreed.
+second tier, the token-use habits and the secrets rules below stand. The owner and both developers
+agreed on 2026-11-08 and C has write access.
 
 Developer C is a third contributor (the owner's Google Antigravity access, an AI coding agent) that takes
 work which does not collide with the two existing lanes. The aim is more finished work, not more risk.
