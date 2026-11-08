@@ -1,4 +1,4 @@
-/* ---- Base look (issue #37). Light and dark follow the OS setting. ---- */
+/* ---- Base look (issue #37) & Liquid Glass tokens (issue #156). Light and dark follow the OS setting. ---- */
 :root {
   color-scheme: light dark;
   --bg: #f6f7f9;
@@ -11,6 +11,28 @@
   --user-bubble: #dbeafe;
   --danger: #b91c1c;
   --radius: 0.6rem;
+  /* Liquid Glass tokens (issue #156): solid-leaning translucent fallback when backdrop-filter is absent;
+     tuned in @supports below when blur is supported. Contrast stays >= 4.5:1 for --text and --muted. */
+  --glass-bg: rgb(255 255 255 / 0.92);
+  --glass-bg-elevated: rgb(255 255 255 / 0.95);
+  --glass-sheen: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.65) 0%,
+    rgb(255 255 255 / 0.18) 42%,
+    rgb(226 232 240 / 0.22) 100%
+  );
+  --glass-border: rgb(255 255 255 / 0.85);
+  --glass-panel-border-bottom: 1px solid var(--glass-border);
+  --glass-highlight:
+    inset 0 1px 0 rgb(255 255 255 / 0.95), inset 0 0 0 1px rgb(15 23 42 / 0.08);
+  --glass-shadow: 0 12px 32px rgb(15 23 42 / 0.1);
+  --glass-popup-shadow:
+    0 24px 64px rgb(15 23 42 / 0.22), 0 4px 16px rgb(15 23 42 / 0.08);
+  --glass-backdrop: rgb(15 23 42 / 0.28);
+  --glass-blur: 20px;
+  --glass-ambient:
+    radial-gradient(circle at 18% 24%, rgb(37 99 235 / 0.14), transparent 48%),
+    radial-gradient(circle at 82% 76%, rgb(14 165 233 / 0.12), transparent 52%);
   font:
     15px/1.5 system-ui,
     -apple-system,
@@ -31,6 +53,47 @@
     --accent-text: #0b1220;
     --user-bubble: #1e3a5f;
     --danger: #f87171;
+    --glass-bg: rgb(18 24 31 / 0.93);
+    --glass-bg-elevated: rgb(23 29 36 / 0.95);
+    --glass-sheen: linear-gradient(
+      160deg,
+      rgb(255 255 255 / 0.08) 0%,
+      rgb(255 255 255 / 0.02) 42%,
+      rgb(76 141 255 / 0.04) 100%
+    );
+    --glass-border: rgb(255 255 255 / 0.2);
+    --glass-highlight:
+      inset 0 1px 0 rgb(255 255 255 / 0.26),
+      inset 0 0 0 1px rgb(255 255 255 / 0.08);
+    --glass-shadow: 0 12px 34px rgb(0 0 0 / 0.42);
+    --glass-popup-shadow:
+      0 24px 68px rgb(0 0 0 / 0.62), 0 4px 18px rgb(0 0 0 / 0.35);
+    --glass-backdrop: rgb(5 8 13 / 0.46);
+    --glass-ambient:
+      radial-gradient(
+        circle at 18% 24%,
+        rgb(76 141 255 / 0.2),
+        transparent 48%
+      ),
+      radial-gradient(
+        circle at 82% 76%,
+        rgb(56 189 248 / 0.13),
+        transparent 52%
+      );
+  }
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  :root {
+    --glass-bg: rgb(255 255 255 / 0.85);
+    --glass-bg-elevated: rgb(255 255 255 / 0.86);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --glass-bg: rgb(18 24 31 / 0.87);
+      --glass-bg-elevated: rgb(20 27 35 / 0.88);
+    }
   }
 }
 
@@ -100,6 +163,8 @@ select {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  background-color: var(--bg);
+  background-image: var(--glass-ambient);
 }
 
 .app-header {
@@ -283,8 +348,10 @@ select {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  border-bottom: 2px solid var(--border);
-  background: var(--surface);
+  border-bottom: var(--glass-panel-border-bottom);
+  background-color: var(--glass-bg);
+  background-image: var(--glass-sheen);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
 }
 
 .side-panel-header {
@@ -294,8 +361,9 @@ select {
   justify-content: space-between;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid var(--glass-border);
+  background-color: var(--glass-bg-elevated);
+  box-shadow: var(--glass-highlight);
 }
 
 .side-panel-header h2 {
@@ -950,16 +1018,97 @@ blockquote.memory-text {
   display: grid;
   place-items: center;
   padding: 1.5rem;
-  background: rgb(0 0 0 / 0.45);
+  background: var(--glass-backdrop);
 }
 
 .modal-backdrop .side-panel {
   width: min(62rem, 100%);
   height: min(42rem, 100%);
-  border: 1px solid var(--border);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+  background-color: var(--glass-bg-elevated);
+  background-image: var(--glass-sheen);
+  box-shadow: var(--glass-highlight), var(--glass-popup-shadow);
   overflow: hidden;
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .modal-backdrop .side-panel {
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  }
+}
+
+/* Hard requirement (#156): approval and memory proposal cards are never glassy.
+   They stay 100% opaque, high contrast, and the most legible thing on screen. */
+.approval-card,
+.memory-card {
+  background: var(--surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Glass effect turned off in Settings → Display, or Automatic with system accessibility settings:
+   fall back to solid surfaces matching pre-#156 main and disable GPU blur (#156). */
+.app[data-glass="off"] {
+  --glass-bg: var(--surface);
+  --glass-bg-elevated: var(--surface);
+  --glass-sheen: none;
+  --glass-border: var(--border);
+  --glass-panel-border-bottom: 2px solid var(--border);
+  --glass-highlight: 0 0 0 transparent;
+  --glass-shadow: 0 0 0 transparent;
+  --glass-popup-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+  --glass-backdrop: rgb(0 0 0 / 0.45);
+  --glass-ambient: none;
+}
+
+.app[data-glass="off"] .side-panel,
+.app[data-glass="off"] .modal-backdrop .side-panel {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+@media (prefers-reduced-transparency: reduce),
+  (prefers-contrast: more),
+  (forced-colors: active) {
+  .app[data-glass="auto"] {
+    --glass-bg: var(--surface);
+    --glass-bg-elevated: var(--surface);
+    --glass-sheen: none;
+    --glass-border: var(--border);
+    --glass-panel-border-bottom: 2px solid var(--border);
+    --glass-highlight: 0 0 0 transparent;
+    --glass-shadow: 0 0 0 transparent;
+    --glass-popup-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+    --glass-backdrop: rgb(0 0 0 / 0.45);
+    --glass-ambient: none;
+  }
+
+  .app[data-glass="auto"] .side-panel,
+  .app[data-glass="auto"] .modal-backdrop .side-panel {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .app[data-glass="on"] {
+    --glass-bg: var(--surface);
+    --glass-bg-elevated: var(--surface);
+    --glass-sheen: none;
+    --glass-border: var(--border);
+    --glass-panel-border-bottom: 2px solid var(--border);
+    --glass-highlight: 0 0 0 transparent;
+    --glass-shadow: 0 0 0 transparent;
+    --glass-ambient: none;
+  }
+
+  .app[data-glass="on"] .side-panel,
+  .app[data-glass="on"] .modal-backdrop .side-panel {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 /* Settings in a pop-up: the sections down the left, the content beside them. */
