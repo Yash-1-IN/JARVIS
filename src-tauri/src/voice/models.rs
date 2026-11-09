@@ -246,6 +246,9 @@ fn wake_supported_on(platform: &str) -> bool {
             .any(|s| s.set == SET_WAKE)
 }
 
+/// The folder (inside `stt/`) of the model D-31 replaced.
+const LEGACY_MOONSHINE: &str = "moonshine-base-en-int8";
+
 /// The models this app version knows about.
 pub fn manifest() -> &'static [ModelSpec] {
     static M: LazyLock<Vec<ModelSpec>> = LazyLock::new(|| {
@@ -720,6 +723,30 @@ impl ModelManager {
     fn set_ready(&self, set: &str) -> bool {
         let mut members = self.specs.iter().filter(|s| s.set == set).peekable();
         members.peek().is_some() && members.all(|s| is_installed(&self.root, s))
+    }
+
+    /// Deletes the Moonshine speech model that D-31 replaced (about 250 MB), but only once the
+    /// Whisper model is installed and verified, so there is never a moment with no speech model.
+    /// The folder name is fixed here (never read from outside), and only that one folder is removed.
+    /// Returns true if something was removed.
+    pub fn remove_legacy_speech(&self) -> bool {
+        if !self.ready() {
+            return false;
+        }
+        let old = self.root.join("stt").join(LEGACY_MOONSHINE);
+        if !old.is_dir() {
+            return false;
+        }
+        match std::fs::remove_dir_all(&old) {
+            Ok(()) => {
+                tracing::info!("models: removed the old Moonshine speech model");
+                true
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "models: could not remove the old Moonshine speech model");
+                false
+            }
+        }
     }
 
     /// The folder a model's files are in (the speech engine reads it).

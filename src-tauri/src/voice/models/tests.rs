@@ -1108,3 +1108,25 @@ fn the_wake_word_is_offered_on_windows_and_linux_and_not_on_macos() {
     assert!(!wake_supported_on("macos-x86_64"));
     assert!(!wake_supported_on("other"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_old_moonshine_folder_is_removed_only_once_the_speech_set_is_installed() {
+    let a = archive(&good_items());
+    let srv = serve(a.clone()).await;
+    let spec = spec_for(&a, srv.url.clone());
+    let root = temp_root("legacy");
+    let m = manager(&root, &spec);
+    let old = root.join("stt").join(LEGACY_MOONSHINE);
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("encoder.onnx"), b"x").unwrap();
+    // Nothing else is installed yet: the old model is the only one, so it stays.
+    assert!(!m.remove_legacy_speech());
+    assert!(old.is_dir());
+    let (r, _) = run(&m).await;
+    assert_eq!(r, Ok(()));
+    assert!(m.remove_legacy_speech());
+    assert!(!old.exists());
+    // A second call has nothing to do, and the installed model is untouched.
+    assert!(!m.remove_legacy_speech());
+    assert!(m.ready());
+}
