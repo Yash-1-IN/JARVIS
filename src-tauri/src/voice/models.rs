@@ -40,6 +40,10 @@ pub const DEFAULT_SET_LIMIT: u64 = 700 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 400 * 1024 * 1024;
 /// Everything coming out of one archive may not be larger than this (guards against a compression bomb).
 const MAX_UNPACKED_BYTES: u64 = 700 * 1024 * 1024;
+/// The decompressed stream of one archive is cut off here (guards against a compression bomb). It
+/// is larger than `MAX_UNPACKED_BYTES` because an archive also holds files we skip and never write:
+/// the pinned Whisper archive unpacks to about 1.35 GB, of which we keep 375 MB.
+const MAX_STREAM_BYTES: u64 = 1536 * 1024 * 1024;
 /// A download that sends nothing for this long is given up (the partial file is kept for a resume).
 const STALL: Duration = Duration::from_secs(30);
 /// One whole download may not take longer than this.
@@ -485,8 +489,9 @@ fn extract(
     cancel: &CancellationToken,
 ) -> Result<(), ModelError> {
     let file = std::fs::File::open(archive).map_err(io)?;
-    // A decompressed stream is cut off at the unpacking limit, so a bomb cannot fill the disk.
-    let limit = MAX_UNPACKED_BYTES + MAX_FILE_BYTES;
+    // A decompressed stream is cut off at the stream limit, so a bomb cannot keep us busy for ever.
+    // Only the listed files are written, and those are capped by the unpacking limit above.
+    let limit = MAX_STREAM_BYTES;
     match spec.format {
         Format::TarBz2 => extract_tar(
             bzip2::read::BzDecoder::new(file).take(limit),

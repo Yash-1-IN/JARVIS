@@ -694,13 +694,14 @@ fn import_refuses_a_link_in_place_of_a_file() {
     let _ = std::fs::remove_dir_all(src);
 }
 
-/// Needs the real archive on disk: `JARVIS_TEST_MOONSHINE_ARCHIVE=<file.tar.bz2> cargo test -- --ignored`.
-/// Proves the pinned checksums and the unpacking rules fit the real model.
+/// Needs the real archive on disk: `JARVIS_TEST_SPEECH_ARCHIVE=<file.tar.bz2> cargo test -- --ignored`.
+/// Proves the pinned checksums and the unpacking rules fit the real model. (It caught a stream limit
+/// below the Whisper archive's real unpacked size, 1,344,988,160 bytes.)
 #[test]
 #[ignore = "needs the real model archive"]
 fn the_real_archive_matches_the_manifest_and_unpacks() {
-    let Ok(path) = std::env::var("JARVIS_TEST_MOONSHINE_ARCHIVE") else {
-        panic!("set JARVIS_TEST_MOONSHINE_ARCHIVE");
+    let Ok(path) = std::env::var("JARVIS_TEST_SPEECH_ARCHIVE") else {
+        panic!("set JARVIS_TEST_SPEECH_ARCHIVE");
     };
     let spec = manifest()
         .iter()
@@ -722,6 +723,14 @@ fn the_real_archive_matches_the_manifest_and_unpacks() {
     assert!(is_installed(&root, &spec));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// The Whisper archive unpacks to 1,344,988,160 bytes (measured on the real file) although only 375 MB
+/// is kept; the stream limit must leave room for the files that are skipped.
+const _: () = {
+    const WHISPER_UNPACKED: u64 = 1_344_988_160;
+    assert!(MAX_STREAM_BYTES > WHISPER_UNPACKED + 100 * 1024 * 1024);
+    assert!(MAX_STREAM_BYTES >= MAX_UNPACKED_BYTES);
+};
 
 /// A real download from github.com through the manager. Needs internet and about 640 MB.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
