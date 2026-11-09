@@ -1,4 +1,5 @@
-//! Finds where speech ends (spec §6.2: 700 ms of silence, 15 s hard cap). A plain energy detector
+//! Finds where speech ends (spec §6.2: a pause after speech, 15 s hard cap; 900 ms since the
+//! Windows laptop test of 2026-11-09 showed 700 ms breaking sentences). A plain energy detector
 //! with a noise floor learned from the first 200 ms. It sits behind the same shape the Silero
 //! detector from the S1 spike will have, so a better detector can replace it without touching the
 //! controller. Pure: it sees samples and nothing else.
@@ -10,8 +11,11 @@ pub const FRAME: usize = 320;
 pub struct EndpointConfig {
     /// Loud frames in a row that count as the start of speech (a key click is shorter).
     pub min_speech_frames: u32,
-    /// Quiet frames in a row after speech that end it: 35 frames are 700 ms.
+    /// Quiet frames in a row after speech that end it: 45 frames are 900 ms.
     pub end_silence_frames: u32,
+    /// Once speech has started, a frame counts as a pause only when it is below this fraction of
+    /// the threshold: quiet words and word endings do not end a sentence.
+    pub release_ratio: f32,
     /// The hard cap on one request: 750 frames are 15 s.
     pub max_frames: u32,
     /// Give up if no speech starts within this many frames: 300 frames are 6 s.
@@ -20,7 +24,8 @@ pub struct EndpointConfig {
     pub floor_frames: u32,
     /// Speech must be this much louder than the background.
     pub floor_multiplier: f32,
-    /// The quietest level that can count as speech (RMS, full scale is 1.0).
+    /// The quietest level that can count as speech (RMS, full scale is 1.0). The Windows laptop
+    /// microphone speaks at about 0.02, so this sits well below that.
     pub min_threshold: f32,
     /// The loudest the threshold may rise to, so speaking from the first moment still counts.
     pub max_threshold: f32,
@@ -30,12 +35,13 @@ impl Default for EndpointConfig {
     fn default() -> Self {
         Self {
             min_speech_frames: 3,
-            end_silence_frames: 35,
+            end_silence_frames: 45,
+            release_ratio: 0.75,
             max_frames: 750,
             no_speech_frames: 300,
             floor_frames: 10,
             floor_multiplier: 3.0,
-            min_threshold: 0.015,
+            min_threshold: 0.008,
             max_threshold: 0.05,
         }
     }
@@ -177,9 +183,13 @@ impl Endpointer {
                     .clamp(self.cfg.min_threshold, self.cfg.max_threshold);
             }
         }
-        let loud = level > self.threshold;
+        // Nothing counts as loud until the background has been learned: with the lower minimum a
+        // steady hum would otherwise start "speech" inside those first 200 ms.
+        let loud = self.floor_n >= self.cfg.floor_frames && level > self.threshold;
         if self.speech {
-            self.quiet_run = if loud { 0 } else { self.quiet_run + 1 };
+            // Hysteresis: only a frame well below the threshold is a pause.
+            let pause = level <= self.threshold * self.cfg.release_ratio;
+            self.quiet_run = if pause { self.quiet_run + 1 } else { 0 };
             if loud {
                 self.speech_sum += level;
                 self.speech_n += 1;
@@ -226,11 +236,11 @@ mod tests {
     }
 
     #[test]
-    fn speech_followed_by_700_ms_of_quiet_ends_and_not_before() {
+    fn speech_followed_by_900_ms_of_quiet_ends_and_not_before() {
         let mut e = Endpointer::new(EndpointConfig::default());
         let mut a = tone(300, 0.002); // background
         a.extend(tone(800, 0.3)); // speech
-        a.extend(tone(660, 0.002)); // not yet 700 ms of quiet
+        a.extend(tone(860, 0.002)); // not yet 900 ms of quiet
         assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
         assert!(e.has_speech());
         assert_eq!(e.push(&tone(100, 0.002)), Decision::SpeechEnded);
@@ -242,7 +252,7 @@ mod tests {
     fn the_result_does_not_depend_on_how_the_audio_is_cut_into_chunks() {
         let mut a = tone(300, 0.002);
         a.extend(tone(500, 0.3));
-        a.extend(tone(900, 0.002));
+        a.extend(tone(1_100, 0.002));
         for chunk in [1usize, 7, 320, 321, 1000, 16_000] {
             let mut e = Endpointer::new(EndpointConfig::default());
             assert_eq!(
@@ -294,7 +304,7 @@ mod tests {
         let mut e = Endpointer::new(EndpointConfig::default()).with_held(true);
         let mut a = tone(300, 0.002); // background
         a.extend(tone(800, 0.3)); // speech
-        a.extend(tone(2_000, 0.002)); // a long pause: 2 s, well past 700 ms
+        a.extend(tone(2_000, 0.002)); // a long pause: 2 s, well past 900 ms
         assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
         assert!(e.has_speech() && e.is_held());
         // Speech resumes, and then the 15 s cap still ends it.
@@ -314,13 +324,13 @@ mod tests {
         let mut e = Endpointer::new(EndpointConfig::default()).with_held(true);
         let mut a = tone(300, 0.002);
         a.extend(tone(800, 0.3));
-        a.extend(tone(900, 0.002));
+        a.extend(tone(1_000, 0.002));
         assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
         assert_eq!(e.release_hold(), Decision::SpeechEnded);
         assert!(!e.is_held());
         // A decision, once reached, stays.
         assert_eq!(e.push(&tone(1_000, 0.3)), Decision::SpeechEnded);
-        // Short pause: it carries on as an auto capture and ends when the 700 ms is complete.
+        // Short pause: it carries on as an auto capture and ends when the 900 ms is complete.
         let mut e = Endpointer::new(EndpointConfig::default()).with_held(true);
         let mut a = tone(300, 0.002);
         a.extend(tone(800, 0.3));
@@ -328,7 +338,7 @@ mod tests {
         assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
         assert_eq!(e.release_hold(), Decision::Continue);
         assert_eq!(e.push(&tone(300, 0.002)), Decision::Continue);
-        assert_eq!(e.push(&tone(200, 0.002)), Decision::SpeechEnded);
+        assert_eq!(e.push(&tone(400, 0.002)), Decision::SpeechEnded);
     }
 
     #[test]
@@ -348,7 +358,37 @@ mod tests {
         e.push(&a);
         let s = e.stats();
         assert!(s.floor.is_some_and(|f| f > 0.0 && f < 0.01), "{s:?}");
-        assert!(s.threshold >= 0.015 && s.threshold <= 0.05);
+        assert!(s.threshold >= 0.008 && s.threshold <= 0.05);
         assert!(s.speech_level.is_some_and(|l| l > 0.15), "{s:?}");
+    }
+
+    /// The owner's laptop microphone: speech at an RMS of about 0.02 (peak 0.03), a floor near zero.
+    /// Words that dip to half that level must not end the sentence, and a real pause still does.
+    #[test]
+    fn quiet_speech_with_dips_is_not_cut_and_a_real_pause_still_ends_it() {
+        let mut e = Endpointer::new(EndpointConfig::default());
+        let mut a = tone(300, 0.0005); // background
+        a.extend(tone(800, 0.03)); // speech, RMS 0.021
+        a.extend(tone(300, 0.012)); // a quiet word: RMS 0.0085, just above the threshold
+        a.extend(tone(900, 0.03));
+        a.extend(tone(500, 0.004)); // a dip, then more speech
+        a.extend(tone(600, 0.03));
+        assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
+        assert!(e.has_speech());
+        assert_eq!(e.push(&tone(1_000, 0.0005)), Decision::SpeechEnded);
+    }
+
+    /// A room that is not silent: noise that wanders between 1.5 and 2 times the learned floor, with
+    /// jitter, must not keep a finished sentence open until the 15 s cap.
+    #[test]
+    fn wandering_background_noise_does_not_keep_a_finished_sentence_open() {
+        let mut e = Endpointer::new(EndpointConfig::default());
+        let mut a = tone(300, 0.004); // floor: RMS about 0.003, so the threshold is 0.009
+        a.extend(tone(1_000, 0.04)); // speech
+        for i in 0..40 {
+            // 40 x 40 ms of noise at 1.5 to 2 times the floor, alternating
+            a.extend(tone(40, if i % 2 == 0 { 0.0063 } else { 0.0085 }));
+        }
+        assert_eq!(feed(&mut e, &a, 480), Decision::SpeechEnded);
     }
 }
