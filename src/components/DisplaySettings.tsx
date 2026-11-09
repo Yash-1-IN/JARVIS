@@ -1,4 +1,9 @@
-import { usePanelSplit, type PanelSplit } from "../state/layoutPref";
+import {
+  useGlassPref,
+  usePanelSplit,
+  type GlassPref,
+  type PanelSplit,
+} from "../state/layoutPref";
 import {
   hasWebGL,
   isLinux,
@@ -17,6 +22,24 @@ const CHOICES: { value: HologramPref; label: string; hint: string }[] = [
     value: "2d",
     label: "2D orb",
     hint: "Lightest on battery and older computers.",
+  },
+];
+
+const GLASS_CHOICES: { value: GlassPref; label: string; hint: string }[] = [
+  {
+    value: "auto",
+    label: "Automatic",
+    hint: "Frosted glass unless your system asks for reduced transparency or more contrast.",
+  },
+  {
+    value: "on",
+    label: "On",
+    hint: "Always use translucent glass panels.",
+  },
+  {
+    value: "off",
+    label: "Off",
+    hint: "Solid panels with no blur.",
   },
 ];
 
@@ -47,6 +70,7 @@ const SPLITS: { value: PanelSplit; label: string; hint: string }[] = [
 export function DisplaySettings() {
   const { pref, setPref } = useHologramPref();
   const { split, setSplit } = usePanelSplit();
+  const { glass, setGlass } = useGlassPref();
   const webgl = hasWebGL();
   return (
     <>
@@ -61,6 +85,24 @@ export function DisplaySettings() {
                 value={c.value}
                 checked={split === c.value}
                 onChange={() => setSplit(c.value)}
+              />{" "}
+              {c.label}
+            </label>
+            <span className="hint"> {c.hint}</span>
+          </div>
+        ))}
+      </fieldset>
+      <fieldset className="display-settings">
+        <legend>Glass effect</legend>
+        {GLASS_CHOICES.map((c) => (
+          <div key={c.value}>
+            <label>
+              <input
+                type="radio"
+                name="glass-effect"
+                value={c.value}
+                checked={glass === c.value}
+                onChange={() => setGlass(c.value)}
               />{" "}
               {c.label}
             </label>

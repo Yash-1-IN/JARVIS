@@ -246,10 +246,10 @@ fn wake_supported_on(platform: &str) -> bool {
             .any(|s| s.set == SET_WAKE)
 }
 
-/// The models this app version knows about.
 /// The folder (inside `stt/`) of the model D-31 replaced.
 const LEGACY_MOONSHINE: &str = "moonshine-base-en-int8";
 
+/// The models this app version knows about.
 pub fn manifest() -> &'static [ModelSpec] {
     static M: LazyLock<Vec<ModelSpec>> = LazyLock::new(|| {
         let m: Manifest = serde_json::from_str(MANIFEST).expect("resources/models.json is valid");

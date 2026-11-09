@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./hologram/renderer", async (importOriginal) => ({
@@ -7,15 +7,16 @@ vi.mock("./hologram/renderer", async (importOriginal) => ({
 }));
 
 import { DisplaySettings } from "./DisplaySettings";
-import { usePanelSplit } from "../state/layoutPref";
+import { useGlassPref, usePanelSplit } from "../state/layoutPref";
 import { useHologramPref } from "./hologram/renderer";
 
 describe("DisplaySettings", () => {
   it("chooses the hologram and says when 3D is unavailable", () => {
     useHologramPref.setState({ pref: "auto" });
     render(<DisplaySettings />);
-    expect(screen.getByLabelText("Automatic")).toBeChecked();
-    fireEvent.click(screen.getByLabelText("2D orb"));
+    const group = screen.getByRole("group", { name: "Hologram" });
+    expect(within(group).getByLabelText("Automatic")).toBeChecked();
+    fireEvent.click(within(group).getByLabelText("2D orb"));
     expect(useHologramPref.getState().pref).toBe("2d");
     expect(localStorage.getItem("jarvis.hologram")).toBe("2d");
     expect(screen.getByTestId("no-webgl")).toBeInTheDocument();
@@ -35,5 +36,19 @@ describe("DisplaySettings", () => {
     fireEvent.click(screen.getByLabelText("Across the whole window"));
     expect(usePanelSplit.getState().split).toBe("both");
     usePanelSplit.getState().setSplit("rail");
+  });
+
+  it("chooses the glass effect and remembers it on this computer", () => {
+    useGlassPref.setState({ glass: "auto" });
+    render(<DisplaySettings />);
+    const group = screen.getByRole("group", { name: "Glass effect" });
+    expect(within(group).getByLabelText("Automatic")).toBeChecked();
+    fireEvent.click(within(group).getByLabelText("On"));
+    expect(useGlassPref.getState().glass).toBe("on");
+    expect(localStorage.getItem("jarvis.glassEffect")).toBe("on");
+    fireEvent.click(within(group).getByLabelText("Off"));
+    expect(useGlassPref.getState().glass).toBe("off");
+    expect(localStorage.getItem("jarvis.glassEffect")).toBe("off");
+    useGlassPref.getState().setGlass("auto");
   });
 });

@@ -401,7 +401,10 @@ pub async fn voice_models_install(
     // The speech set is in place: load it now, and drop the old Moonshine folder.
     voice.warm_up();
     let tidy = Arc::clone(&models);
-    let _ = tokio::task::spawn_blocking(move || tidy.remove_legacy_speech()).await;
+    // Not awaited: deleting the old folder must not hold up the answer.
+    drop(tokio::task::spawn_blocking(move || {
+        tidy.remove_legacy_speech()
+    }));
     // The wake word's files are fetched only once the person has accepted the notice and switched
     // it on (D-28, D-29).
     let v = svc.settings.get().voice;

@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 
 import App from "./App";
 import { useChatStore } from "./state/chatStore";
-import { usePanelSplit } from "./state/layoutPref";
+import { useGlassPref, usePanelSplit } from "./state/layoutPref";
 import { useSnapshotStore } from "./state/snapshotStore";
 import { MockTransport } from "./transport/mock/MockTransport";
 import { TauriTransport } from "./transport/tauri";
@@ -556,6 +556,26 @@ describe("App panels (issue #37)", () => {
     ).not.toContainElement(card);
     expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
     vi.useRealTimers();
+  });
+
+  it("sets data-glass on the app root from the Display glass preference", async () => {
+    useGlassPref.setState({ glass: "auto" });
+    try {
+      const { container } = render(<App transport={new MockTransport()} />);
+      await screen.findByTestId("phase");
+      const app = container.querySelector(".app");
+      expect(app).toHaveAttribute("data-glass", "auto");
+      act(() => {
+        useGlassPref.getState().setGlass("on");
+      });
+      expect(app).toHaveAttribute("data-glass", "on");
+      act(() => {
+        useGlassPref.getState().setGlass("off");
+      });
+      expect(app).toHaveAttribute("data-glass", "off");
+    } finally {
+      useGlassPref.setState({ glass: "auto" });
+    }
   });
 });
 
