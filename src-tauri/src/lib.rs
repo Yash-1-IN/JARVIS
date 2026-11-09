@@ -37,6 +37,15 @@ pub fn run() {
     tauri::Builder::default()
         // Used only from Rust (`platform::dialog`); the webview has no dialog permission.
         .plugin(tauri_plugin_dialog::init())
+        // Native window glass (macOS, JARVIS_NATIVE_GLASS=1, #166): once the page has loaded, tell it so it
+        // can make its backgrounds see-through. Runs again after a reload.
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+                && platform::glass::applied()
+            {
+                let _ = webview.eval("document.documentElement.dataset.nativeGlass = '1'");
+            }
+        })
         .setup(|app| {
             let log_dir = app.path().app_log_dir()?;
             std::fs::create_dir_all(&log_dir)?;
@@ -44,6 +53,11 @@ pub fn run() {
             let guard = logging::init(&log_dir)?;
             app.manage(guard);
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "jarvis started");
+            if platform::glass::requested()
+                && let Some(window) = app.get_webview_window("main")
+            {
+                platform::glass::apply(&window);
+            }
 
             let prices = Arc::new(
                 PriceTable::embedded().map_err(|e| format!("pricing table is invalid: {e}"))?,

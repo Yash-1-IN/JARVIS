@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "JARVIS",
+        "width": 1280,
+        "height": 720,
+        "transparent": true
+      }
+    ]
+  }
+}

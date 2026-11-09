@@ -69,6 +69,9 @@ ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "l
 [target.'cfg(target_os = "macos")'.dependencies]
 # Info.plist (binary or XML) for app bundle ids, platform/apps.rs.
 plist = "1.10.3"
+# Native window glass (macOS 26 NSGlassEffectView, older macOS NSVisualEffectView), platform/glass.rs
+# (Apache-2.0 OR MIT; already in the build as a dependency of tauri, same version, so no new package).
+window-vibrancy = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 # renameat2 (Linux) / renamex_np (macOS) for no-overwrite moves, platform/fs.rs.

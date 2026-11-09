@@ -8,6 +8,8 @@ pub mod dll;
 // Used by tools::files once the move/rename tools switch to it (#22 review).
 #[allow(dead_code)]
 pub mod fs;
+// Native window glass on macOS, off unless JARVIS_NATIVE_GLASS=1 (#166).
+pub mod glass;
 pub mod keychain;
 // Called by the apps.launch and system.status tools (Dev A's next M4 PR).
 #[allow(dead_code)]

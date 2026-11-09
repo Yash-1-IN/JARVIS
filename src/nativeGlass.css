@@ -1,0 +1,28 @@
+/* Native window glass (macOS, issue #166). Only applies when the backend has put Apple's glass behind
+   the window and marked the page (`html[data-native-glass]`); otherwise nothing here matches.
+   Presentation only. The approval and memory cards are not touched here: they keep their solid
+   background from styles.css. */
+html[data-native-glass],
+html[data-native-glass] body,
+html[data-native-glass] #root {
+  background: transparent;
+}
+
+html[data-native-glass] .app,
+html[data-native-glass] .app-top {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* Header and talk column stay readable: part surface colour, the rest the glass behind. */
+html[data-native-glass] .app-header,
+html[data-native-glass] .rail {
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  html[data-native-glass] .app-header,
+  html[data-native-glass] .rail {
+    background: var(--surface);
+  }
+}
