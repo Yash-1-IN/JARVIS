@@ -598,7 +598,7 @@ fn collect_until_done(
             return Outcome::NoAudio;
         }
         // A tap switches a held capture to auto. A pause that was already heard then ends it at
-        // once, without waiting for another 700 ms.
+        // once, without waiting for another 900 ms.
         if auto.load(Ordering::Acquire)
             && endpoint.is_held()
             && endpoint.release_hold() == Decision::SpeechEnded
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_held_capture_is_not_cut_off_by_a_pause_and_the_release_sends_what_was_said() {
-        // Speech, then a second of quiet: more than the 700 ms that ends a tap.
+        // Speech, then a second of quiet: more than the 900 ms that ends a tap.
         let s = setup(phrase(), false, None, Box::new(Says("held")));
         s.ctl.start_capture().unwrap();
         wait_for("capturing", || s.orch.snapshot().mic == MicState::Capturing);

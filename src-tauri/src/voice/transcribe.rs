@@ -69,6 +69,40 @@ pub fn without_invented_text(text: &str, audio: &[f32]) -> String {
     }
 }
 
+/// Brings a quiet recording up to a level the model hears well. A laptop microphone array speaks at
+/// an RMS near 0.02, a third of what Whisper is happiest with, and that was the likeliest reason it
+/// missed words (the Windows test of 2026-11-09). The gain is taken from the loudest third of the
+/// 20 ms frames, so a pause does not pull it up, it is at most 6 times, and it never clips. Audio
+/// with no clear speech in it (a level below `FLOOR`) is returned as it is: noise is not amplified.
+/// Returns the audio and the gain applied (1.0 when none).
+pub fn with_speech_level(audio: &[f32]) -> (Vec<f32>, f32) {
+    const FRAME: usize = 320;
+    const TARGET: f32 = 0.06;
+    const MAX_GAIN: f32 = 6.0;
+    const FLOOR: f32 = 0.004;
+    let mut levels: Vec<f32> = audio
+        .chunks_exact(FRAME)
+        .map(|f| (f.iter().map(|s| s * s).sum::<f32>() / FRAME as f32).sqrt())
+        .collect();
+    if levels.is_empty() {
+        return (audio.to_vec(), 1.0);
+    }
+    levels.sort_by(|a, b| b.total_cmp(a));
+    let top = &levels[..levels.len().div_ceil(3)];
+    let speech = top.iter().sum::<f32>() / top.len() as f32;
+    if speech < FLOOR {
+        return (audio.to_vec(), 1.0);
+    }
+    let peak = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let gain = (TARGET / speech)
+        .min(MAX_GAIN)
+        .min(0.95 / peak.max(f32::EPSILON));
+    if gain <= 1.05 {
+        return (audio.to_vec(), 1.0);
+    }
+    (audio.iter().map(|s| s * gain).collect(), gain)
+}
+
 /// Average level (0 to 1) below which a stock phrase is taken as invented.
 const QUIET_RMS: f32 = 0.01;
 /// A stock phrase in less audio than this is taken as invented.
@@ -92,6 +126,30 @@ mod tests {
         (0..(seconds * 16_000.0) as usize)
             .map(|i| if i % 2 == 0 { level } else { -level })
             .collect()
+    }
+
+    #[test]
+    fn quiet_speech_is_brought_up_and_loud_speech_is_left_alone() {
+        let quiet = tone(2.0, 0.02); // the owner's microphone: an RMS of about 0.02
+        let (out, gain) = with_speech_level(&quiet);
+        assert!(gain > 2.0 && gain <= 6.0, "{gain}");
+        assert!(out.iter().all(|s| s.abs() <= 0.95));
+        let loud = tone(2.0, 0.3);
+        let (same, g) = with_speech_level(&loud);
+        assert_eq!(g, 1.0);
+        assert_eq!(same, loud);
+    }
+
+    #[test]
+    fn noise_and_silence_are_not_amplified_and_the_gain_never_clips() {
+        let (_, g) = with_speech_level(&tone(2.0, 0.003));
+        assert_eq!(g, 1.0);
+        assert_eq!(with_speech_level(&[]).1, 1.0);
+        // A quiet speaker with one loud click: the click limits the gain, nothing clips.
+        let mut a = tone(2.0, 0.02);
+        a[100] = 0.5;
+        let (out, _) = with_speech_level(&a);
+        assert!(out.iter().all(|s| s.abs() <= 0.951));
     }
 
     #[test]
