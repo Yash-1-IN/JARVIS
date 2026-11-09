@@ -1,7 +1,25 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import css from "../styles.css?raw";
 import type { ApprovalRequest } from "../types/generated/ApprovalRequest";
 import { ApprovalCard } from "./ApprovalCard";
+
+/** Every rule block (also inside @media / @supports) whose selector names a card. */
+function cardRuleBlocks(source: string): { selector: string; body: string }[] {
+  // Strip comments so we inspect actual selector/declaration blocks. The pattern matches only
+  // innermost blocks, so nesting inside at-rules does not hide a rule.
+  const clean = source.replace(/\/\*[\s\S]*?\*\//g, "");
+  const blocks: { selector: string; body: string }[] = [];
+  for (const match of clean.matchAll(/([^{}]+)\{([^{}]+)\}/g)) {
+    const selector = match[1].trim();
+    if (
+      selector.includes(".approval-card") ||
+      selector.includes(".memory-card")
+    )
+      blocks.push({ selector, body: match[2].trim() });
+  }
+  return blocks;
+}
 
 const NOW = 1_000_000;
 const req = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
@@ -109,5 +127,45 @@ describe("ApprovalCard", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Action not allowed: The approval expired",
     );
+  });
+
+  it("never uses --glass-* variables or blur on .approval-card or .memory-card in styles.css (#156)", () => {
+    const cardBlocks = cardRuleBlocks(css);
+    expect(cardBlocks.length).toBeGreaterThan(0);
+    for (const block of cardBlocks) {
+      expect(block.body).not.toMatch(/--glass-/);
+      const filters = [
+        ...block.body.matchAll(/(?:-webkit-)?backdrop-filter\s*:\s*([^;]+)/g),
+      ];
+      for (const f of filters) {
+        expect(f[1].trim()).toBe("none");
+      }
+    }
+    for (const card of [".approval-card", ".memory-card"]) {
+      // The card itself and the buttons inside it stay on the solid surface.
+      for (const target of [card, `${card} button`]) {
+        expect(
+          cardBlocks.some(
+            (b) =>
+              b.selector.split(",").some((sel) => sel.trim() === target) &&
+              b.body.includes("background: var(--surface)"),
+          ),
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("finds card rules nested inside @media and @supports blocks too", () => {
+    const nested = `
+      @media (prefers-contrast: more) {
+        @supports (backdrop-filter: blur(1px)) {
+          .approval-card button { background: var(--glass-button-bg); }
+        }
+      }
+      .other { color: red; }
+    `;
+    const blocks = cardRuleBlocks(nested);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].body).toMatch(/--glass-/);
   });
 });

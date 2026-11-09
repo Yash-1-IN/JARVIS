@@ -1,4 +1,4 @@
-/* ---- Base look (issue #37). Light and dark follow the OS setting. ---- */
+/* ---- Base look (issue #37) & Liquid Glass tokens (issue #156). Light and dark follow the OS setting. ---- */
 :root {
   color-scheme: light dark;
   --bg: #f6f7f9;
@@ -11,6 +11,62 @@
   --user-bubble: #dbeafe;
   --danger: #b91c1c;
   --radius: 0.6rem;
+  /* Liquid Glass tokens (issue #156): solid-leaning translucent fallback when backdrop-filter is absent;
+     tuned in @supports below when blur is supported. Contrast stays >= 4.5:1 for --text and --muted. */
+  --glass-bg: rgb(255 255 255 / 0.92);
+  --glass-bg-elevated: rgb(255 255 255 / 0.95);
+  --glass-sheen: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 0.65) 0%,
+    rgb(255 255 255 / 0.18) 42%,
+    rgb(226 232 240 / 0.22) 100%
+  );
+  --glass-border: rgb(255 255 255 / 0.85);
+  --glass-panel-border-bottom: 1px solid var(--glass-border);
+  --glass-highlight:
+    inset 0 1px 0 rgb(255 255 255 / 0.95), inset 0 0 0 1px rgb(15 23 42 / 0.08);
+  --glass-shadow: 0 12px 32px rgb(15 23 42 / 0.1);
+  --glass-popup-shadow:
+    0 24px 64px rgb(15 23 42 / 0.22), 0 4px 16px rgb(15 23 42 / 0.08);
+  --glass-backdrop: rgb(15 23 42 / 0.28);
+  --glass-blur: 20px;
+  --glass-ambient:
+    radial-gradient(circle at 16% 20%, rgb(251 146 60 / 0.15), transparent 44%),
+    radial-gradient(circle at 18% 80%, rgb(14 165 233 / 0.16), transparent 48%),
+    radial-gradient(circle at 84% 16%, rgb(99 102 241 / 0.16), transparent 46%),
+    radial-gradient(circle at 78% 84%, rgb(244 63 94 / 0.1) transparent 50%);
+  /* Controls (issue #156, PR 2): clear "liquid" glass. Fully rounded pills, subtle
+     gradient over dark/light tint, top-edge rim lighting, soft shadow, scale on press. */
+  --glass-rail-bg: rgb(255 255 255 / 0.55);
+  --glass-button-bg: rgb(255 255 255 / 0.35);
+  --glass-button-sheen: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.8) 0%,
+    rgb(255 255 255 / 0.2) 60%,
+    rgb(226 232 240 / 0.3) 100%
+  );
+  --glass-button-border: rgb(15 23 42 / 0.1);
+  --glass-button-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.95), 0 2px 5px rgb(15 23 42 / 0.06);
+  --glass-button-hover-border: rgb(15 23 42 / 0.22);
+  --glass-button-hover-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 1), 0 2px 8px rgb(15 23 42 / 0.12);
+  --glass-button-active-shadow: inset 0 2px 4px rgb(15 23 42 / 0.15);
+  --glass-button-radius: 999px;
+  --glass-button-blur: 4px;
+  --glass-accent-gloss: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.15) 0%,
+    rgb(255 255 255 / 0) 40%
+  );
+  --glass-tab-radius: 999px;
+  --glass-tab-underline: transparent;
+  /* The selected tab is a lens: a raised clear pill with its own rim and highlight. */
+  --glass-tab-active-bg: rgb(255 255 255 / 0.5);
+  --glass-tab-active-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 1), inset 0 0 10px rgb(255 255 255 / 0.5),
+    0 2px 6px rgb(15 23 42 / 0.12);
+  --glass-transition: 0.18s ease;
   font:
     15px/1.5 system-ui,
     -apple-system,
@@ -31,6 +87,77 @@
     --accent-text: #0b1220;
     --user-bubble: #1e3a5f;
     --danger: #f87171;
+    --glass-bg: rgb(18 24 31 / 0.93);
+    --glass-bg-elevated: rgb(23 29 36 / 0.95);
+    --glass-sheen: linear-gradient(
+      160deg,
+      rgb(255 255 255 / 0.08) 0%,
+      rgb(255 255 255 / 0.02) 42%,
+      rgb(76 141 255 / 0.04) 100%
+    );
+    --glass-border: rgb(255 255 255 / 0.2);
+    --glass-highlight:
+      inset 0 1px 0 rgb(255 255 255 / 0.26),
+      inset 0 0 0 1px rgb(255 255 255 / 0.08);
+    --glass-shadow: 0 12px 34px rgb(0 0 0 / 0.42);
+    --glass-popup-shadow:
+      0 24px 68px rgb(0 0 0 / 0.62), 0 4px 18px rgb(0 0 0 / 0.35);
+    --glass-backdrop: rgb(5 8 13 / 0.46);
+    --glass-ambient:
+      radial-gradient(
+        circle at 16% 20%,
+        rgb(249 115 22 / 0.18),
+        transparent 44%
+      ),
+      radial-gradient(
+        circle at 18% 80%,
+        rgb(56 189 248 / 0.18),
+        transparent 48%
+      ),
+      radial-gradient(
+        circle at 84% 16%,
+        rgb(99 102 241 / 0.24),
+        transparent 46%
+      ),
+      radial-gradient(circle at 78% 84%, rgb(239 68 68 / 0.13), transparent 50%);
+    --glass-rail-bg: rgb(14 18 26 / 0.55);
+    --glass-button-bg: rgb(255 255 255 / 0.04);
+    --glass-button-sheen: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.08) 0%,
+      rgb(255 255 255 / 0.02) 60%,
+      rgb(0 0 0 / 0.15) 100%
+    );
+    --glass-button-border: rgb(255 255 255 / 0.12);
+    --glass-button-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.28), 0 2px 6px rgb(0 0 0 / 0.3);
+    --glass-button-hover-border: rgb(255 255 255 / 0.25);
+    --glass-button-hover-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.45), 0 2px 8px rgb(0 0 0 / 0.4);
+    --glass-button-active-shadow: inset 0 2px 4px rgb(0 0 0 / 0.35);
+    --glass-accent-gloss: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.2) 0%,
+      rgb(255 255 255 / 0) 40%
+    );
+    --glass-tab-active-bg: rgb(255 255 255 / 0.12);
+    --glass-tab-active-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.5),
+      inset 0 0 10px rgb(255 255 255 / 0.15), 0 2px 6px rgb(0 0 0 / 0.35);
+  }
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  :root {
+    --glass-bg: rgb(255 255 255 / 0.85);
+    --glass-bg-elevated: rgb(255 255 255 / 0.86);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --glass-bg: rgb(18 24 31 / 0.87);
+      --glass-bg-elevated: rgb(20 27 35 / 0.88);
+    }
   }
 }
 
@@ -63,15 +190,36 @@ select {
 }
 
 button {
-  padding: 0.35rem 0.8rem;
+  padding: 0.45rem 0.9rem;
   border: 1px solid var(--border);
-  border-radius: 0.45rem;
-  background: var(--surface);
+  border-radius: var(--glass-button-radius, 0.45rem);
+  background-color: var(--glass-button-bg);
+  background-image: var(--glass-button-sheen);
+  border-color: var(--glass-button-border);
+  box-shadow: var(--glass-button-shadow);
+  transition:
+    background-color var(--glass-transition),
+    box-shadow var(--glass-transition),
+    border-color var(--glass-transition),
+    transform 0.1s ease;
   cursor: pointer;
 }
 
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  button {
+    -webkit-backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6);
+    backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6);
+  }
+}
+
 button:hover:not(:disabled) {
-  border-color: var(--accent);
+  border-color: var(--glass-button-hover-border, var(--accent));
+  box-shadow: var(--glass-button-hover-shadow, var(--glass-button-shadow));
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
+  box-shadow: var(--glass-button-active-shadow, var(--glass-button-shadow));
 }
 
 button:disabled {
@@ -100,6 +248,8 @@ select {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  background-color: var(--bg);
+  background-image: var(--glass-ambient);
 }
 
 .app-header {
@@ -127,7 +277,8 @@ select {
 
 /* The open panel's button looks pressed, not only announced as pressed. */
 .app-nav button[aria-pressed="true"] {
-  background: var(--accent);
+  background-color: var(--accent);
+  background-image: var(--glass-accent-gloss, none);
   border-color: var(--accent);
   color: var(--accent-text);
 }
@@ -195,7 +346,9 @@ select {
   min-height: 0;
   overflow-y: auto;
   padding: 1rem;
-  background: var(--surface);
+  background-color: var(--glass-rail-bg);
+  background-image: var(--glass-sheen);
+  box-shadow: var(--glass-highlight);
 }
 
 .rail > .orb,
@@ -216,9 +369,17 @@ select {
   width: 100%;
 }
 
+.rail .controls button:not(.push-to-talk) {
+  font-size: 0.875rem;
+  padding: 0.4rem 0.8rem;
+  font-weight: 500;
+  opacity: 0.92;
+}
+
 .rail .push-to-talk {
-  padding: 0.9rem 0.6rem;
+  padding: 0.85rem 1rem;
   font-size: 1.05rem;
+  font-weight: 600;
 }
 
 /* The stage: the conversation, or, with a panel open, the panel above and the conversation below
@@ -283,8 +444,10 @@ select {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  border-bottom: 2px solid var(--border);
-  background: var(--surface);
+  border-bottom: var(--glass-panel-border-bottom);
+  background-color: var(--glass-bg);
+  background-image: var(--glass-sheen);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
 }
 
 .side-panel-header {
@@ -294,8 +457,9 @@ select {
   justify-content: space-between;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid var(--glass-border);
+  background-color: var(--glass-bg-elevated);
+  box-shadow: var(--glass-highlight);
 }
 
 .side-panel-header h2 {
@@ -372,18 +536,30 @@ select {
 .tabs [role="tab"] {
   border: none;
   border-bottom: 3px solid transparent;
-  border-radius: 0;
+  border-radius: var(--glass-tab-radius, 0);
   background: none;
   padding: 0.4rem 0.6rem;
   color: var(--muted);
   /* A tab's name stays on one line ("Key and model" used to break into three). */
   white-space: nowrap;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .tabs [role="tab"][aria-selected="true"] {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--glass-tab-underline, var(--accent));
+  background-color: var(--glass-tab-active-bg);
+  box-shadow: var(--glass-tab-active-shadow);
   color: var(--text);
   font-weight: 600;
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .tabs [role="tab"][aria-selected="true"] {
+    -webkit-backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6);
+    backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6);
+  }
 }
 
 .mock-footer {
@@ -397,6 +573,18 @@ select {
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: center;
+}
+
+.mock-footer button {
+  padding: 0.2rem 0.55rem;
+  font-size: 11px;
+  border-radius: 999px;
+  opacity: 0.85;
+  box-shadow: none;
+}
+
+.mock-footer button:hover:not(:disabled) {
+  opacity: 1;
 }
 
 .mock-badge {
@@ -435,6 +623,9 @@ select {
 }
 
 .push-to-talk[aria-pressed="true"] {
+  background-color: var(--accent);
+  background-image: var(--glass-accent-gloss, none);
+  color: var(--accent-text);
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
@@ -709,6 +900,23 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  button,
+  .tabs [role="tab"] {
+    transition: none !important;
+    transform: none !important;
+  }
+
+  .app[data-glass="on"] button,
+  .app[data-glass="on"] .tabs [role="tab"][aria-selected="true"] {
+    -webkit-backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6);
+    backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6);
+  }
+
+  .app[data-glass="on"] .modal-backdrop .side-panel {
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  }
+
   .orb *,
   .chat-reply,
   .chat-reply-streaming > :last-child::after {
@@ -950,16 +1158,268 @@ blockquote.memory-text {
   display: grid;
   place-items: center;
   padding: 1.5rem;
-  background: rgb(0 0 0 / 0.45);
+  background: var(--glass-backdrop);
 }
 
 .modal-backdrop .side-panel {
   width: min(62rem, 100%);
   height: min(42rem, 100%);
-  border: 1px solid var(--border);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+  background-color: var(--glass-bg-elevated);
+  background-image: var(--glass-sheen);
+  box-shadow: var(--glass-highlight), var(--glass-popup-shadow);
   overflow: hidden;
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .modal-backdrop .side-panel {
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  }
+}
+
+/* Real refraction enhancement (#156): SVG displacement lens filter when Glass is On
+   on engines supporting url() in backdrop-filter (e.g. WebView2 on Windows).
+   Gated behind @supports and data-glass="on". WebKit and accessibility fallbacks remain on
+   the clean clear style without the filter. */
+@supports (backdrop-filter: url(#glass-refraction)) or
+  (-webkit-backdrop-filter: url(#glass-refraction)) {
+  .app[data-glass="on"] button {
+    -webkit-backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6)
+      url(#glass-refraction);
+    backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6)
+      url(#glass-refraction);
+  }
+
+  .app[data-glass="on"] .tabs [role="tab"][aria-selected="true"] {
+    -webkit-backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6)
+      url(#glass-refraction);
+    backdrop-filter: blur(var(--glass-button-blur, 0px)) saturate(1.6)
+      url(#glass-refraction);
+  }
+
+  .app[data-glass="on"] .modal-backdrop .side-panel {
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%)
+      url(#glass-refraction);
+    backdrop-filter: blur(var(--glass-blur)) saturate(180%)
+      url(#glass-refraction);
+  }
+}
+
+/* Ambient backdrop enhancement (#156): near-black base with warm orange/amber
+   and cool indigo glows behind the window content when Glass is On, giving the clear glass
+   surfaces and refraction rich color to sit on. Text contrast remains WCAG 2.1 AA. */
+.app[data-glass="on"] {
+  background-color: #0b0f17;
+  background-image:
+    radial-gradient(circle at 16% 20%, rgb(249 115 22 / 0.16), transparent 44%),
+    radial-gradient(circle at 18% 80%, rgb(56 189 248 / 0.18), transparent 48%),
+    radial-gradient(circle at 84% 16%, rgb(99 102 241 / 0.22), transparent 46%),
+    radial-gradient(circle at 78% 84%, rgb(239 68 68 / 0.12), transparent 50%);
+}
+
+@media (prefers-color-scheme: dark) {
+  .app[data-glass="on"] {
+    background-color: #080b11;
+    background-image:
+      radial-gradient(
+        circle at 16% 20%,
+        rgb(249 115 22 / 0.18),
+        transparent 44%
+      ),
+      radial-gradient(
+        circle at 18% 80%,
+        rgb(56 189 248 / 0.18),
+        transparent 48%
+      ),
+      radial-gradient(
+        circle at 84% 16%,
+        rgb(99 102 241 / 0.24),
+        transparent 46%
+      ),
+      radial-gradient(circle at 78% 84%, rgb(239 68 68 / 0.13), transparent 50%);
+  }
+}
+
+.app[data-glass="on"] .app-top {
+  background: transparent;
+}
+
+.app[data-glass="on"] .app-header {
+  background-color: var(--glass-rail-bg);
+  background-image: var(--glass-sheen);
+  border-bottom-color: var(--glass-border);
+}
+
+/* Hard requirement (#156): approval and memory proposal cards are never glassy.
+   They stay 100% opaque, high contrast, and the most legible thing on screen. */
+.approval-card,
+.memory-card {
+  background: var(--surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Buttons inside those cards are solid too (#156 PR 2). */
+.approval-card button,
+.memory-card button,
+.app .approval-card button,
+.app .memory-card button {
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: 0.45rem;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Glass effect turned off in Settings → Display, or Automatic with system accessibility settings:
+   fall back to solid surfaces matching pre-#156 main and disable GPU blur (#156). */
+.app[data-glass="off"] {
+  background-image: none;
+  --glass-bg: var(--surface);
+  --glass-bg-elevated: var(--surface);
+  --glass-sheen: none;
+  --glass-border: var(--border);
+  --glass-panel-border-bottom: 2px solid var(--border);
+  --glass-highlight: 0 0 0 transparent;
+  --glass-shadow: 0 0 0 transparent;
+  --glass-popup-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+  --glass-backdrop: rgb(0 0 0 / 0.45);
+  --glass-ambient: none;
+  --glass-button-bg: var(--surface);
+  --glass-button-sheen: none;
+  --glass-button-border: var(--border);
+  --glass-button-shadow: none;
+  --glass-button-hover-border: var(--border);
+  --glass-button-hover-shadow: none;
+  --glass-button-active-shadow: none;
+  --glass-tab-active-bg: transparent;
+  --glass-tab-active-shadow: none;
+  --glass-rail-bg: var(--surface);
+  --glass-button-radius: 0.45rem;
+  --glass-button-blur: 0px;
+  --glass-accent-gloss: none;
+  --glass-tab-radius: 0;
+  --glass-tab-vertical-radius: 0.4rem;
+  --glass-tab-underline: var(--accent);
+  --glass-tab-vertical-bg: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.app[data-glass="off"] button,
+.app[data-glass="off"] .tabs [role="tab"],
+.app[data-glass="off"] .side-panel,
+.app[data-glass="off"] .modal-backdrop .side-panel {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .app[data-glass="auto"] {
+    background-image: none;
+    --glass-bg: var(--surface);
+    --glass-bg-elevated: var(--surface);
+    --glass-sheen: none;
+    --glass-border: var(--border);
+    --glass-panel-border-bottom: 2px solid var(--border);
+    --glass-highlight: 0 0 0 transparent;
+    --glass-shadow: 0 0 0 transparent;
+    --glass-popup-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+    --glass-backdrop: rgb(0 0 0 / 0.45);
+    --glass-ambient: none;
+    --glass-button-bg: var(--surface);
+    --glass-button-sheen: none;
+    --glass-button-border: var(--border);
+    --glass-button-shadow: none;
+    --glass-button-hover-border: var(--border);
+    --glass-button-hover-shadow: none;
+    --glass-button-active-shadow: none;
+    --glass-tab-active-bg: transparent;
+    --glass-tab-active-shadow: none;
+    --glass-rail-bg: var(--surface);
+    --glass-button-radius: 0.45rem;
+    --glass-button-blur: 0px;
+    --glass-accent-gloss: none;
+    --glass-tab-radius: 0;
+    --glass-tab-vertical-radius: 0.4rem;
+    --glass-tab-underline: var(--accent);
+    --glass-tab-vertical-bg: color-mix(in srgb, var(--accent) 15%, transparent);
+  }
+
+  .app[data-glass="auto"] .app-top {
+    background: var(--bg);
+  }
+
+  .app[data-glass="auto"] .app-header {
+    background: var(--surface);
+    border-bottom-color: var(--border);
+  }
+
+  .app[data-glass="auto"] button,
+  .app[data-glass="auto"] .tabs [role="tab"],
+  .app[data-glass="auto"] .side-panel,
+  .app[data-glass="auto"] .modal-backdrop .side-panel {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .app[data-glass="auto"],
+  .app[data-glass="on"] {
+    background-image: none;
+    --glass-bg: var(--surface);
+    --glass-bg-elevated: var(--surface);
+    --glass-sheen: none;
+    --glass-border: var(--border);
+    --glass-panel-border-bottom: 2px solid var(--border);
+    --glass-highlight: 0 0 0 transparent;
+    --glass-shadow: 0 0 0 transparent;
+    --glass-popup-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+    --glass-backdrop: rgb(0 0 0 / 0.45);
+    --glass-ambient: none;
+    --glass-button-bg: var(--surface);
+    --glass-button-sheen: none;
+    --glass-button-border: var(--border);
+    --glass-button-shadow: none;
+    --glass-button-hover-border: var(--border);
+    --glass-button-hover-shadow: none;
+    --glass-button-active-shadow: none;
+    --glass-tab-active-bg: transparent;
+    --glass-tab-active-shadow: none;
+    --glass-rail-bg: var(--surface);
+    --glass-button-radius: 0.45rem;
+    --glass-button-blur: 0px;
+    --glass-accent-gloss: none;
+    --glass-tab-radius: 0;
+    --glass-tab-vertical-radius: 0.4rem;
+    --glass-tab-underline: var(--accent);
+    --glass-tab-vertical-bg: color-mix(in srgb, var(--accent) 15%, transparent);
+  }
+
+  .app[data-glass="auto"] .app-top,
+  .app[data-glass="on"] .app-top {
+    background: var(--bg);
+  }
+
+  .app[data-glass="auto"] .app-header,
+  .app[data-glass="on"] .app-header {
+    background: var(--surface);
+    border-bottom-color: var(--border);
+  }
+
+  .app[data-glass="auto"] button,
+  .app[data-glass="auto"] .tabs [role="tab"],
+  .app[data-glass="auto"] .side-panel,
+  .app[data-glass="auto"] .modal-backdrop .side-panel,
+  .app[data-glass="on"] button,
+  .app[data-glass="on"] .tabs [role="tab"],
+  .app[data-glass="on"] .side-panel,
+  .app[data-glass="on"] .modal-backdrop .side-panel {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 /* Settings in a pop-up: the sections down the left, the content beside them. */
@@ -984,12 +1444,16 @@ blockquote.memory-text {
 .modal-backdrop .settings-tabs .tabs [role="tab"] {
   text-align: left;
   border-bottom: none;
-  border-radius: 0.4rem;
+  border-radius: var(
+    --glass-tab-vertical-radius,
+    var(--glass-tab-radius, 0.4rem)
+  );
   padding: 0.45rem 0.7rem;
 }
 
 .modal-backdrop .settings-tabs .tabs [role="tab"][aria-selected="true"] {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  background: var(--glass-tab-vertical-bg, var(--glass-tab-active-bg));
+  box-shadow: var(--glass-tab-active-shadow);
 }
 
 @media (max-width: 760px) {
