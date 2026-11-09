@@ -8,7 +8,7 @@
 //! Runs only on the voice recognition thread (`VoiceController::transcribe_bounded`), never on a
 //! Tokio worker, and never writes the audio anywhere.
 
-use super::transcribe::{Transcriber, VoiceError, with_speech_level, without_invented_text};
+use super::transcribe::{Transcriber, VoiceError, without_invented_text};
 use sherpa_onnx::{OfflineModelConfig, OfflineRecognizer, OfflineRecognizerConfig};
 use std::path::{Path, PathBuf};
 
@@ -139,23 +139,14 @@ impl Transcriber for SherpaTranscriber {
         let Some(rec) = self.recogniser.as_ref() else {
             return Err(VoiceError::ModelMissing);
         };
-        // A quiet microphone is brought up first; the invented-text guard below still looks at the
-        // original level, so a quiet recording is still known to be quiet.
-        let (boosted, gain) = with_speech_level(audio);
         let stream = rec.create_stream();
-        stream.accept_waveform(RATE, &boosted);
+        stream.accept_waveform(RATE, audio);
         rec.decode(&stream);
         let heard = stream
             .get_result()
             .map(|r| r.text.trim().to_owned())
             .unwrap_or_default();
         let text = without_invented_text(&heard, audio);
-        if gain > 1.0 {
-            tracing::info!(
-                gain = format!("{gain:.1}"),
-                "voice: brought a quiet recording up"
-            );
-        }
         if text.is_empty() && !heard.is_empty() {
             // Facts only: never the words.
             tracing::info!(

@@ -36,7 +36,7 @@ impl Default for EndpointConfig {
         Self {
             min_speech_frames: 3,
             end_silence_frames: 45,
-            release_ratio: 0.6,
+            release_ratio: 0.75,
             max_frames: 750,
             no_speech_frames: 300,
             floor_frames: 10,
@@ -376,5 +376,19 @@ mod tests {
         assert_eq!(feed(&mut e, &a, 480), Decision::Continue);
         assert!(e.has_speech());
         assert_eq!(e.push(&tone(1_000, 0.0005)), Decision::SpeechEnded);
+    }
+
+    /// A room that is not silent: noise that wanders between 1.5 and 2 times the learned floor, with
+    /// jitter, must not keep a finished sentence open until the 15 s cap.
+    #[test]
+    fn wandering_background_noise_does_not_keep_a_finished_sentence_open() {
+        let mut e = Endpointer::new(EndpointConfig::default());
+        let mut a = tone(300, 0.004); // floor: RMS about 0.003, so the threshold is 0.009
+        a.extend(tone(1_000, 0.04)); // speech
+        for i in 0..40 {
+            // 40 x 40 ms of noise at 1.5 to 2 times the floor, alternating
+            a.extend(tone(40, if i % 2 == 0 { 0.0063 } else { 0.0085 }));
+        }
+        assert_eq!(feed(&mut e, &a, 480), Decision::SpeechEnded);
     }
 }
