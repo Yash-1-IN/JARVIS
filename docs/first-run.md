@@ -6,7 +6,7 @@ This guide walks you through your first few minutes after opening JARVIS. It is 
 
 ## What works today
 
-- **Typing, or your voice**: you can type in the **Type a message** box and press **Send**, or press **Hold or tap to talk** and speak. Before your first spoken request, open **Settings → Models** and press **Download speech models** (about 250 MB, once). JARVIS answers in text: **spoken replies are not built yet**, and the wake word ("hey jarvis") cannot be turned on from the window yet.
+- **Typing, or your voice**: you can type in the **Type a message** box and press **Send**, or press **Hold or tap to talk** and speak. Before your first spoken request, open **Settings → Models** and press **Download speech models** (about 640 MB, once; the size is shown there). JARVIS answers in text: **spoken replies are not built yet**. The wake word ("hey jarvis") has a switch under **Settings → Models** on Windows and Linux; it is not offered on a Mac.
 - **One decision on first launch**: the first time JARVIS opens, it shows a box titled **One decision before we begin**. By default, JARVIS shows an approval card and waits for you before reading, moving, or renaming any file.
   - Click **Keep asking** (or **Close Esc**) to keep those approval cards.
   - Click **Stop asking for routine actions** if you want JARVIS to read, move, or rename single files inside your allowed folders without showing a card first (reading a file sends its contents to Anthropic). Even with this switched on, JARVIS still asks after it has read outside content in the same conversation, and always asks before high-risk actions.
@@ -96,7 +96,7 @@ This matches [`docs/privacy.md`](privacy.md), which describes everything JARVIS 
 - **Your API key**: stored in your operating system's credential store (Windows Credential Manager on Windows, macOS Keychain on macOS, or the desktop secret store on Linux).
 - **Settings** (model, spend caps, the most actions in one request, allowed folders, allowed apps, the Spotify Client ID and your voice choices): stored in `settings.json` in the app configuration folder.
 - **Your Spotify sign-in** (only if you connect Spotify): a refresh token kept in the operating system's credential store until you press **Disconnect** or change the Client ID.
-- **Speech models** (only after you press **Download speech models**): stored in the `models` folder inside the app data folder, about 250 MB.
+- **Speech models** (only after you press **Download speech models**): stored in the `models` folder inside the app data folder, about 400 MB on disk after unpacking.
 - **Conversation history**: stored in `jarvis.db` in the app data folder and kept for **30 days by default**. In the **History** panel (top bar), you can change **Keep history for** to `Off (keep nothing)`, `7 days`, `30 days`, `1 year`, or `Forever`, or click **Delete all history**. A new conversation starts automatically after ten idle minutes (there is no "new conversation" button yet).
 - **Memories**: stored in `jarvis.db` only when you click **Keep** on a **Remember this?** card, and kept until you delete them in the **Memory** panel.
 - **Exported data**: if you click **Export memories and history** in the **History** panel, JARVIS saves a plain-text `jarvis-export-<date>.json` file to your Downloads folder. Once exported, that file is yours to manage and is not deleted by **Delete all history**.

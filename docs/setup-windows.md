@@ -6,7 +6,7 @@ This guide explains how to install and start JARVIS on Windows 10 or Windows 11.
 
 ## What to expect in the alpha
 
-- **Typing or push to talk**: you can type, or press **Hold or tap to talk** after downloading the speech models in **Settings → Models** (about 250 MB, once). Spoken replies are not built yet. The wake word ("hey jarvis") engine exists, but its switch in the window is not built yet.
+- **Typing or push to talk**: you can type, or press **Hold or tap to talk** after downloading the speech models in **Settings → Models** (about 640 MB, once). Spoken replies are not built yet. The wake word ("hey jarvis") can be turned on under **Settings → Models**, after you accept a licence notice; it downloads its own files.
 - **No automatic updates**: when a newer build is ready, download and run the new installer by hand.
 - **Default icon**: the app uses the default Tauri icon until custom artwork is added.
 

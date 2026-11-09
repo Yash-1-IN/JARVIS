@@ -19,8 +19,8 @@ Tauri 2 and Rust on the backend, React and TypeScript on the front.
   `memory.propose` and the music tools (`music.control`, `music.now_playing`, `music.play`,
   `music.play_playlist`, `music.play_liked`, with Spotify). Anything that changes or reads your files needs
   your approval first, on an approval card; approvals are single-use and expire after 60 seconds.
-- Push to talk: **Hold or tap to talk** turns your speech into text on this computer (Moonshine, after a
-  one-time model download in Settings → Models) and runs it as a normal request.
+- Push to talk: **Hold or tap to talk** turns your speech into text on this computer (Whisper small, after a
+  one-time model download of about 640 MB in Settings → Models) and runs it as a normal request.
 - Conversation history and memories you confirm, kept on this computer.
 
 ## What does not work yet
