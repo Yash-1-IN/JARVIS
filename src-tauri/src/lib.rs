@@ -53,10 +53,10 @@ pub fn run() {
             let guard = logging::init(&log_dir)?;
             app.manage(guard);
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "jarvis started");
-            if platform::glass::requested()
+            if let Some(style) = platform::glass::requested()
                 && let Some(window) = app.get_webview_window("main")
             {
-                platform::glass::apply(&window);
+                platform::glass::apply(&window, style);
             }
 
             let prices = Arc::new(
