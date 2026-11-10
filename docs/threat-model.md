@@ -23,5 +23,13 @@ than they get.
 - **Approvals are single-use even when answered wrongly.** A mismatched or late answer burns
   the approval and the model has to propose again. This is deliberate (fail closed).
 - **The activity log is in memory** until M5 adds SQLite, so it is lost when the app quits.
-- **Tools are not wired yet.** Until the tool-call loop calls the gateway, nothing the model
-  says can reach a tool at all.
+- **Voice turns (D-27).** Speech is not authenticated: a voice from a TV or another person can say
+  anything. On a turn that starts from the microphone, a Medium-risk action always shows its approval
+  card, even when routine actions are allowed without one, and High-risk actions are window-only. Low-risk
+  tools (time, system status, listing allowed apps, opening an allowed app, searching file names,
+  proposing a memory, music) still run without a card.
+- **The wake word (D-29).** While it is on, the microphone stays open and a spoken phrase can start a
+  turn, with the same limits as above. The three openWakeWord models are loaded from the exact bytes that
+  were checked, but the downloaded ONNX Runtime library has to be opened by path, so a process running as
+  the same user could swap that file between the check and the load in the app data folder. That
+  attacker already owns the account, so it is accepted and recorded in D-29.

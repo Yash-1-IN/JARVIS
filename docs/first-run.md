@@ -6,7 +6,7 @@ This guide walks you through your first few minutes after opening JARVIS. It is 
 
 ## What works today
 
-- **Typing only**: you talk to JARVIS using the **Type a message** box and the **Send** button at the bottom of the window. Voice features (wake word, push-to-talk, speech-to-text, and spoken replies) are not built yet.
+- **Typing, or your voice**: you can type in the **Type a message** box and press **Send**, or press **Hold or tap to talk** and speak. Before your first spoken request, open **Settings → Models** and press **Download speech models** (about 640 MB, once; the size is shown there). JARVIS answers in text: **spoken replies are not built yet**. The wake word ("hey jarvis") has a switch under **Settings → Models** on Windows and Linux; it is not offered on a Mac.
 - **One decision on first launch**: the first time JARVIS opens, it shows a box titled **One decision before we begin**. By default, JARVIS shows an approval card and waits for you before reading, moving, or renaming any file.
   - Click **Keep asking** (or **Close Esc**) to keep those approval cards.
   - Click **Stop asking for routine actions** if you want JARVIS to read, move, or rename single files inside your allowed folders without showing a card first (reading a file sends its contents to Anthropic). Even with this switched on, JARVIS still asks after it has read outside content in the same conversation, and always asks before high-risk actions.
@@ -34,7 +34,7 @@ Type any of these into the **Type a message** box at the bottom of the window an
 These commands never call the Anthropic cloud model, whether or not you have an API key or internet connection:
 
 - **`What can you do?`** — replies with a short summary of what JARVIS can do today.
-- **`mute`** and **`unmute`** — mutes or unmutes the microphone state (`Muted.` / `Microphone back on.`). You can also click the **Mute Ctrl+Shift+M** button in the controls area (voice capture itself is not built yet).
+- **`mute`** and **`unmute`** — mutes or unmutes the microphone state (`Muted.` / `Microphone back on.`). You can also click the **Mute Ctrl+Shift+M** button in the controls area (a muted microphone cannot be used for **Hold or tap to talk**).
 - **`stop`** or **`cancel`** — cancels a reply that is currently running. You can also click **Cancel Esc** or press `Esc`.
 - **`Repeat that`** or **`Say that again`** — repeats JARVIS's last reply.
 - **`Remember that ...`** (for example, `Remember that I prefer morning meetings.`) — shows a **Remember this?** confirmation card with the exact text and three buttons: **Keep**, **Edit**, and **Don't keep**. Nothing is saved until you click **Keep** (or **Edit** → **Save and keep**). You can view, edit, or delete saved memories at any time under **Memory** in the top bar.
@@ -81,7 +81,8 @@ This matches [`docs/privacy.md`](privacy.md), which describes everything JARVIS 
 
 ### What leaves your computer
 
-- JARVIS talks to **one** cloud AI service: the **Anthropic API**, using your own API key. There is **no** JARVIS server, no account, no analytics, and no crash reporting.
+- For its replies JARVIS talks to **one** cloud AI service: the **Anthropic API**, using your own API key. There is **no** JARVIS server, no account, no analytics, and no crash reporting.
+- Two other things are contacted, only when you choose them: **Spotify** (when you connect it or ask for music by name: `accounts.spotify.com` and `api.spotify.com`) and the **speech model download** (the **Download speech models** button fetches files from `github.com`, which sees your internet address like any download; nothing you say is sent).
 - While a cloud request is running, the status area displays **Sending data to the cloud**.
 - When you send a message that goes to the Anthropic cloud model, JARVIS sends:
   - the recent conversation (at most about 8,000 tokens of it);
@@ -93,12 +94,14 @@ This matches [`docs/privacy.md`](privacy.md), which describes everything JARVIS 
 ### What stays on your computer
 
 - **Your API key**: stored in your operating system's credential store (Windows Credential Manager on Windows, macOS Keychain on macOS, or the desktop secret store on Linux).
-- **Settings** (model, spend caps, allowed folders, allowed apps): stored in `settings.json` in the app configuration folder.
+- **Settings** (model, spend caps, the most actions in one request, allowed folders, allowed apps, the Spotify Client ID and your voice choices): stored in `settings.json` in the app configuration folder.
+- **Your Spotify sign-in** (only if you connect Spotify): a refresh token kept in the operating system's credential store until you press **Disconnect** or change the Client ID.
+- **Speech models** (only after you press **Download speech models**): stored in the `models` folder inside the app data folder, about 400 MB on disk after unpacking.
 - **Conversation history**: stored in `jarvis.db` in the app data folder and kept for **30 days by default**. In the **History** panel (top bar), you can change **Keep history for** to `Off (keep nothing)`, `7 days`, `30 days`, `1 year`, or `Forever`, or click **Delete all history**. A new conversation starts automatically after ten idle minutes (there is no "new conversation" button yet).
 - **Memories**: stored in `jarvis.db` only when you click **Keep** on a **Remember this?** card, and kept until you delete them in the **Memory** panel.
 - **Exported data**: if you click **Export memories and history** in the **History** panel, JARVIS saves a plain-text `jarvis-export-<date>.json` file to your Downloads folder. Once exported, that file is yours to manage and is not deleted by **Delete all history**.
 - **Activity log**: clicking **Activity** in the top bar shows every tool action JARVIS ran or refused during the current session (never file contents). It is kept in memory only and is empty after you restart JARVIS.
-- **Logs**: event and error logs (not your chat messages, and with key-shaped text masked) are rotated daily in the app log folder.
+- **Logs**: event and error logs (not your chat messages, and with key-shaped text masked) are rotated daily in the app log folder, and the last 14 days are kept. Voice lines record only technical facts: the microphone's name, how long a capture lasted, its peak level and how many words were recognised, never the sound or the words.
 - **Typical Windows folders** (from Tauri defaults; not checked in the app on every system): `%APPDATA%\com.jarvis.desktop` for data and settings, and `%LOCALAPPDATA%\com.jarvis.desktop\logs` for logs.
 - **Disk encryption note**: `jarvis.db` is not encrypted by JARVIS itself (decision D-10). It relies on your operating system's disk encryption (BitLocker or Device Encryption on Windows).
 - **Never written to disk**: audio is never recorded or saved to disk, your API key is never written outside the OS credential store, and the contents of files JARVIS reads are never saved in `jarvis.db` (history keeps only a one-line summary of the action).
