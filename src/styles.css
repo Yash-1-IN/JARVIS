@@ -66,6 +66,41 @@
   --glass-tab-active-shadow:
     inset 0 1px 0 rgb(255 255 255 / 1), inset 0 0 10px rgb(255 255 255 / 0.5),
     0 2px 6px rgb(15 23 42 / 0.12);
+  /* Warm accent for Send button only (issue #156, PR 3). Red stays free for danger. */
+  --accent-warm: #c43922;
+  --accent-warm-gradient: linear-gradient(180deg, #d4432a 0%, #b32e18 100%);
+  --accent-warm-text: #ffffff;
+  --accent-warm-border: rgb(194 65 12 / 0.35);
+  --accent-warm-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.4), 0 2px 6px rgb(196 57 34 / 0.25);
+  --accent-warm-hover-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.55), 0 3px 10px rgb(196 57 34 / 0.35);
+  --accent-warm-active-shadow: inset 0 2px 4px rgb(154 52 18 / 0.35);
+  /* Chat bubbles and composer (issue #156, PR 3) */
+  --glass-bubble-user-bg: rgb(219 234 254 / 0.7);
+  --glass-bubble-user-border: rgb(14 165 233 / 0.25);
+  --glass-bubble-user-sheen: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.75) 0%,
+    transparent 55%
+  );
+  --glass-bubble-user-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.9), 0 2px 6px rgb(15 23 42 / 0.05);
+  --glass-bubble-user-radius: 1.1rem 1.1rem 0.25rem 1.1rem;
+  --glass-bubble-reply-bg: rgb(255 255 255 / 0.65);
+  --glass-bubble-reply-border: rgb(15 23 42 / 0.1);
+  --glass-bubble-reply-sheen: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.8) 0%,
+    transparent 55%
+  );
+  --glass-bubble-reply-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.95), 0 2px 6px rgb(15 23 42 / 0.06);
+  --glass-bubble-reply-radius: 1.1rem 1.1rem 1.1rem 0.25rem;
+  --glass-input-bg: rgb(255 255 255 / 0.45);
+  --glass-input-border: rgb(15 23 42 / 0.12);
+  --glass-input-shadow:
+    inset 0 1px 2px rgb(15 23 42 / 0.06), inset 0 1px 0 rgb(255 255 255 / 0.8);
   --glass-transition: 0.18s ease;
   font:
     15px/1.5 system-ui,
@@ -144,6 +179,42 @@
     --glass-tab-active-shadow:
       inset 0 1px 0 rgb(255 255 255 / 0.5),
       inset 0 0 10px rgb(255 255 255 / 0.15), 0 2px 6px rgb(0 0 0 / 0.35);
+    /* Warm accent for Send button only (issue #156, PR 3) */
+    --accent-warm: #c43922;
+    --accent-warm-gradient: linear-gradient(180deg, #d4432a 0%, #b32e18 100%);
+    --accent-warm-text: #ffffff;
+    --accent-warm-border: rgb(212 67 42 / 0.45);
+    --accent-warm-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.4), 0 2px 8px rgb(196 57 34 / 0.35);
+    --accent-warm-hover-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.55), 0 3px 12px rgb(196 57 34 / 0.5);
+    --accent-warm-active-shadow: inset 0 2px 4px rgb(0 0 0 / 0.4);
+    /* Chat bubbles and composer (issue #156, PR 3) */
+    --glass-bubble-user-bg: rgb(30 58 95 / 0.55);
+    --glass-bubble-user-border: rgb(96 165 250 / 0.25);
+    --glass-bubble-user-sheen: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.14) 0%,
+      transparent 55%
+    );
+    --glass-bubble-user-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.35), 0 2px 6px rgb(0 0 0 / 0.2);
+    --glass-bubble-user-radius: 1.1rem 1.1rem 0.25rem 1.1rem;
+    --glass-bubble-reply-bg: rgb(14 18 26 / 0.65);
+    --glass-bubble-reply-border: rgb(255 255 255 / 0.12);
+    --glass-bubble-reply-sheen: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.08) 0%,
+      rgb(255 255 255 / 0.02) 50%,
+      transparent 100%
+    );
+    --glass-bubble-reply-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.25), 0 2px 8px rgb(0 0 0 / 0.25);
+    --glass-bubble-reply-radius: 1.1rem 1.1rem 1.1rem 0.25rem;
+    --glass-input-bg: rgb(255 255 255 / 0.05);
+    --glass-input-border: rgb(255 255 255 / 0.12);
+    --glass-input-shadow:
+      inset 0 1px 2px rgb(0 0 0 / 0.3), inset 0 1px 0 rgb(255 255 255 / 0.1);
   }
 }
 
@@ -377,9 +448,15 @@ select {
 }
 
 .rail .push-to-talk {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   padding: 0.85rem 1rem;
   font-size: 1.05rem;
   font-weight: 600;
+  /* Fits two lines ("Speak now… release to send") so Mute and Cancel do not jump on press (#156). */
+  min-height: calc(4.85rem + 2px);
 }
 
 /* The stage: the conversation, or, with a panel open, the panel above and the conversation below
@@ -426,6 +503,7 @@ select {
   flex: 1 1 100%;
   padding: 0.5rem 0.6rem;
   font-size: inherit;
+  min-height: auto;
 }
 
 .app.has-panel[data-split="rail"] .rail .controls button:not(.push-to-talk),
@@ -511,6 +589,7 @@ select {
   .rail .push-to-talk {
     padding: 0.4rem 0.6rem;
     font-size: inherit;
+    min-height: auto;
   }
 
   .rail .hologram-3d {
@@ -618,6 +697,10 @@ select {
 
 /* Hold to talk: no text selection or touch scrolling while the button is held. */
 .push-to-talk {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   touch-action: none;
   user-select: none;
 }
@@ -649,7 +732,7 @@ kbd {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  padding: 0 1rem 0.5rem;
+  padding: 0 1.25rem 0.75rem;
 }
 
 .chat-head {
@@ -666,6 +749,17 @@ kbd {
   color: var(--muted);
 }
 
+.chat-head button {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: var(--glass-button-radius, 999px);
+  color: var(--muted);
+}
+
+.chat-head button:hover:not(:disabled) {
+  color: var(--text);
+}
+
 /* The conversation scrolls here; the text box below it never moves. */
 .chat-scroll {
   flex: 1;
@@ -680,7 +774,7 @@ kbd {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.85rem;
 }
 
 .chat-log > li {
@@ -689,24 +783,37 @@ kbd {
   gap: 0.4rem;
 }
 
-/* You on the right, JARVIS on the left, so the two are told apart at a glance. */
+/* You on the right, JARVIS on the left, so the two are told apart at a glance.
+   Bubbles use translucent glass fills and rim highlights without per-bubble backdrop-filter,
+   preserving 60 fps scrolling (#156, PR 3). */
 .chat-user {
   align-self: flex-end;
   max-width: 80%;
   margin: 0;
-  padding: 0.5rem 0.8rem;
-  border-radius: var(--radius) var(--radius) 0.15rem var(--radius);
-  background: var(--user-bubble);
+  padding: 0.55rem 0.95rem;
+  border-radius: var(
+    --glass-bubble-user-radius,
+    var(--radius) var(--radius) 0.15rem var(--radius)
+  );
+  background-color: var(--glass-bubble-user-bg, var(--user-bubble));
+  background-image: var(--glass-bubble-user-sheen, none);
+  border: 1px solid var(--glass-bubble-user-border, transparent);
+  box-shadow: var(--glass-bubble-user-shadow, none);
   white-space: pre-wrap;
 }
 
 .chat-reply {
   align-self: flex-start;
   max-width: 90%;
-  padding: 0.1rem 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius) var(--radius) var(--radius) 0.15rem;
-  background: var(--surface);
+  padding: 0.4rem 0.95rem;
+  border: 1px solid var(--glass-bubble-reply-border, var(--border));
+  border-radius: var(
+    --glass-bubble-reply-radius,
+    var(--radius) var(--radius) var(--radius) 0.15rem
+  );
+  background-color: var(--glass-bubble-reply-bg, var(--surface));
+  background-image: var(--glass-bubble-reply-sheen, none);
+  box-shadow: var(--glass-bubble-reply-shadow, none);
   overflow-wrap: anywhere;
 }
 
@@ -748,12 +855,70 @@ kbd {
 .chat-form {
   flex: none;
   display: flex;
-  gap: 0.5rem;
-  padding: 0.5rem 0 0;
+  gap: 0.6rem;
+  padding: 0.6rem 0 0;
 }
 
 .chat-form input {
   flex: 1;
+  background-color: var(--glass-input-bg, var(--surface));
+  border: 1px solid var(--glass-input-border, var(--border));
+  border-radius: var(--glass-button-radius, 999px);
+  padding: 0.5rem 1rem;
+  box-shadow: var(--glass-input-shadow, none);
+  color: var(--text);
+  font-size: 0.95rem;
+  transition:
+    border-color var(--glass-transition),
+    box-shadow var(--glass-transition);
+}
+
+.chat-form input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent),
+    var(--glass-input-shadow, none);
+}
+
+/* Send button is the warm focal point (issue #156, PR 3) */
+.chat-form button[type="submit"] {
+  flex: none;
+  background-color: var(--accent-warm);
+  background-image: var(--accent-warm-gradient);
+  color: var(--accent-warm-text);
+  border-color: var(--accent-warm-border);
+  box-shadow: var(--accent-warm-shadow);
+  border-radius: var(--glass-button-radius, 999px);
+  font-weight: 600;
+  padding: 0.5rem 1.15rem;
+  cursor: pointer;
+  transition:
+    background-color var(--glass-transition),
+    box-shadow var(--glass-transition),
+    border-color var(--glass-transition),
+    transform 0.1s ease;
+}
+
+.chat-form button[type="submit"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-warm) 80%, white);
+  box-shadow: var(--accent-warm-hover-shadow);
+}
+
+.chat-form button[type="submit"]:active:not(:disabled) {
+  transform: scale(0.98);
+  box-shadow: var(--accent-warm-active-shadow);
+}
+
+.chat-form button[type="submit"]:disabled {
+  background-color: var(--glass-button-bg);
+  background-image: none;
+  color: var(--muted);
+  border-color: var(--glass-button-border);
+  box-shadow: none;
+  opacity: 0.45;
+  transform: none;
+  cursor: default;
 }
 
 .warning {
@@ -1305,6 +1470,23 @@ blockquote.memory-text {
   --glass-tab-vertical-radius: 0.4rem;
   --glass-tab-underline: var(--accent);
   --glass-tab-vertical-bg: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-warm-gradient: none;
+  --accent-warm-shadow: none;
+  --accent-warm-hover-shadow: none;
+  --accent-warm-active-shadow: none;
+  --glass-bubble-user-bg: var(--user-bubble);
+  --glass-bubble-user-sheen: none;
+  --glass-bubble-user-border: transparent;
+  --glass-bubble-user-shadow: none;
+  --glass-bubble-user-radius: var(--radius) var(--radius) 0.15rem var(--radius);
+  --glass-bubble-reply-bg: var(--surface);
+  --glass-bubble-reply-sheen: none;
+  --glass-bubble-reply-border: var(--border);
+  --glass-bubble-reply-shadow: none;
+  --glass-bubble-reply-radius: var(--radius) var(--radius) var(--radius) 0.15rem;
+  --glass-input-bg: var(--surface);
+  --glass-input-border: var(--border);
+  --glass-input-shadow: none;
 }
 
 .app[data-glass="off"] button,
@@ -1345,6 +1527,25 @@ blockquote.memory-text {
     --glass-tab-vertical-radius: 0.4rem;
     --glass-tab-underline: var(--accent);
     --glass-tab-vertical-bg: color-mix(in srgb, var(--accent) 15%, transparent);
+    --accent-warm-gradient: none;
+    --accent-warm-shadow: none;
+    --accent-warm-hover-shadow: none;
+    --accent-warm-active-shadow: none;
+    --glass-bubble-user-bg: var(--user-bubble);
+    --glass-bubble-user-sheen: none;
+    --glass-bubble-user-border: transparent;
+    --glass-bubble-user-shadow: none;
+    --glass-bubble-user-radius: var(--radius) var(--radius) 0.15rem
+      var(--radius);
+    --glass-bubble-reply-bg: var(--surface);
+    --glass-bubble-reply-sheen: none;
+    --glass-bubble-reply-border: var(--border);
+    --glass-bubble-reply-shadow: none;
+    --glass-bubble-reply-radius: var(--radius) var(--radius) var(--radius)
+      0.15rem;
+    --glass-input-bg: var(--surface);
+    --glass-input-border: var(--border);
+    --glass-input-shadow: none;
   }
 
   .app[data-glass="auto"] .app-top {
@@ -1396,6 +1597,25 @@ blockquote.memory-text {
     --glass-tab-vertical-radius: 0.4rem;
     --glass-tab-underline: var(--accent);
     --glass-tab-vertical-bg: color-mix(in srgb, var(--accent) 15%, transparent);
+    --accent-warm-gradient: none;
+    --accent-warm-shadow: none;
+    --accent-warm-hover-shadow: none;
+    --accent-warm-active-shadow: none;
+    --glass-bubble-user-bg: var(--user-bubble);
+    --glass-bubble-user-sheen: none;
+    --glass-bubble-user-border: transparent;
+    --glass-bubble-user-shadow: none;
+    --glass-bubble-user-radius: var(--radius) var(--radius) 0.15rem
+      var(--radius);
+    --glass-bubble-reply-bg: var(--surface);
+    --glass-bubble-reply-sheen: none;
+    --glass-bubble-reply-border: var(--border);
+    --glass-bubble-reply-shadow: none;
+    --glass-bubble-reply-radius: var(--radius) var(--radius) var(--radius)
+      0.15rem;
+    --glass-input-bg: var(--surface);
+    --glass-input-border: var(--border);
+    --glass-input-shadow: none;
   }
 
   .app[data-glass="auto"] .app-top,
