@@ -481,6 +481,21 @@ impl VoiceController {
         }
     }
 
+    /// Loads the speech model on a background thread so the first sentence does not pay for the
+    /// load inside the recognition time limit. Safe to call any number of times: a model that is
+    /// already loaded, or not installed yet, makes it a no-op. A request that arrives while the load
+    /// is running waits for the same lock (and is still bounded by its own timeout).
+    pub fn warm_up(&self) {
+        let t = Arc::clone(&self.transcriber);
+        let _ = std::thread::Builder::new()
+            .name("jarvis-stt-warm".into())
+            .spawn(move || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    lock(&t).warm_up();
+                }));
+            });
+    }
+
     /// Recognition on its own thread with a time limit. A call that overruns is abandoned (its
     /// result is dropped), so one slow request cannot hold the assistant in `transcribing`.
     fn transcribe_bounded(&self, audio: Vec<f32>) -> Result<String, VoiceError> {
@@ -583,7 +598,7 @@ fn collect_until_done(
             return Outcome::NoAudio;
         }
         // A tap switches a held capture to auto. A pause that was already heard then ends it at
-        // once, without waiting for another 700 ms.
+        // once, without waiting for another 900 ms.
         if auto.load(Ordering::Acquire)
             && endpoint.is_held()
             && endpoint.release_hold() == Decision::SpeechEnded
@@ -748,6 +763,15 @@ mod tests {
         fn transcribe(&mut self, audio: &[f32]) -> Result<String, VoiceError> {
             assert!(!audio.is_empty());
             Ok(self.0.to_owned())
+        }
+    }
+    struct Warm(Arc<std::sync::atomic::AtomicUsize>);
+    impl Transcriber for Warm {
+        fn transcribe(&mut self, _: &[f32]) -> Result<String, VoiceError> {
+            Ok(String::new())
+        }
+        fn warm_up(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
     struct Slow;
@@ -1189,7 +1213,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_held_capture_is_not_cut_off_by_a_pause_and_the_release_sends_what_was_said() {
-        // Speech, then a second of quiet: more than the 700 ms that ends a tap.
+        // Speech, then a second of quiet: more than the 900 ms that ends a tap.
         let s = setup(phrase(), false, None, Box::new(Says("held")));
         s.ctl.start_capture().unwrap();
         wait_for("capturing", || s.orch.snapshot().mic == MicState::Capturing);
@@ -1318,5 +1342,24 @@ mod tests {
             Vec::new(),
         );
         assert!(matches!(out, Outcome::Audio(_)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn warm_up_loads_the_model_in_the_background_without_a_capture() {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let s = setup(Vec::new(), false, None, Box::new(Warm(n.clone())));
+        s.ctl.warm_up();
+        for _ in 0..100 {
+            if n.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            s.opened.load(Ordering::SeqCst),
+            0,
+            "no microphone was opened"
+        );
     }
 }

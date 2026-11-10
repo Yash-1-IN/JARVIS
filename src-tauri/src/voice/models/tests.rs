@@ -694,13 +694,14 @@ fn import_refuses_a_link_in_place_of_a_file() {
     let _ = std::fs::remove_dir_all(src);
 }
 
-/// Needs the real archive on disk: `JARVIS_TEST_MOONSHINE_ARCHIVE=<file.tar.bz2> cargo test -- --ignored`.
-/// Proves the pinned checksums and the unpacking rules fit the real model.
+/// Needs the real archive on disk: `JARVIS_TEST_SPEECH_ARCHIVE=<file.tar.bz2> cargo test -- --ignored`.
+/// Proves the pinned checksums and the unpacking rules fit the real model. (It caught a stream limit
+/// below the Whisper archive's real unpacked size, 1,344,988,160 bytes.)
 #[test]
 #[ignore = "needs the real model archive"]
 fn the_real_archive_matches_the_manifest_and_unpacks() {
-    let Ok(path) = std::env::var("JARVIS_TEST_MOONSHINE_ARCHIVE") else {
-        panic!("set JARVIS_TEST_MOONSHINE_ARCHIVE");
+    let Ok(path) = std::env::var("JARVIS_TEST_SPEECH_ARCHIVE") else {
+        panic!("set JARVIS_TEST_SPEECH_ARCHIVE");
     };
     let spec = manifest()
         .iter()
@@ -722,6 +723,14 @@ fn the_real_archive_matches_the_manifest_and_unpacks() {
     assert!(is_installed(&root, &spec));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// The Whisper archive unpacks to 1,344,988,160 bytes (measured on the real file) although only 375 MB
+/// is kept; the stream limit must leave room for the files that are skipped.
+const _: () = {
+    const WHISPER_UNPACKED: u64 = 1_344_988_160;
+    assert!(MAX_STREAM_BYTES > WHISPER_UNPACKED + 100 * 1024 * 1024);
+    assert!(MAX_STREAM_BYTES >= MAX_UNPACKED_BYTES);
+};
 
 /// A real download from github.com through the manager. Needs internet and about 640 MB.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1107,4 +1116,26 @@ fn the_wake_word_is_offered_on_windows_and_linux_and_not_on_macos() {
     assert!(!wake_supported_on("macos-aarch64"));
     assert!(!wake_supported_on("macos-x86_64"));
     assert!(!wake_supported_on("other"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_old_moonshine_folder_is_removed_only_once_the_speech_set_is_installed() {
+    let a = archive(&good_items());
+    let srv = serve(a.clone()).await;
+    let spec = spec_for(&a, srv.url.clone());
+    let root = temp_root("legacy");
+    let m = manager(&root, &spec);
+    let old = root.join("stt").join(LEGACY_MOONSHINE);
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("encoder.onnx"), b"x").unwrap();
+    // Nothing else is installed yet: the old model is the only one, so it stays.
+    assert!(!m.remove_legacy_speech());
+    assert!(old.is_dir());
+    let (r, _) = run(&m).await;
+    assert_eq!(r, Ok(()));
+    assert!(m.remove_legacy_speech());
+    assert!(!old.exists());
+    // A second call has nothing to do, and the installed model is untouched.
+    assert!(!m.remove_legacy_speech());
+    assert!(m.ready());
 }
