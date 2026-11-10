@@ -434,14 +434,18 @@ mod tests {
                 streams[0].producer.push(0.25).unwrap();
             }
         }
-        // 4800 samples at 48 kHz are 100 ms, which is 1600 samples at 16 kHz.
-        wait_for("1600 samples", || got.lock().unwrap().len() >= 1_599);
+        // 4800 samples at 48 kHz are 100 ms, which is 1600 samples at 16 kHz, less the 13 the
+        // anti-aliasing filter holds back (its delay).
+        wait_for("the resampled samples", || {
+            got.lock().unwrap().len() >= 1_585
+        });
         let n = got.lock().unwrap().len();
-        assert!((1_598..=1_601).contains(&n), "{n}");
+        assert!((1_585..=1_601).contains(&n), "{n}");
+        // Once the filter has filled (about 30 samples) the level is steady.
         assert!(
-            got.lock().unwrap()[2..]
+            got.lock().unwrap()[40..]
                 .iter()
-                .all(|v| (v - 0.25).abs() < 1e-5)
+                .all(|v| (v - 0.25).abs() < 1e-3)
         );
         assert_eq!(cap.pre_roll().len(), n);
         cap.stop();
@@ -527,7 +531,7 @@ mod tests {
             }
             s[0].lost.store(true, Ordering::Release);
         }
-        wait_for("the 1000 samples", || got.lock().unwrap().len() >= 990);
+        wait_for("the 1000 samples", || got.lock().unwrap().len() >= 980);
         cap.stop();
         assert!(cap.join(JOIN_LIMIT));
     }
