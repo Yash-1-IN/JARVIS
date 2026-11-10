@@ -268,7 +268,7 @@ The official `sherpa-onnx` crate (v2.0.1, 27 Oct 2026, Apache-2.0) wraps the C A
 1. **Capture**: `cpal` input at the device rate → resample to 16 kHz mono → ring buffer.
 2. **Pre-roll**: the last 2 s of audio stay in RAM so the start of the request is not lost; overwritten continuously, never written to disk, discarded after use.
 3. **Wake word**: runs continuously on the voice thread while `MicState = standby`.
-4. **VAD**: after wake or push-to-talk, end of speech = 700 ms of silence (tunable), hard cap 15 s per request.
+4. **VAD**: after wake or push-to-talk, end of speech = 900 ms of silence (tunable; 700 ms cut sentences on the owner's laptop microphone, 2026-11-09), hard cap 15 s per request.
 5. **STT**: offline model on the captured segment.
 6. **Router**: local intent match first, otherwise cloud (§7).
 7. **TTS**: synthesise sentence by sentence while the model is still streaming; first sentence plays as soon as it is ready.

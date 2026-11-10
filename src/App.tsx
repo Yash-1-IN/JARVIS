@@ -4,6 +4,7 @@ import { ApprovalCard } from "./components/ApprovalCard";
 import { Chat } from "./components/Chat";
 import { Controls } from "./components/Controls";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { LiquidGlassFilter } from "./components/LiquidGlassFilter";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { MemoryProposalCard } from "./components/MemoryProposalCard";
 import { MockBadge } from "./components/MockBadge";
@@ -284,6 +285,7 @@ export default function App({ transport }: { transport: Transport }) {
           <MockControls transport={transport} />
         </footer>
       )}
+      <LiquidGlassFilter />
     </div>
   );
 }

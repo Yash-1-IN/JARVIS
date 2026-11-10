@@ -180,6 +180,17 @@ pub fn run() {
                 Box::new(voice::sherpa::SherpaTranscriber::new(stt_dir)),
                 voice::controller::VoiceConfig::default(),
             );
+            // Load the speech model now, and drop the old Moonshine folder once Whisper is verified
+            // (both off the main thread), so the first sentence is not slowed by either.
+            if models.ready() {
+                voice.warm_up();
+                let m = models.clone();
+                let _ = std::thread::Builder::new()
+                    .name("jarvis-models-tidy".into())
+                    .spawn(move || {
+                        m.remove_legacy_speech();
+                    });
+            }
             // Wake word (M3 step 3, D-29): while it is switched on and its files are installed, the
             // microphone stays open and a detector listens for "hey jarvis". Off by default.
             let wake_settings = svc.clone();
