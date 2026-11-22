@@ -4,21 +4,81 @@ import css from "../styles.css?raw";
 import type { ApprovalRequest } from "../types/generated/ApprovalRequest";
 import { ApprovalCard } from "./ApprovalCard";
 
-/** Every rule block (also inside @media / @supports) whose selector names a card. */
-function cardRuleBlocks(source: string): { selector: string; body: string }[] {
+interface RuleBlock {
+  selector: string;
+  body: string;
+  index: number;
+}
+
+/** Every innermost rule block (also inside @media / @supports), preserving source order. */
+function allRuleBlocks(source: string): RuleBlock[] {
   // Strip comments so we inspect actual selector/declaration blocks. The pattern matches only
   // innermost blocks, so nesting inside at-rules does not hide a rule.
   const clean = source.replace(/\/\*[\s\S]*?\*\//g, "");
-  const blocks: { selector: string; body: string }[] = [];
+  const blocks: RuleBlock[] = [];
   for (const match of clean.matchAll(/([^{}]+)\{([^{}]+)\}/g)) {
-    const selector = match[1].trim();
-    if (
-      selector.includes(".approval-card") ||
-      selector.includes(".memory-card")
-    )
-      blocks.push({ selector, body: match[2].trim() });
+    blocks.push({
+      selector: match[1].trim(),
+      body: match[2].trim(),
+      index: match.index ?? 0,
+    });
   }
   return blocks;
+}
+
+/** Every rule block whose selector names a card. */
+function cardRuleBlocks(source: string): RuleBlock[] {
+  return allRuleBlocks(source).filter(
+    (b) =>
+      b.selector.includes(".approval-card") ||
+      b.selector.includes(".memory-card"),
+  );
+}
+
+/** True when a rule targets `button` (not card buttons) and applies glass/warm/blur styling. */
+function isGlassButtonRule(block: RuleBlock): boolean {
+  const selectors = block.selector.split(",").map((s) => s.trim());
+  const targetsButton = selectors.some(
+    (sel) =>
+      /\bbutton\b/.test(sel) &&
+      !sel.includes(".approval-card") &&
+      !sel.includes(".memory-card"),
+  );
+  if (!targetsButton) return false;
+  if (/--glass-|--accent-warm/.test(block.body)) return true;
+  const filters = [
+    ...block.body.matchAll(/(?:-webkit-)?backdrop-filter\s*:\s*([^;]+)/g),
+  ];
+  return filters.some((f) => f[1].trim() !== "none");
+}
+
+/** Verifies solid card button overrides appear after the last glass button rule in source order. */
+function cardButtonsFollowGlassRules(source: string): boolean {
+  const blocks = allRuleBlocks(source);
+  const glassButtons = blocks.filter(isGlassButtonRule);
+  if (glassButtons.length === 0) return false;
+  const lastGlassIndex = glassButtons[glassButtons.length - 1].index;
+
+  const cardBlocks = blocks.filter(
+    (b) =>
+      b.selector.includes(".approval-card") ||
+      b.selector.includes(".memory-card"),
+  );
+  const solidTargets = [
+    ".approval-card button",
+    ".memory-card button",
+    ".app .approval-card button",
+    ".app .memory-card button",
+  ];
+  return solidTargets.every((target) =>
+    cardBlocks.some(
+      (b) =>
+        b.index > lastGlassIndex &&
+        b.selector.split(",").some((sel) => sel.trim() === target) &&
+        b.body.includes("background: var(--surface)") &&
+        b.body.includes("backdrop-filter: none"),
+    ),
+  );
 }
 
 const NOW = 1_000_000;
@@ -167,5 +227,23 @@ describe("ApprovalCard", () => {
     const blocks = cardRuleBlocks(nested);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].body).toMatch(/--glass-/);
+  });
+
+  it("places solid card button rules after the last glass button rule (#156)", () => {
+    expect(cardButtonsFollowGlassRules(css)).toBe(true);
+
+    const outOfOrder = `
+      .approval-card button,
+      .memory-card button,
+      .app .approval-card button,
+      .app .memory-card button {
+        background: var(--surface);
+        backdrop-filter: none;
+      }
+      .app[data-glass="on"] button {
+        backdrop-filter: blur(4px);
+      }
+    `;
+    expect(cardButtonsFollowGlassRules(outOfOrder)).toBe(false);
   });
 });

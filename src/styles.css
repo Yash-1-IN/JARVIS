@@ -874,7 +874,9 @@ kbd {
 }
 
 .chat-form input:focus-visible {
-  outline: none;
+  /* Keep a non-none outline so Windows High Contrast / forced-colors draws a focus ring. */
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   border-color: var(--accent);
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent),
@@ -1563,6 +1565,13 @@ blockquote.memory-text {
   .app[data-glass="auto"] .modal-backdrop .side-panel {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .chat-form input:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 2px;
   }
 }
 
